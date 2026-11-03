@@ -1,0 +1,7 @@
+numpy
+pillow
+scipy
+scikit-image
+rasterio
+mapbox-vector-tile
+shapely

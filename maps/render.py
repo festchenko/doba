@@ -1,0 +1,617 @@
+#!/usr/bin/env python3
+"""Render 4-bit e-ink map tiles for Doba.
+
+Input:  OpenMapTiles vector tiles (.mbtiles from Planetiler, max z14)
+        + optional Copernicus GLO-30 DEM tiles for relief.
+Output: Doba tile packs (.dtp), one per z8 cell plus base.dtp for z0-8.
+
+Example:
+    python3 render.py --mbtiles build/groenlo.mbtiles --dem build/dem \
+        --bbox 6.50,51.97,6.75,52.12 --zoom 8-16 --out build/tiles/groenlo
+"""
+import argparse
+import gzip
+import math
+import multiprocessing as mp
+import os
+import sqlite3
+import sys
+import time
+
+import mapbox_vector_tile
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+from scipy.ndimage import binary_erosion, gaussian_filter
+from skimage.measure import find_contours
+
+import style as S
+from dem import Dem
+from tilepack import BASE_CELL_Z, TILE, PackWriter, pack_path
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SS = 2           # supersampling factor
+BUFFER = 64      # px around a metatile, rendered then cropped (1x)
+META = 8         # metatile = META x META tiles
+CELL_Z = 8
+VECTOR_MAX_Z = 14
+
+# ---------------------------------------------------------------------------
+# tile maths (Web Mercator, XYZ)
+
+
+def lonlat_to_tile(lon, lat, z):
+    n = 2 ** z
+    x = (lon + 180.0) / 360.0 * n
+    lat_r = math.radians(max(min(lat, 85.0511), -85.0511))
+    y = (1.0 - math.asinh(math.tan(lat_r)) / math.pi) / 2.0 * n
+    return x, y
+
+
+def tile_to_lonlat(x, y, z):
+    n = 2 ** z
+    lon = x / n * 360.0 - 180.0
+    lat = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * np.asarray(y) / n))))
+    return lon, lat
+
+
+def tile_range(bbox, z):
+    w, s, e, n = bbox
+    x0, y0 = lonlat_to_tile(w, n, z)
+    x1, y1 = lonlat_to_tile(e, s, z)
+    lim = 2 ** z - 1
+    return (max(int(x0), 0), max(int(y0), 0),
+            min(int(x1), lim), min(int(y1), lim))
+
+
+# ---------------------------------------------------------------------------
+# vector tile source
+
+
+class VectorSource:
+    def __init__(self, path):
+        self.db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        self.cache = {}
+
+    def get(self, z, x, y):
+        key = (z, x, y)
+        if key in self.cache:
+            return self.cache[key]
+        row = self.db.execute(
+            "SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? "
+            "AND tile_row=?", (z, x, (2 ** z - 1) - y)).fetchone()
+        layers = None
+        if row:
+            data = row[0]
+            if data[:2] == b"\x1f\x8b":
+                data = gzip.decompress(data)
+            layers = mapbox_vector_tile.decode(
+                data, default_options={"y_coord_down": True})
+        if len(self.cache) > 256:
+            self.cache.clear()
+        self.cache[key] = layers
+        return layers
+
+
+# ---------------------------------------------------------------------------
+# drawing helpers
+
+
+def iter_lines(geom):
+    t, c = geom["type"], geom["coordinates"]
+    if t == "LineString":
+        yield c
+    elif t == "MultiLineString":
+        yield from c
+    elif t == "Polygon":
+        yield from c
+    elif t == "MultiPolygon":
+        for poly in c:
+            yield from poly
+
+
+def iter_polygons(geom):
+    t, c = geom["type"], geom["coordinates"]
+    if t == "Polygon":
+        yield c
+    elif t == "MultiPolygon":
+        yield from c
+
+
+def iter_points(geom):
+    t, c = geom["type"], geom["coordinates"]
+    if t == "Point":
+        yield c
+    elif t == "MultiPoint":
+        yield from c
+
+
+def dashed(points, dash, gap):
+    """Split a polyline into dash segments (lengths in canvas px)."""
+    out, cur = [], []
+    on, left = True, dash
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        seg = math.hypot(x1 - x0, y1 - y0)
+        pos = 0.0
+        while seg - pos > 1e-6:
+            step = min(left, seg - pos)
+            t0, t1 = pos / seg, (pos + step) / seg
+            a = (x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0)
+            b = (x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1)
+            if on:
+                if not cur:
+                    cur.append(a)
+                cur.append(b)
+            pos += step
+            left -= step
+            if left <= 1e-6:
+                if on and len(cur) > 1:
+                    out.append(cur)
+                cur = []
+                on = not on
+                left = dash if on else gap
+    if on and len(cur) > 1:
+        out.append(cur)
+    return out
+
+
+def px(w):
+    """1x width -> integer canvas width (at least 1)."""
+    return max(1, int(round(w * SS)))
+
+
+class Canvas:
+    """One metatile being drawn at SS x resolution with a buffer."""
+
+    def __init__(self, z, mx0, my0, size_tiles):
+        self.z = z
+        self.mx0, self.my0 = mx0, my0
+        self.n = size_tiles
+        self.core = size_tiles * TILE * SS
+        self.buf = BUFFER * SS
+        self.size = self.core + 2 * self.buf
+        self.fill = np.full((self.size, self.size), S.BACKGROUND * 17,
+                            dtype=np.uint8)
+        self.img = None
+        self.draw = None
+        self.labels = []  # placed label boxes
+
+    # --- coordinate transforms -------------------------------------------
+    def setup_vector(self, vz):
+        self.vz = vz
+        self.vscale = TILE * SS * 2 ** (self.z - vz)  # canvas px per vz tile
+        self.ox = self.mx0 / 2 ** (self.z - vz)
+        self.oy = self.my0 / 2 ** (self.z - vz)
+
+    def to_canvas(self, tx, ty, extent, pts):
+        k = self.vscale / extent
+        bx = (tx - self.ox) * self.vscale + self.buf
+        by = (ty - self.oy) * self.vscale + self.buf
+        return [(bx + p[0] * k, by + p[1] * k) for p in pts]
+
+    def canvas_lonlat(self, step):
+        """lon/lat grids sampled every `step` canvas px."""
+        n = self.size // step + 1
+        idx = np.arange(n) * step
+        tx = self.mx0 + (idx - self.buf) / (TILE * SS)
+        ty = self.my0 + (idx - self.buf) / (TILE * SS)
+        lon, _ = tile_to_lonlat(tx, 0, self.z)
+        _, lat = tile_to_lonlat(0, ty, self.z)
+        return np.meshgrid(lon, lat)
+
+    # --- stages -------------------------------------------------------------
+    def start_lines(self):
+        self.img = Image.fromarray(self.fill, "L")
+        self.draw = ImageDraw.Draw(self.img)
+
+    def line(self, pts, width, level, dash=None):
+        if len(pts) < 2:
+            return
+        w = px(width)
+        col = level * 17
+        if dash:
+            for part in dashed(pts, dash[0] * SS, dash[1] * SS):
+                self.draw.line(part, fill=col, width=w)
+        else:
+            self.draw.line(pts, fill=col, width=w, joint="curve")
+
+    def place_label(self, x, y, text, font, level=0, halo=S.LABEL_HALO):
+        hs = px(halo)
+        box = self.draw.textbbox((x, y), text, font=font, anchor="mm",
+                                 stroke_width=hs)
+        lo, hi = self.buf, self.buf + self.core
+        if box[0] < lo or box[1] < lo or box[2] > hi or box[3] > hi:
+            return False  # only labels fully inside the core: no cut text
+        pad = 3 * SS
+        for b in self.labels:
+            if not (box[2] + pad < b[0] or box[0] - pad > b[2] or
+                    box[3] + pad < b[1] or box[1] - pad > b[3]):
+                return False
+        self.draw.text((x, y), text, font=font, fill=level * 17, anchor="mm",
+                       stroke_width=hs, stroke_fill=S.WHITE * 17)
+        self.labels.append(box)
+        return True
+
+    def finish(self):
+        """Downsample, crop buffer, quantize -> dict {(x, y): levels}."""
+        img = self.img if self.img is not None else Image.fromarray(self.fill)
+        small = img.resize((self.size // SS, self.size // SS), Image.BOX)
+        arr = np.asarray(small, dtype=np.float32)
+        b = BUFFER
+        arr = arr[b:b + self.n * TILE, b:b + self.n * TILE]
+        levels = np.clip(np.rint(arr / 17.0), 0, 15).astype(np.uint8)
+        out = {}
+        for j in range(self.n):
+            for i in range(self.n):
+                out[(self.mx0 + i, self.my0 + j)] = levels[
+                    j * TILE:(j + 1) * TILE, i * TILE:(i + 1) * TILE]
+        return out
+
+
+# ---------------------------------------------------------------------------
+# fonts
+
+_fonts = {}
+
+
+def font(name, size):
+    key = (name, size)
+    if key not in _fonts:
+        _fonts[key] = ImageFont.truetype(
+            os.path.join(HERE, "fonts", name), int(round(size * SS)))
+    return _fonts[key]
+
+
+# ---------------------------------------------------------------------------
+# metatile renderer
+
+
+def collect_features(src, cv):
+    """Gather decoded features from all vector tiles touching the canvas."""
+    z = cv.z
+    vz = min(z, VECTOR_MAX_Z)
+    cv.setup_vector(vz)
+    span = cv.n / 2 ** (z - vz)
+    bufv = BUFFER / TILE / 2 ** (z - vz)
+    x0 = int(math.floor(cv.ox - bufv))
+    y0 = int(math.floor(cv.oy - bufv))
+    x1 = int(math.floor(cv.ox + span + bufv - 1e-9))
+    y1 = int(math.floor(cv.oy + span + bufv - 1e-9))
+    lim = 2 ** vz - 1
+    feats = {}
+    for ty in range(max(y0, 0), min(y1, lim) + 1):
+        for tx in range(max(x0, 0), min(x1, lim) + 1):
+            layers = src.get(vz, tx, ty)
+            if not layers:
+                continue
+            for lname, layer in layers.items():
+                ext = layer.get("extent", 4096)
+                for f in layer["features"]:
+                    feats.setdefault(lname, []).append((tx, ty, ext, f))
+    return feats
+
+
+def fill_mask(cv, items):
+    """Rasterise polygons to a boolean mask at canvas resolution."""
+    m = Image.new("1", (cv.size, cv.size), 0)
+    d = ImageDraw.Draw(m)
+    for tx, ty, ext, f in items:
+        for poly in iter_polygons(f["geometry"]):
+            rings = [cv.to_canvas(tx, ty, ext, r) for r in poly]
+            if len(rings[0]) >= 3:
+                d.polygon(rings[0], fill=1)
+            for hole in rings[1:]:
+                if len(hole) >= 3:
+                    d.polygon(hole, fill=0)
+    return np.asarray(m, dtype=bool)
+
+
+def apply_fill(cv, mask, level):
+    cv.fill[mask] = level * 17
+
+
+def apply_edge(cv, mask, level, width=1.0):
+    it = max(1, int(round(width * SS)))
+    edge = mask & ~binary_erosion(mask, iterations=it)
+    cv.fill[edge] = level * 17
+
+
+def draw_forest_dots(cv, mask):
+    sp = S.FOREST_DOTS["spacing"] * SS
+    dots = np.zeros_like(mask)
+    # offset every other row for a less mechanical look
+    for r in range(0, cv.size, sp):
+        off = (sp // 2) if (r // sp) % 2 else 0
+        dots[r:r + SS, off::sp] = True
+        for k in range(1, SS):
+            dots[r:r + SS, off + k::sp] = True
+    cv.fill[mask & dots] = S.FOREST_DOTS["level"] * 17
+
+
+def relief(cv, dem):
+    z = cv.z
+    step = 4 * SS
+    lon, lat = cv.canvas_lonlat(step)
+    elev = dem.sample(lon, lat)
+    lat_c = float(np.mean(lat))
+    m_per_px = 156543.03 * math.cos(math.radians(lat_c)) / 2 ** z / SS
+    m_per_cell = m_per_px * step
+    sigma = min(max(S.DEM_SMOOTH_M / m_per_cell, 0.5), 20)
+    elev = gaussian_filter(elev, sigma)
+    out = {}
+    if z >= S.HILLSHADE["min_zoom"]:
+        gy, gx = np.gradient(elev, m_per_cell)
+        slope = np.arctan(np.hypot(gx, gy))
+        aspect = np.arctan2(-gx, gy)
+        az, alt = math.radians(315), math.radians(45)
+        shade = (math.sin(alt) * np.cos(slope) +
+                 math.cos(alt) * np.sin(slope) * np.cos(az - aspect))
+        factor = np.clip(shade / math.sin(alt), 0, 1)
+        strength = (S.HILLSHADE["strength_low"] if z <= 12
+                    else S.HILLSHADE["strength_high"])
+        mult = 1 - strength * (1 - factor)
+        img = Image.fromarray((mult * 255).astype(np.uint8), "L").resize(
+            (cv.size, cv.size), Image.BILINEAR)
+        m = np.asarray(img, dtype=np.float32) / 255.0
+        cv.fill = (cv.fill.astype(np.float32) * m).astype(np.uint8)
+    iv = S.size_for_zoom(S.CONTOUR_INTERVALS, z)
+    if iv:
+        interval, index = iv
+        lo = math.ceil(elev.min() / interval) * interval
+        hi = math.floor(elev.max() / interval) * interval
+        lines = []
+        min_loop = S.CONTOUR_MIN_LOOP_PX * SS
+        for level in np.arange(lo, hi + 1, interval):
+            for c in find_contours(elev, level):
+                pts = c[:, ::-1] * step
+                closed = np.allclose(pts[0], pts[-1])
+                if closed:
+                    length = np.hypot(*np.diff(pts, axis=0).T).sum()
+                    if length < min_loop:
+                        continue  # DSM noise: trees, houses, tiny bumps
+                lines.append((level % index == 0, [tuple(p) for p in pts]))
+        out["contours"] = lines
+    return out
+
+
+def render_metatile(src, dem, z, mx0, my0, n):
+    cv = Canvas(z, mx0, my0, n)
+    feats = collect_features(src, cv)
+
+    # 1. area fills ---------------------------------------------------------
+    forest = None
+    for layer, cls, minz, level in S.AREA_FILLS:
+        if z < minz:
+            continue
+        items = [it for it in feats.get(layer, [])
+                 if it[3]["properties"].get("class") == cls]
+        if not items:
+            continue
+        mask = fill_mask(cv, items)
+        apply_fill(cv, mask, level)
+        if cls == "wood":
+            forest = mask
+    if forest is not None and z >= S.FOREST_DOTS["min_zoom"]:
+        draw_forest_dots(cv, forest)
+
+    # 2. relief --------------------------------------------------------------
+    rel = relief(cv, dem) if dem is not None else {}
+
+    # 3. water areas (mask edge = shoreline without tile seams) -------------
+    if z >= S.WATER_MIN_ZOOM and feats.get("water"):
+        wmask = fill_mask(cv, feats["water"])
+        apply_fill(cv, wmask, S.WATER_FILL)
+        if z >= 9:
+            apply_edge(cv, wmask, S.WATER_EDGE, 1.0)
+
+    # 4. buildings -------------------------------------------------------------
+    if z >= S.BUILDING_MIN_ZOOM and feats.get("building"):
+        bmask = fill_mask(cv, feats["building"])
+        apply_fill(cv, bmask, S.BUILDING_FILL)
+        apply_edge(cv, bmask, S.BUILDING_EDGE, 0.6)
+
+    cv.start_lines()
+
+    # 5. contours ------------------------------------------------------------
+    for is_index, pts in rel.get("contours", []):
+        st = S.CONTOUR_INDEX if is_index else S.CONTOUR
+        cv.line(pts, st["width"], st["level"])
+
+    # 6. waterways ------------------------------------------------------------
+    for tx, ty, ext, f in feats.get("waterway", []):
+        cls = f["properties"].get("class")
+        if cls not in S.WATERWAYS or z < S.WATERWAYS[cls][0]:
+            continue
+        w = S.WATERWAYS[cls][1] * (1.0 if z >= 12 else 0.7)
+        for ln in iter_lines(f["geometry"]):
+            cv.line(cv.to_canvas(tx, ty, ext, ln), w, S.WATERWAY_LEVEL)
+
+    # 7. boundaries ---------------------------------------------------------
+    for tx, ty, ext, f in feats.get("boundary", []):
+        p = f["properties"]
+        if p.get("maritime"):
+            continue
+        rule = S.BOUNDARIES.get(p.get("admin_level"))
+        if not rule or z < rule[0]:
+            continue
+        for ln in iter_lines(f["geometry"]):
+            cv.line(cv.to_canvas(tx, ty, ext, ln), rule[1], rule[2], rule[3])
+
+    # 8. transport ------------------------------------------------------------
+    roads = {}   # class -> list of canvas polylines
+    trails, rails = [], []
+    for tx, ty, ext, f in feats.get("transportation", []):
+        p = f["properties"]
+        cls = p.get("class")
+        lines = [cv.to_canvas(tx, ty, ext, ln) for ln in iter_lines(f["geometry"])]
+        if cls in S.ROADS:
+            if z >= S.ROADS[cls][0]:
+                roads.setdefault(cls, []).extend(
+                    (ln, p.get("brunnel")) for ln in lines)
+        elif cls in S.TRAILS:
+            if z >= S.TRAILS[cls][0]:
+                trails.extend((cls, ln) for ln in lines)
+        elif cls == "rail" and z >= S.RAIL["min_zoom"]:
+            rails.extend(lines)
+
+    for cls, ln in trails:
+        _, w, level, dash = S.TRAILS[cls]
+        cv.line(ln, w, level, dash)
+
+    order = list(S.ROADS)[::-1]  # minor first, motorway last (on top)
+    if z >= S.ROAD_CASED_FROM:
+        for cls in order:          # all casings first ...
+            w = S.road_width(cls, z)
+            for ln, brunnel in roads.get(cls, []):
+                dash = (4, 3) if brunnel == "tunnel" else None
+                cv.line(ln, w + 2.0, S.ROAD_CASING, dash)
+        for cls in order:          # ... then fills, so junctions merge
+            w = S.road_width(cls, z)
+            fill_level = S.ROADS[cls][2]
+            for ln, _ in roads.get(cls, []):
+                cv.line(ln, w, fill_level)
+    else:
+        for cls in order:
+            w = S.ROAD_THIN.get(cls, 0.6)
+            for ln, _ in roads.get(cls, []):
+                cv.line(ln, w, S.BLACK)
+
+    for ln in rails:
+        cv.line(ln, S.RAIL["width"] + (1.0 if z >= 13 else 0), S.RAIL["level"])
+        if z >= 13:
+            cv.line(ln, S.RAIL["width"] - 0.6, S.WHITE, S.RAIL["tie_dash"])
+
+    # 9. labels -----------------------------------------------------------------
+    seen = set()
+    places = []
+    for tx, ty, ext, f in feats.get("place", []):
+        p = f["properties"]
+        cls, name = p.get("class"), p.get("name")
+        if cls not in S.PLACES or not name or z < S.PLACES[cls][0]:
+            continue
+        for pt in iter_points(f["geometry"]):
+            (x, y), = cv.to_canvas(tx, ty, ext, [pt])
+            key = (name, int(x // (20 * SS)), int(y // (20 * SS)))
+            if key in seen:
+                continue
+            seen.add(key)
+            places.append((S.PLACE_ORDER.index(cls), p.get("rank", 99),
+                           cls, name, x, y))
+    for _, _, cls, name, x, y in sorted(places, key=lambda t: (t[0], t[1])):
+        _, sizes, bold = S.PLACES[cls]
+        size = S.size_for_zoom(sizes, z)
+        if not size:
+            continue
+        fnt = font(S.FONT_BOLD if bold else S.FONT_REGULAR, size)
+        if cls in ("suburb", "neighbourhood"):
+            fnt = font(S.FONT_ITALIC, size)
+        cv.place_label(x, y, name, fnt)
+
+    if z >= S.PEAK["min_zoom"]:
+        m = S.PEAK["marker"] * SS
+        for tx, ty, ext, f in feats.get("mountain_peak", []):
+            p = f["properties"]
+            for pt in iter_points(f["geometry"]):
+                (x, y), = cv.to_canvas(tx, ty, ext, [pt])
+                text = p.get("name") or ""
+                ele = p.get("ele")
+                if ele is not None:
+                    text = f"{text} {int(ele)}".strip()
+                fnt = font(S.FONT_REGULAR, S.PEAK["font"])
+                if cv.place_label(x, y - m - 8 * SS, text, fnt) if text else True:
+                    cv.draw.polygon([(x, y - m), (x - m, y + m * 0.7),
+                                     (x + m, y + m * 0.7)], fill=0)
+
+    if z >= S.WATER_NAME["min_zoom"]:
+        for tx, ty, ext, f in feats.get("water_name", []):
+            name = f["properties"].get("name")
+            if not name:
+                continue
+            for pt in iter_points(f["geometry"]):
+                (x, y), = cv.to_canvas(tx, ty, ext, [pt])
+                cv.place_label(x, y, name, font(S.FONT_ITALIC, S.WATER_NAME["font"]),
+                               S.WATER_NAME["level"])
+
+    return cv.finish()
+
+
+# ---------------------------------------------------------------------------
+# jobs: base pack (z <= 8) and one pack per z8 cell
+
+
+def render_job(args):
+    job, opts = args
+    src = VectorSource(opts["mbtiles"])
+    dem = Dem(opts["dem"]) if opts.get("dem") else None
+    if dem is not None and not dem.available():
+        dem = None
+    bbox, zmin, zmax = opts["bbox"], opts["zmin"], opts["zmax"]
+    if job == "base":
+        cz, cx, cy = BASE_CELL_Z, 0, 0
+        zooms = range(zmin, min(zmax, CELL_Z) + 1)
+    else:
+        cz, (cx, cy) = CELL_Z, job
+        zooms = range(max(zmin, CELL_Z + 1), zmax + 1)
+    writer = PackWriter(pack_path(opts["out"], cz, cx, cy), cz, cx, cy)
+    count = 0
+    for z in zooms:
+        bx0, by0, bx1, by1 = tile_range(bbox, z)
+        if job == "base":
+            n = min(META, 2 ** z)
+            gx0, gy0, gx1, gy1 = 0, 0, 2 ** z - 1, 2 ** z - 1
+        else:
+            s = 2 ** (z - CELL_Z)
+            n = min(META, s)
+            gx0, gy0 = cx * s, cy * s
+            gx1, gy1 = gx0 + s - 1, gy0 + s - 1
+        x0, y0 = max(bx0, gx0), max(by0, gy0)
+        x1, y1 = min(bx1, gx1), min(by1, gy1)
+        if x0 > x1 or y0 > y1:
+            continue
+        for my in range((y0 // n) * n, y1 + 1, n):
+            for mx in range((x0 // n) * n, x1 + 1, n):
+                tiles = render_metatile(src, dem, z, mx, my, n)
+                for (x, y), lv in tiles.items():
+                    if x0 <= x <= x1 and y0 <= y <= y1:
+                        writer.add(z, x, y, lv)
+                        count += 1
+    writer.close()
+    return job, count
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--mbtiles", required=True)
+    ap.add_argument("--dem", help="directory with Copernicus GLO-30 .tif files")
+    ap.add_argument("--bbox", required=True, help="west,south,east,north")
+    ap.add_argument("--zoom", default="8-16", help="e.g. 8-16")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--jobs", type=int, default=os.cpu_count())
+    a = ap.parse_args()
+
+    bbox = tuple(float(v) for v in a.bbox.split(","))
+    zmin, zmax = (int(v) for v in a.zoom.split("-"))
+    opts = {"mbtiles": a.mbtiles, "dem": a.dem, "bbox": bbox,
+            "zmin": zmin, "zmax": zmax, "out": a.out}
+
+    jobs = []
+    if zmin <= CELL_Z:
+        jobs.append("base")
+    if zmax > CELL_Z:
+        cx0, cy0, cx1, cy1 = tile_range(bbox, CELL_Z)
+        jobs += [(x, y) for y in range(cy0, cy1 + 1) for x in range(cx0, cx1 + 1)]
+
+    t0 = time.time()
+    total = 0
+    print(f"{len(jobs)} packs, zoom {zmin}-{zmax}, {a.jobs} workers")
+    with mp.Pool(min(a.jobs, len(jobs))) as pool:
+        for i, (job, cnt) in enumerate(
+                pool.imap_unordered(render_job, [(j, opts) for j in jobs]), 1):
+            total += cnt
+            print(f"  [{i}/{len(jobs)}] {job}: {cnt} tiles "
+                  f"({time.time() - t0:.0f}s)", flush=True)
+    print(f"done: {total} tiles in {time.time() - t0:.0f}s -> {a.out}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

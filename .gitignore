@@ -1,0 +1,8 @@
+build/
+maps/build/
+maps/test/build/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+*.part
