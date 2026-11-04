@@ -1,4 +1,5 @@
 #include "ui_render.h"
+#include "doba_topo_bg.h"
 #include "milgeo.h"    // DOBA
 #include "milspec.h"   // DOBA
 #include "epd_compat.h"
@@ -2350,6 +2351,8 @@ void ui_render_boot_screen(const char* version, const char* const* lines,
     if (count > 0 && state[count - 1] == BOOT_PENDING)
         epd_fill_rect({ui::MARGIN, y - Arial_L.ascender, 10, Arial_L.ascender},
                       ui::INK, fb);
+    // DOBA: contour paper below the log; the mark and the log stay on plain paper.
+    topo_bg::draw({0, y + 10, W, H - y - 10}, fb, 3);
 }
 
 void ui_render_nav_prompt(const char* routeName, int turns, uint8_t* fb) {

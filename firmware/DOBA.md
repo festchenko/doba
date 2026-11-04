@@ -55,6 +55,12 @@ Every change is marked `// DOBA:` in the sources.
   PSRAM, word-wrapped and paged; tap left/right half to turn pages.
 - Console: `screen home|comms|compose|library`.
 
+## Contour background (`src/doba_topo_bg.*`)
+- A made-up landscape contoured like a topo sheet (every 5th line 2 px) behind
+  HOME, COMMS, the LIBRARY search and below the boot log. Drawn after the
+  content, only on white, 3 px clear of anything drawn — text keeps a halo.
+  Tone `topo_bg::kLine` (0xAA, the LUT's light grey): confirm with `greytest`.
+
 ## Radio region
 - `config.h` MESH_REGION_DEFAULT is `EU_868` (869.4–869.65 MHz; OTP shipped
   `US`, 902–928 MHz — wrong band for an 868 MHz board in Europe). `UA_868` is

@@ -17,13 +17,13 @@ CXXFLAGS="-std=c++17 -O2 -DVFONT $EXTRA -I shim -I $EPDIY -I $ROOT/src"
 for f in preview_main.cpp "$ROOT/src/epd_compat.cpp" "$ROOT/src/ui_render.cpp" "$ROOT/src/vfont.cpp" \
          "$ROOT/src/map_view.cpp" "$ROOT/src/map_tiles.cpp" \
          "$ROOT/src/dash_layout.cpp" "$ROOT/src/workout.cpp" \
-         "$ROOT/src/milgeo.cpp" "$ROOT/src/milspec.cpp" topo_stub.cpp; do   # DOBA
+         "$ROOT/src/milgeo.cpp" "$ROOT/src/milspec.cpp" "$ROOT/src/doba_topo_bg.cpp" topo_stub.cpp; do   # DOBA
     clang++ $CXXFLAGS -c "$f" -o "/tmp/$(basename "$f" .cpp)_host.o"
 done
 
 clang++ /tmp/preview_main_host.o /tmp/epd_compat_host.o /tmp/ui_render_host.o /tmp/vfont_host.o \
     /tmp/map_view_host.o /tmp/map_tiles_host.o /tmp/dash_layout_host.o \
-    /tmp/workout_host.o /tmp/milgeo_host.o /tmp/milspec_host.o /tmp/topo_stub_host.o \
+    /tmp/workout_host.o /tmp/milgeo_host.o /tmp/milspec_host.o /tmp/doba_topo_bg_host.o /tmp/topo_stub_host.o \
     -lz -o preview
 
 mkdir -p out

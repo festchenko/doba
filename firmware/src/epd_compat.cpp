@@ -94,6 +94,16 @@ void epd_draw_pixel(int x, int y, uint8_t color, uint8_t* fb) {
     if (rotateToNative(x, y, nx, ny)) putNative(nx, ny, color, fb);
 }
 
+// DOBA: read back one pixel (0x00..0xFF, low nibble repeated) — the topo
+// background keeps clear of whatever is already drawn.
+uint8_t doba_get_pixel(int x, int y, const uint8_t* fb) {
+    int nx, ny;
+    if (!rotateToNative(x, y, nx, ny)) return 0xFF;
+    const uint8_t b = fb[(size_t)ny * kBytesPerRow + (nx >> 1)];
+    const uint8_t lv = (nx & 1) ? (b >> 4) : (b & 0x0F);
+    return (uint8_t)(lv << 4 | lv);
+}
+
 void epd_draw_hline(int x, int y, int length, uint8_t color, uint8_t* fb) {
     for (int i = 0; i < length; ++i) epd_draw_pixel(x + i, y, color, fb);
 }

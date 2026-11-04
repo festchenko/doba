@@ -191,6 +191,7 @@ void epd_set_rotation(enum EpdRotation rotation);
 enum EpdRotation epd_get_rotation();
 
 void epd_draw_pixel(int x, int y, uint8_t color, uint8_t* framebuffer);
+uint8_t doba_get_pixel(int x, int y, const uint8_t* framebuffer);   // DOBA
 void epd_draw_hline(int x, int y, int length, uint8_t color, uint8_t* framebuffer);
 void epd_draw_vline(int x, int y, int length, uint8_t color, uint8_t* framebuffer);
 void epd_draw_line(int x0, int y0, int x1, int y1, uint8_t color, uint8_t* framebuffer);

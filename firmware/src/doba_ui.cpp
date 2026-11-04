@@ -1,5 +1,6 @@
 // DOBA: main screen, comms and library pages — see doba_ui.h.
 #include "doba_ui.h"
+#include "doba_topo_bg.h"
 
 #include <Arduino.h>
 #include <cmath>
@@ -277,10 +278,13 @@ Go tapCompose(int x, int y) {
 
 void render(Page p, const RideState& s, uint8_t* fb) {
     switch (p) {
-        case HOME:    renderHome(s, fb); break;
-        case COMMS:   renderComms(s, fb); break;
+        case HOME:    renderHome(s, fb); topo_bg::draw({0, TOP, W, H - TOP}, fb, 0); break;
+        case COMMS:   renderComms(s, fb); topo_bg::draw({0, TOP, W, H - TOP}, fb, 1); break;
         case COMPOSE: renderCompose(s, fb); break;
-        case LIBRARY: doba_lib::renderSearch(g_search, fb); break;
+        case LIBRARY:
+            doba_lib::renderSearch(g_search, fb);
+            topo_bg::draw({0, TOP, W, g_search.top - TOP}, fb, 2);   // not among the keys
+            break;
         case ARTICLE: doba_lib::renderArticle(fb); break;
     }
 }

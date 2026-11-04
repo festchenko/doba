@@ -61,7 +61,12 @@ def glass(device, tmp_path, name="shot.png"):
 def show_map(device):
     device.gps(LAT, LON, speed_kmh=3, course=0)
     time.sleep(1.5)
-    device.button("home")
+    # Home: dash -> HOME -> map (the sim boots to the dashboard, conftest.py).
+    for _ in range(3):
+        if device.status()["screen"] == "map":
+            break
+        device.button("home")
+        time.sleep(0.6)
     device.wait_status(lambda s: s["screen"] == "map", timeout=10)
     time.sleep(3)
 
