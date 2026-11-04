@@ -7,18 +7,13 @@
 // bitmap faces as measured on the host.
 #ifdef VFONT
 #include "vfont.h"
-#include "fonts/vf/anton.h"
-#include "fonts/vf/arimo_700.h"
-// -DVFONT_VALUES=<name> draws every value face from that generated font
-// instead of Anton. Tried so far: JBMono_800 (monospaced, digits keep their
-// column as they tick) and Geologica_700 (clean geometric).
-#ifdef VFONT_VALUES
+// DOBA: one monospaced family everywhere — JetBrains Mono (OFL), 800 for
+// values, 700 for labels — the tactical look: digits keep their columns as they
+// tick, and every screen reads like the map's coordinate strip.
 #include "fonts/vf/jbmono_800.h"
-#include "fonts/vf/geologica_700.h"
-#define VF_VALUES (&VFONT_VALUES)
-#else
-#define VF_VALUES (&Anton)
-#endif
+#include "fonts/vf/jbmono_700.h"
+#define VF_VALUES (&JBMono_800)
+#define VF_LABELS (&JBMono_700)
 #define Impact_S     (*vf_face_digit(VF_VALUES, 20))
 #define Impact_T     (*vf_face_digit(VF_VALUES, 30))
 #define Impact_V     (*vf_face_digit(VF_VALUES, 46))
@@ -30,10 +25,10 @@
 #define Impact_C     (*vf_face_digit(VF_VALUES, 120))
 #define Impact_XL    (*vf_face_digit(VF_VALUES, 158))
 #define Impact_128   (*vf_face_digit(VF_VALUES, 219))
-#define Arial_L      (*vf_face_digit(&Arimo_700, 11))
-#define Arial_B      (*vf_face_digit(&Arimo_700, 15))
-#define ArialBold_14 (*vf_face_digit(&Arimo_700, 21))
-#define ArialBold_20 (*vf_face_digit(&Arimo_700, 30))
+#define Arial_L      (*vf_face_digit(VF_LABELS, 11))
+#define Arial_B      (*vf_face_digit(VF_LABELS, 15))
+#define ArialBold_14 (*vf_face_digit(VF_LABELS, 21))
+#define ArialBold_20 (*vf_face_digit(VF_LABELS, 30))
 #else
 #include "fonts/arial_l.h"
 #include "fonts/arial_b.h"

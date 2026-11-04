@@ -27,6 +27,7 @@ library/    библиотека: ZIM → лёгкий формат для ESP32
    tools/prepare-sd-mac.sh copy /Volumes/SSD/doba/tiles/groenlo
    ```
 3. **Проверить.** Вставить карту, включить, выйти на улицу за GPS, кнопка Home → карта. Проверить GPS, сон, LoRa (Meshtastic) — это работает из OpenTrailPaper без изменений.
+4. **Калибровка серого.** По USB в консоли (`screen /dev/cu.usbmodem* 115200` или Serial Monitor) ввести `greytest` — на экране 16 полос. Сфотографировать: по фото подстроим стиль карты под реальную панель.
 
 Что делает прошивка сейчас — в `firmware/DOBA.md`.
 

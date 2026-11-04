@@ -15,7 +15,7 @@ EPDIY=$VENDOR/T5S3-4.7-e-paper-PRO/lib/epdiy/src
 GPS=$VENDOR/T5S3-4.7-e-paper-PRO/lib/TinyGPSPlus/src
 
 INC="-I sim/shim -I sim/host -I src -I companion-ios/Sources/H3/include -I src/proto -I third_party/nanopb -I $GPS -I $EPDIY -I tools/preview/shim -I companion-ios/Sources/H3"
-DEFS="-DOTP_SIM=1 -DPB_ENABLE_MALLOC=0 -DARDUINO=10819 -DESP32=1 -DBOARD_HAS_PSRAM=1"
+DEFS="-DVFONT -DOTP_SIM=1 -DPB_ENABLE_MALLOC=0 -DARDUINO=10819 -DESP32=1 -DBOARD_HAS_PSRAM=1"
 WARN="-Wno-unused-parameter -Wno-unused-variable -Wno-unused-function -Wno-deprecated-declarations -Wno-c99-designator -Wno-writable-strings -Wno-format -Wno-unused-but-set-variable"
 CXXFLAGS="-include sim/linux/linux_compat.h -std=gnu++17 -g -O1 $WARN $INC $DEFS"
 CFLAGS="-include sim/linux/linux_compat.h -std=gnu11 -g -O1 $WARN $INC $DEFS"

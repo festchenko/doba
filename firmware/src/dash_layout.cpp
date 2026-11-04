@@ -16,8 +16,8 @@ const FieldInfo kFields[DF_COUNT] = {
     {"hr",         "HEART RATE"},
     {"cadence",    "CADENCE"},
     {"distance",   "DISTANCE"},
-    {"ridetime",   "RIDE TIME"},
-    {"movingtime", "MOVING TIME"},
+    {"ridetime",   "TIME"},          // DOBA: tracks, not rides
+    {"movingtime", "MOVING"},
     {"climb",      "CLIMB"},
     {"grade",      "GRADE"},
     {"altitude",   "ALTITUDE"},
@@ -26,6 +26,9 @@ const FieldInfo kFields[DF_COUNT] = {
     {"clock",      "CLOCK"},
     {"routeleft",  "ROUTE LEFT"},
     {"radar",      "RADAR"},
+    {"mgrs",       "MGRS"},          // DOBA
+    {"latlon",     "LAT / LON"},     // DOBA
+    {"course",     "AZIMUTH"},       // DOBA
 };
 
 const char* kSizes[DZ_COUNT] = {"small", "medium", "large", "hero"};
@@ -42,12 +45,16 @@ const DashLayout& dashDefaultLayout() {
     // two half-width rows. A device with no config file must not look different.
     static DashLayout d = [] {
         DashLayout l;
-        l.items[0] = {DF_POWER3S,    DZ_HERO,   false};
-        l.items[1] = {DF_HEART_RATE, DZ_MEDIUM, true};
-        l.items[2] = {DF_CADENCE,    DZ_MEDIUM, true};
-        l.items[3] = {DF_RIDE_TIME,  DZ_MEDIUM, true};
+        // DOBA: the position page — where am I, which way, how high, how far.
+        // A row shares one type size, so the long azimuth gets a row of its
+        // own and the short numbers pair up.
+        l.items[0] = {DF_MGRS,       DZ_LARGE,  false};
+        l.items[1] = {DF_LATLON,     DZ_SMALL,  false};
+        l.items[2] = {DF_COURSE,     DZ_MEDIUM, false};
+        l.items[3] = {DF_ALTITUDE,   DZ_MEDIUM, true};
         l.items[4] = {DF_DISTANCE,   DZ_MEDIUM, true};
-        l.count = 5;
+        l.items[5] = {DF_RIDE_TIME,  DZ_SMALL,  false};
+        l.count = 6;
         return l;
     }();
     return d;

@@ -125,10 +125,11 @@ def iter_points(geom):
         yield from c
 
 
-def dashed(points, dash, gap):
-    """Split a polyline into dash segments (lengths in canvas px)."""
+def dashed(points, pattern):
+    """Split a polyline into the 'on' parts of a dash pattern (canvas px).
+    pattern = (on, off, on, off, ...), cycled along the line."""
     out, cur = [], []
-    on, left = True, dash
+    k, left = 0, pattern[0]
     for (x0, y0), (x1, y1) in zip(points, points[1:]):
         seg = math.hypot(x1 - x0, y1 - y0)
         pos = 0.0
@@ -137,19 +138,19 @@ def dashed(points, dash, gap):
             t0, t1 = pos / seg, (pos + step) / seg
             a = (x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0)
             b = (x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1)
-            if on:
+            if k % 2 == 0:
                 if not cur:
                     cur.append(a)
                 cur.append(b)
             pos += step
             left -= step
             if left <= 1e-6:
-                if on and len(cur) > 1:
+                if k % 2 == 0 and len(cur) > 1:
                     out.append(cur)
                 cur = []
-                on = not on
-                left = dash if on else gap
-    if on and len(cur) > 1:
+                k = (k + 1) % len(pattern)
+                left = pattern[k]
+    if k % 2 == 0 and len(cur) > 1:
         out.append(cur)
     return out
 
@@ -209,7 +210,7 @@ class Canvas:
         w = px(width)
         col = level * 17
         if dash:
-            for part in dashed(pts, dash[0] * SS, dash[1] * SS):
+            for part in dashed(pts, [d * SS for d in dash]):
                 self.draw.line(part, fill=col, width=w)
         else:
             self.draw.line(pts, fill=col, width=w, joint="curve")
@@ -238,7 +239,10 @@ class Canvas:
         arr = np.asarray(small, dtype=np.float32)
         b = BUFFER
         arr = arr[b:b + self.n * TILE, b:b + self.n * TILE]
-        levels = np.clip(np.rint(arr / 17.0), 0, 15).astype(np.uint8)
+        # Snap to the greys the panel can show (style.PANEL_LEVELS).
+        panel = np.array(S.PANEL_LEVELS, dtype=np.float32) * 17.0
+        idx = np.abs(arr[..., None] - panel[None, None, :]).argmin(axis=-1)
+        levels = np.array(S.PANEL_LEVELS, dtype=np.uint8)[idx]
         out = {}
         for j in range(self.n):
             for i in range(self.n):
@@ -315,16 +319,24 @@ def apply_edge(cv, mask, level, width=1.0):
     cv.fill[edge] = level * 17
 
 
-def draw_forest_dots(cv, mask):
-    sp = S.FOREST_DOTS["spacing"] * SS
-    dots = np.zeros_like(mask)
-    # offset every other row for a less mechanical look
-    for r in range(0, cv.size, sp):
-        off = (sp // 2) if (r // sp) % 2 else 0
-        dots[r:r + SS, off::sp] = True
-        for k in range(1, SS):
-            dots[r:r + SS, off + k::sp] = True
-    cv.fill[mask & dots] = S.FOREST_DOTS["level"] * 17
+def pattern_mask(cv, kind):
+    """Boolean texture for the canvas, aligned to WORLD pixels so it runs on
+    seamlessly from one metatile (and one tile) to the next."""
+    sp = S.PATTERN_SPACING[kind] * SS
+    ox = (cv.mx0 * TILE - BUFFER) * SS
+    oy = (cv.my0 * TILE - BUFFER) * SS
+    x = (np.arange(cv.size) + ox)[None, :]
+    y = (np.arange(cv.size) + oy)[:, None]
+    row = (y // sp) % 2
+    if kind == "dots":      # staggered 2x2 (1x) dots
+        return ((y % sp) < SS) & (((x + row * (sp // 2)) % sp) < SS)
+    if kind == "hatch":     # 45 degree lines, 1 px (1x) wide
+        return ((x + y) % sp) < SS
+    if kind == "dash":      # short horizontal dashes, staggered rows
+        return ((y % sp) < SS) & (((x + row * (sp // 2)) % (2 * sp)) < 3 * SS)
+    if kind == "grain":     # sparse fine dots
+        return ((y % (2 * sp)) < SS) & (((x + row * sp) % (2 * sp)) < SS)
+    raise ValueError(kind)
 
 
 def relief(cv, dem):
@@ -377,21 +389,27 @@ def render_metatile(src, dem, z, mx0, my0, n):
     cv = Canvas(z, mx0, my0, n)
     feats = collect_features(src, cv)
 
-    # 1. area fills ---------------------------------------------------------
-    forest = None
+    # 1. area fills, then textured areas ------------------------------------
+    def items_of(layer, cls):
+        return [it for it in feats.get(layer, [])
+                if it[3]["properties"].get("class") == cls]
+
     for layer, cls, minz, level in S.AREA_FILLS:
-        if z < minz:
-            continue
-        items = [it for it in feats.get(layer, [])
-                 if it[3]["properties"].get("class") == cls]
+        items = items_of(layer, cls) if z >= minz else []
+        if items:
+            apply_fill(cv, fill_mask(cv, items), level)
+    textures = {}
+    for layer, cls, minz, kind, level in S.AREA_PATTERNS:
+        items = items_of(layer, cls) if z >= minz else []
         if not items:
             continue
         mask = fill_mask(cv, items)
-        apply_fill(cv, mask, level)
-        if cls == "wood":
-            forest = mask
-    if forest is not None and z >= S.FOREST_DOTS["min_zoom"]:
-        draw_forest_dots(cv, forest)
+        if kind not in textures:
+            textures[kind] = pattern_mask(cv, kind)
+        cv.fill[mask & textures[kind]] = level * 17
+        edge = S.PATTERN_EDGE.get(kind)
+        if edge is not None and z >= 11:
+            apply_edge(cv, mask, edge, 1.0)
 
     # 2. relief --------------------------------------------------------------
     rel = relief(cv, dem) if dem is not None else {}

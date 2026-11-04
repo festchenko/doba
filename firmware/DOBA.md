@@ -27,6 +27,27 @@ Every change is marked `// DOBA:` in the sources.
 - `src/gps_service.cpp` — course over ground from 2 km/h (walking) instead of 5.
 - `src/map_view.cpp` — no bike-layers button on topo; scale bar rungs to 20 km.
 
+## Tactical restyle (all screens)
+- `src/vfont_faces.h` — every face is JetBrains Mono (OFL): 800 for values,
+  700 for labels (`src/fonts/vf/jbmono_700.h`, built with tools/vfont).
+- `src/ui_render.cpp` — black status band in white monospace (`14:25 SAT 10
+  REC … BAT 87%`); menu: Record Track / Routes / Phone Link / Tracks /
+  Settings; settings row 0 is MILS (60-00 / 6400) instead of FTP; track wording
+  on the summary and sheets; a reticle mark and "D O B A" on boot and power-off.
+- `src/dash_layout.*` — new fields `mgrs`, `latlon`, `course` (mils + degrees);
+  altitude falls back to GPS; the default page is MGRS / lat-lon / azimuth /
+  altitude + distance / time, and the vector-map strip course / altitude / sats.
+- `greytest` console command — a card of the 16 framebuffer levels, to see on
+  the real panel which greys it tells apart (any touch closes it).
+
+## Map style and the panel's greys
+The shipping display driver (EPD_Painter, fast mode) shows four greys:
+levels 0-2 black, 3-7 dark, 8-12 light, 13-15 white (`epd_compat.cpp`
+`buildLut()`). `maps/style.py` therefore draws with BLACK/DARK/LIGHT/WHITE only
+and tells areas apart by pattern — forest dots, built-up hatch, wetland dashes —
+like a one-colour military sheet. Upstream comments say light greys may show as
+white on the real panel: check with `greytest` on day one.
+
 ## Simulator
 - `sim/` builds and runs on Linux as well as macOS (`sim/linux/linux_compat.h`,
   `fopencookie`, `/proc/self/exe`, ELF section for RTC memory).

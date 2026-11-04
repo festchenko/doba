@@ -12,7 +12,8 @@ from otpsim import pb
 from test_regressions_ui import glass
 
 FIELDS = ["speed", "avgspeed", "power3s", "power", "hr", "cadence", "distance", "ridetime",
-          "movingtime", "climb", "grade", "altitude", "battery", "sats", "clock", "routeleft", "radar"]
+          "movingtime", "climb", "grade", "altitude", "battery", "sats", "clock", "routeleft", "radar",
+          "mgrs", "latlon", "course"]   # DOBA
 CFG = "/config/dashboard.cfg"
 
 
@@ -64,7 +65,7 @@ def test_every_field_size_and_placement_round_trips(device, link, tmp_path):
     assert [k for k, _ in pages] == ["fields", "fields", "map"]
     assert pages[0][1] == page1
     assert pages[1][1] == page2
-    assert strip == ["speed", "distance", "ridetime"]
+    assert strip == ["course", "altitude", "sats"]   # DOBA default strip
     wait_pages(device, 3)
     assert parse(device.status()["dash"]) == (pages, strip)
     for i in range(2):
@@ -81,7 +82,7 @@ def test_the_map_strip_is_part_of_the_layout(device, link):
     pages, strip = parse(set_dash(link, "map hr power3s clock\nspeed hero\n"))
     assert strip == ["hr", "power3s", "clock"]
     pages, strip = parse(set_dash(link, "map radar nonsense grade\nspeed hero\n"))
-    assert strip == ["speed", "distance", "grade"]
+    assert strip == ["course", "altitude", "grade"]   # DOBA default strip, third replaced
 
 
 def test_the_map_page_goes_where_the_rider_put_it(device, link):
@@ -157,8 +158,9 @@ def test_a_first_boot_writes_the_default_layout_out_to_be_edited(device):
     path = os.path.join(device.sd, CFG.lstrip("/"))
     text = open(path).read()
     assert text.startswith("# OpenTrailPaper dashboard layout")
-    assert parse(text)[0][0] == ("fields", ["power3s hero", "hr medium half", "cadence medium half",
-                                             "ridetime medium half", "distance medium half"])
+    assert parse(text)[0][0] == ("fields", ["mgrs large", "latlon small", "course medium",   # DOBA
+                                             "altitude medium half", "distance medium half",
+                                             "ridetime small"])
 
 
 def test_an_unusable_file_falls_back_to_the_default_and_says_so(device):
@@ -166,7 +168,7 @@ def test_an_unusable_file_falls_back_to_the_default_and_says_so(device):
     with open(path, "w") as f:
         f.write("this is not a layout\n")
     device.reboot()
-    assert parse(device.status()["dash"])[0][0][1][0] == "power3s hero"
+    assert parse(device.status()["dash"])[0][0][1][0] == "mgrs large"   # DOBA default
     device.wait_log(r"dash: /config/dashboard.cfg has no usable fields", since=0, timeout=2)
 
 
@@ -212,7 +214,7 @@ def test_a_layout_sent_mid_ride_waits_for_the_ride_to_end(device, link):
         link.request(set_dash=pb.DashConfig(text="speed hero\nclock\n"), timeout=2)
     r = link.request(set_dash=pb.DashConfig(text="hr hero\n"))
     assert r.WhichOneof("body") == "result" and r.result.code == pb.RESULT_BUSY
-    assert "power3s" in device.status()["dash"]          # not yet
+    assert "mgrs" in device.status()["dash"]             # not yet (DOBA default)
     device.button("boot")
     device.wait_status(lambda s: s["screen"] == "other", timeout=10)
     device.tap(*SAVE_BUTTON)

@@ -113,14 +113,17 @@ def test_the_side_key_backlight_reaches_the_app(device, link):
 
 
 def test_an_edit_on_the_settings_screen_reaches_the_app(device, link):
-    """FTP +, backlight +/-, the units switch: each lands at once and is
+    """Mils (DOBA, row 0), backlight +/-, the units switch: each lands at once and is
     pushed to the app (the app's screens follow the device)."""
     tz = device.status()["settings"]["tz_min"]
     device.console("screen settings")
     time.sleep(1.2)
     link.drain_pushes()
-    tap(device, PLUS_X, ROW(0))                          # FTP +5
-    s = link.wait_push("settings", lambda s: s.ftp_w == 255, timeout=5)
+    # DOBA: row 0 is the mils system now (device-only, not an app setting).
+    tap(device, PLUS_X, ROW(0))
+    assert "[mils] 6400" in "\n".join(device.console("mils"))
+    device.console("screen settings")                    # `mils` jumps to the map
+    time.sleep(1.2)
     tap(device, PLUS_X, ROW(2))                          # backlight +
     s = link.wait_push("settings", lambda s: s.backlight == 1, timeout=5)
     device.wait_status(lambda s: s["backlight_pwm"] == PWM[1], timeout=3)

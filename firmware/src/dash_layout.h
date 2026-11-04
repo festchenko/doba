@@ -38,6 +38,9 @@ enum DashField : uint8_t {
     DF_CLOCK,
     DF_ROUTE_LEFT,   // distance remaining on the loaded route
     DF_RADAR,       // rear traffic, always a vertical tile
+    DF_MGRS,         // DOBA: position, MGRS 1 m
+    DF_LATLON,       // DOBA: position, degrees
+    DF_COURSE,       // DOBA: course over ground, mils + degrees
     DF_COUNT
 };
 
@@ -122,7 +125,7 @@ struct DashPages {
     // The map screen's 3-cell data strip, configured by a `map <f> <f> <f>`
     // line in the same file. Not a page — the map is always in the carousel —
     // but its fields ride along in the one config.
-    uint8_t mapFields[3] = {DF_SPEED, DF_DISTANCE, DF_RIDE_TIME};
+    uint8_t mapFields[3] = {DF_COURSE, DF_ALTITUDE, DF_SATELLITES};   // DOBA
 };
 
 // The built-in layout: today's dashboard, field for field, so a device with no

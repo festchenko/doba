@@ -405,6 +405,7 @@ void ui_render_busy_band(const char* title, const char* sub, uint8_t* fb,
                          int bandY = 402, int bandH = 116);
 void ui_render_shutdown_ack(bool savingRide, uint8_t* fb);
 void ui_render_shutdown_screen(uint8_t* fb);
+void ui_render_grey_test(uint8_t* fb);   // DOBA: panel calibration card
 
 // "Start navigation?" bottom sheet shown when a route with turn cues
 // arrives. Reuses the power-sheet button rects: kPowerShutdown = START,

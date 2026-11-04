@@ -1,4 +1,6 @@
 #include "ui_render.h"
+#include "milgeo.h"    // DOBA
+#include "milspec.h"   // DOBA
 #include "epd_compat.h"
 
 #include <cmath>
@@ -168,7 +170,61 @@ void drawBolt(int cx, int cy, uint8_t color, uint8_t* fb) {
 
 }  // namespace
 
+// DOBA: the tactical status band — black, white monospace, every item a word
+// rather than a glyph: "14:25  SAT 10  REC ... TITLE ... BAT 87%". The
+// OpenTrailPaper band (clock, signal dots, sensor chips, battery icon) is kept
+// below as statusBarOtp() for reference.
+void statusBarOtp(const RideState& s, uint8_t* fb, const char* title);
+
 void statusBar(const RideState& s, uint8_t* fb, const char* title) {
+    const int W = epd_rotated_display_width();
+    const int H = STATUS_H;
+    const uint8_t BG = 0x00, FG = 0xFF;
+    epd_fill_rect({0, 0, W, H}, BG, fb);
+    const int base = 42;
+
+    char clock[10];
+    formatClock(clock, sizeof(clock), s);
+    text(&Arial_B, 14, base, clock, fb, EPD_DRAW_ALIGN_LEFT, FG);
+    int x = 14 + textWidth(&Arial_B, clock) + 16;
+
+    // Left cluster, only when the middle is not a page title.
+    if (!title) {
+        char gps[16];
+        if (s.gpsFix) snprintf(gps, sizeof(gps), "SAT %u", (unsigned)s.satellites);
+        else snprintf(gps, sizeof(gps), "NO FIX");
+        text(&Arial_L, x, base, gps, fb, EPD_DRAW_ALIGN_LEFT, FG);
+        x += textWidth(&Arial_L, gps) + 14;
+        const char* flag = nullptr;
+        if (s.sdCard == SD_CARD_UNREADABLE) flag = "SD ERR";
+        else if (s.sdCard != SD_CARD_OK) flag = "NO SD";
+        else if (s.recording && s.cardFull) flag = "SD FULL";
+        else if (s.ridePaused) flag = "PAUSE";
+        else if (s.recording) flag = "REC";
+        if (flag) {
+            // Inverted chip: white box, black word — the one thing to notice.
+            const int w = textWidth(&Arial_L, flag) + 12;
+            epd_fill_rect({x, 18, w, 30}, FG, fb);
+            text(&Arial_L, x + 6, base, flag, fb, EPD_DRAW_ALIGN_LEFT, BG);
+            x += w + 10;
+        }
+        if (s.phoneConnected) text(&Arial_L, x, base, "LINK", fb, EPD_DRAW_ALIGN_LEFT, FG);
+    } else if (title[0]) {
+        char titled[32];
+        if (s.ridePaused) {
+            snprintf(titled, sizeof(titled), "%s / PAUSE", title);
+            title = titled;
+        }
+        text(&Arial_B, W / 2, base, title, fb, EPD_DRAW_ALIGN_CENTER, FG);
+    }
+
+    char bat[16];
+    if (s.batteryPercent == 0) snprintf(bat, sizeof(bat), "BAT --%%");
+    else snprintf(bat, sizeof(bat), "BAT %u%%%s", s.batteryPercent, s.charging ? "+" : "");
+    text(&Arial_B, W - 14, base, bat, fb, EPD_DRAW_ALIGN_RIGHT, FG);
+}
+
+void statusBarOtp(const RideState& s, uint8_t* fb, const char* title) {
     const int W = epd_rotated_display_width();
 
     // Clock from GPS time (local), 24h or 12h per the setting.
@@ -599,6 +655,8 @@ void dashFieldValue(uint8_t field, const RideState& s, char* val, size_t valCap,
                 snprintf(val, valCap, "%.0f", units::elev(s.baroAltM, s.useMiles));
             else if (s.mapElevationValid)
                 snprintf(val, valCap, "%.0f", units::elev(s.mapElevationM, s.useMiles));
+            else if (s.gpsFix)   // DOBA: topo maps carry no DEM yet; GPS beats nothing
+                snprintf(val, valCap, "%.0f", units::elev(s.altitudeM, s.useMiles));
             else snprintf(val, valCap, "--");
             *unit = units::elevLabel(s.useMiles);
             break;
@@ -609,6 +667,24 @@ void dashFieldValue(uint8_t field, const RideState& s, char* val, size_t valCap,
         case DF_SATELLITES:
             snprintf(val, valCap, "%u", s.satellites);
             break;
+        case DF_MGRS:   // DOBA
+            if (s.gpsFix || s.everHadFix) milgeo::mgrs(s.latitude, s.longitude, val, valCap);
+            if (!val[0] || !(s.gpsFix || s.everHadFix)) snprintf(val, valCap, "--");
+            break;
+        case DF_LATLON:   // DOBA
+            if (s.gpsFix || s.everHadFix)
+                snprintf(val, valCap, "%c%.5f %c%.5f", s.latitude >= 0 ? 'N' : 'S',
+                         fabs(s.latitude), s.longitude >= 0 ? 'E' : 'W', fabs(s.longitude));
+            else snprintf(val, valCap, "--");
+            break;
+        case DF_COURSE: {   // DOBA: mils (60-00 or 6400) and degrees
+            if (s.gpsFix && s.gpsSpeedKmh >= 2.0f) {
+                char mil[8];
+                milgeo::mils(s.courseDeg, milspec::milsSystem(), mil, sizeof mil);
+                snprintf(val, valCap, "%s %03d", mil, (int)lroundf(s.courseDeg) % 360);
+            } else snprintf(val, valCap, "--");
+            break;
+        }
         case DF_CLOCK: {
             char clk[16];
             formatClock(clk, sizeof(clk), s);
@@ -719,6 +795,9 @@ const char* dashSizingHint(uint8_t field) {
         case DF_BATTERY:     return "888";
         case DF_SATELLITES:  return "88";
         case DF_CLOCK:       return "88:88";
+        case DF_MGRS:        return "88W WW 88888 88888";      // DOBA
+        case DF_LATLON:      return "N88.88888 E888.88888";    // DOBA
+        case DF_COURSE:      return "88-88 888";               // DOBA
         default:             return "888";
     }
 }
@@ -1369,7 +1448,7 @@ void ui_render_summary(const RideSummary& r, uint8_t* fb, bool interrupted) {
 
     // Tracked label, then the hero figure with its unit set INLINE in impact —
     // the specimen reads "54.8 KM" as one line, not a value with a superscript.
-    const char* title = interrupted ? "RIDE INTERRUPTED" : "END OF RIDE";
+    const char* title = interrupted ? "TRACK INTERRUPTED" : "END OF TRACK";
     const int lw = ui::labelWidth(&Arial_L, title);
     ui::label(x + lw / 2, y + Arial_L.ascender, title, fb);
     y += Arial_L.ascender + 8;
@@ -1386,13 +1465,16 @@ void ui_render_summary(const RideSummary& r, uint8_t* fb, bool interrupted) {
              (unsigned long)((r.elapsedS / 60) % 60),
              (unsigned long)(r.elapsedS % 60));
     if (r.avgPowerW > 0)
-        snprintf(buf, sizeof(buf), "%s ride · %.0f %s ascent · %d W avg", rideTime,
+        snprintf(buf, sizeof(buf), "%s · %.0f %s ascent · %d W avg", rideTime,
                  units::elev(r.climbedM, r.useMiles), r.useMiles ? "ft" : "m",
                  r.avgPowerW);
-    else
-        snprintf(buf, sizeof(buf), "%s ride · %.0f %s ascent · %d bpm", rideTime,
+    else if (r.avgHrBpm > 0)
+        snprintf(buf, sizeof(buf), "%s · %.0f %s ascent · %d bpm", rideTime,
                  units::elev(r.climbedM, r.useMiles), r.useMiles ? "ft" : "m",
                  r.avgHrBpm);
+    else   // DOBA: no strap, no "0 bpm"
+        snprintf(buf, sizeof(buf), "%s · %.0f %s ascent", rideTime,
+                 units::elev(r.climbedM, r.useMiles), r.useMiles ? "ft" : "m");
     char line[72];
     fitText(&Arial_B, buf, W - 2 * ui::MARGIN, line, sizeof(line));
     ui::text(&Arial_B, x, y + Arial_B.ascender, line, fb, EPD_DRAW_ALIGN_LEFT,
@@ -1536,9 +1618,9 @@ void ui_render_menu(const MenuInfo& m, uint8_t* fb) {
     } else {
         int n = (m.hr ? 1 : 0) + (m.pwr ? 1 : 0) + (m.cad ? 1 : 0) + (m.radar ? 1 : 0) +
                 (m.spd ? 1 : 0);
-        snprintf(startSub, sizeof(startSub), "%s · %d sensor%s connected",
-                 m.gpsReady ? "GPS ready" : "waiting for GPS", n,
-                 n == 1 ? "" : "s");
+        (void)n;   // DOBA: no sensors on foot
+        snprintf(startSub, sizeof(startSub), "%s",
+                 m.gpsReady ? "GPS ready · records to /rides" : "waiting for GPS");
     }
     // PAIRED DEVICES: the phone this device belongs to (fixed pairing) and
     // how many sensors are live. The per-sensor HR/Power/Cadence breakdown no
@@ -1552,19 +1634,19 @@ void ui_render_menu(const MenuInfo& m, uint8_t* fb) {
                      m.phoneName[0] ? m.phoneName : "paired");
         else
             snprintf(phone, sizeof(phone), "No phone paired");
-        snprintf(sensorSub, sizeof(sensorSub), "%s · %d sensor%s", phone, ns,
-                 ns == 1 ? "" : "s");
+        (void)ns;   // DOBA
+        snprintf(sensorSub, sizeof(sensorSub), "%s", phone);
     }
-    if (m.sdOk) snprintf(historySub, sizeof(historySub), "%d ride%s on card",
+    if (m.sdOk) snprintf(historySub, sizeof(historySub), "%d track%s on card",
                          m.rideCount, m.rideCount == 1 ? "" : "s");
     else snprintf(historySub, sizeof(historySub), "no SD card");
-    snprintf(settingsSub, sizeof(settingsSub), "FTP · timezone");
+    snprintf(settingsSub, sizeof(settingsSub), "mils · timezone · light · radio");
 
     const Row rows[kMenuRowCount] = {
-        {m.recording ? "Stop Ride" : "Start Ride", startSub, true},
-        {"Navigate", m.routeLine, false},
-        {"Paired Devices", sensorSub, false},
-        {"Ride History", historySub, false},
+        {m.recording ? "Stop Track" : "Record Track", startSub, true},
+        {"Routes", m.routeLine, false},
+        {"Phone Link", sensorSub, false},
+        {"Tracks", historySub, false},
         {"Settings", settingsSub, false},
     };
 
@@ -1782,8 +1864,11 @@ void ui_render_settings(const SettingsInfo& si, uint8_t* fb) {
         bool toggle;   // switch instead of a +/- stepper
         bool on;
     } rows[kSettingsRowCount];
-    snprintf(rows[0].value, sizeof(rows[0].value), "%d", si.ftpW);
-    rows[0].label = "FTP";
+    // DOBA: row 0 was FTP (cycling power); it is the mils system now.
+    (void)si.ftpW;
+    snprintf(rows[0].value, sizeof(rows[0].value), "%s",
+             milspec::milsSystem() == 6400 ? "6400" : "60-00");
+    rows[0].label = "MILS";
     rows[0].toggle = false;
     int tzH = si.tzMin / 60, tzM = abs(si.tzMin % 60);
     snprintf(rows[1].value, sizeof(rows[1].value), "%+d:%02d", tzH, tzM);
@@ -2043,7 +2128,7 @@ static int sheetHead(const char* label, const char* hero, const char* detail,
 void ui_render_power_sheet(bool recording, uint8_t* fb) {
     sheetShell(fb);
     sheetHead("POWER", "SHUT DOWN?",
-              recording ? "A ride is recording — it will be saved first."
+              recording ? "A track is recording — it will be saved first."
                         : "The device sleeps until you press the button.",
               fb);
     sheetButton(kPowerShutdown, "SHUT DOWN", true, fb);
@@ -2101,10 +2186,25 @@ void ui_render_busy_band(const char* title, const char* sub, uint8_t* fb,
 
 void ui_render_shutdown_ack(bool savingRide, uint8_t* fb) {
     ui_render_busy_band("POWERING OFF",
-                        savingRide ? "saving ride..." : "one moment...", fb);
+                        savingRide ? "saving track..." : "one moment...", fb);
 }
 
 static void drawAppIcon(int cx, int topY, int height, uint8_t* fb, bool halo);
+
+// DOBA: the device mark — a reticle: ring, cross hairs broken at the centre,
+// and a north triangle on the ring. Primitives only, crisp at any size.
+static void drawDobaMark(int cx, int topY, int height, uint8_t* fb, bool halo = false) {
+    const int r = height / 2, cy = topY + r;
+    if (halo) epd_fill_circle(cx, cy, r + 8, 0xFF, fb);
+    for (int t = 0; t < 6; ++t) epd_draw_circle(cx, cy, r - t, 0x00, fb);
+    const int gap = r / 5, w = 4;
+    epd_fill_rect({cx - w / 2, cy - r - 10, w, r - gap + 10}, 0x00, fb);   // N hair
+    epd_fill_rect({cx - w / 2, cy + gap, w, r - gap + 10}, 0x00, fb);      // S
+    epd_fill_rect({cx - r - 10, cy - w / 2, r - gap + 10, w}, 0x00, fb);   // W
+    epd_fill_rect({cx + gap, cy - w / 2, r - gap + 10, w}, 0x00, fb);      // E
+    epd_fill_circle(cx, cy, 5, 0x00, fb);
+    epd_fill_triangle(cx, topY - 26, cx - 14, topY - 4, cx + 14, topY - 4, 0x00, fb);
+}
 
 void ui_render_shutdown_screen(uint8_t* fb) {
     const int W = epd_rotated_display_width();
@@ -2112,7 +2212,7 @@ void ui_render_shutdown_screen(uint8_t* fb) {
     // The device's front door, on the way out too: mark and wordmark above the
     // band, over the map. The icon gets a white halo shell and the wordmark a
     // white outline — both sit on whatever the map drew there.
-    drawAppIcon(cx, 200, 168, fb, /*halo=*/true);
+    drawDobaMark(cx, 200, 168, fb, /*halo=*/true);   // DOBA
 
     // A solid band so the text stays legible over the map backdrop behind it.
     const int bandY = 402, bandH = 116;
@@ -2205,10 +2305,10 @@ void ui_render_boot_screen(const char* version, const char* const* lines,
     // log is what it is doing, not what it is. Both sized to leave the log the
     // lower two thirds.
     const int cx = W / 2;
-    drawAppIcon(cx, ui::MARGIN + ui::STEP, 168, fb);
-    ui::label(cx, 268, "OPEN TRAIL PAPER", fb, ui::INK, &Impact_T);
+    drawDobaMark(cx, ui::MARGIN + ui::STEP + 20, 150, fb);   // DOBA
+    ui::label(cx, 268, "D O B A", fb, ui::INK, &Impact_T);
     char hdr[64];
-    snprintf(hdr, sizeof(hdr), "firmware %s · esp32-s3 · 540x960 epd", version);
+    snprintf(hdr, sizeof(hdr), "doba · otp %s · esp32-s3 · 540x960 epd", version);
     ui::text(&Arial_L, cx, 296, hdr, fb, EPD_DRAW_ALIGN_CENTER, ui::INK);
 
     int y = 320;
@@ -3908,4 +4008,22 @@ void ui_render_segment(const RideState& s, const seg::View& v, uint8_t* fb) {
                s.gpsFix || s.phoneFixValid ? "None of them starts within 5 km."
                                            : "Waiting for a position.",
                buf, fb);
+}
+
+
+// DOBA: a calibration card — the sixteen framebuffer levels as bars, with their
+// numbers, to see on the real glass which ones the panel tells apart.
+void ui_render_grey_test(uint8_t* fb) {
+    const int W = epd_rotated_display_width(), H = epd_rotated_display_height();
+    epd_fill_rect({0, 0, W, H}, 0xFF, fb);
+    const int top = 70, bh = (H - top - 20) / 16;
+    ui::text(&Arial_B, W / 2, 45, "GREY LEVELS 0-15", fb, EPD_DRAW_ALIGN_CENTER, 0x00);
+    for (int v = 0; v < 16; ++v) {
+        const int y = top + v * bh;
+        epd_fill_rect({130, y, W - 150, bh - 6}, (uint8_t)(v * 17), fb);
+        epd_draw_rect({130, y, W - 150, bh - 6}, 0x00, fb);
+        char n[8];
+        snprintf(n, sizeof n, "%2d %s", v, v == 0 ? "BLK" : v == 5 ? "DRK" : v == 10 ? "LGT" : v == 15 ? "WHT" : "");
+        ui::text(&Arial_B, 14, y + bh / 2 + 6, n, fb, EPD_DRAW_ALIGN_LEFT, 0x00);
+    }
 }

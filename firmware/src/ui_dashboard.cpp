@@ -98,6 +98,9 @@ float mapMpp = 2.0f;  // map zoom: 1/2/4/8/16/32 m per px (wide levels show tile
 // DOBA: the last map frame was a topo one. Topo packs carry zooms 9-16, so the
 // map may zoom out further than the vector maps' 32 m/px (z9 is ~190 m/px here).
 bool mapTopoActive = false;
+// DOBA: the grey calibration card is up (console `greytest`; any touch or
+// key, or `greytest off`, takes it down).
+bool greyTestShown = false;
 inline float mapMaxMpp() { return mapTopoActive ? 200.0f : 32.0f; }
 // Whether the next map frame may read tiles off the card. See renderMapScreen:
 // the first pass after any change is drawn from RAM alone so it lands at once.
@@ -603,6 +606,7 @@ bool forceDraw = false;
 // interacting, so it does not contend with the recorder for the SD lock.
 uint32_t lastUiInputMs = 0;
 void noteActivity() {
+    greyTestShown = false;   // DOBA: any touch or key takes the grey card down
     lastActivityMs = millis();
     lastUiInputMs = millis();
     forceDraw = true;
@@ -1120,7 +1124,7 @@ void handleTap(int x, int y) {
                 if (recoveryPrompt) {
                     // CONTINUE: reopen the interrupted file and keep recording.
                     // Resuming replays the whole record stream first.
-                    paintBusyBand("RESUMING RIDE");
+                    paintBusyBand("RESUMING TRACK");
                     recoveryPrompt = false;
                     ride_recorder::resolveRecovery(ride_recorder::RECOVERY_CONTINUE);
                 }
@@ -1128,7 +1132,7 @@ void handleTap(int x, int y) {
                 // dashboard and keep going.
                 screen = SCREEN_DASH;
             } else if (inRect(kSaveButton, x, y)) {
-                paintBusyBand("SAVING RIDE");
+                paintBusyBand("SAVING TRACK");
                 if (recoveryPrompt) {
                     recoveryPrompt = false;
                     ride_recorder::resolveRecovery(ride_recorder::RECOVERY_SAVE);
@@ -1137,7 +1141,7 @@ void handleTap(int x, int y) {
                 }
                 screen = SCREEN_DASH;
             } else if (inRect(kDiscardButton, x, y)) {
-                paintBusyBand("DISCARDING RIDE");
+                paintBusyBand("DISCARDING TRACK");
                 if (recoveryPrompt) {
                     recoveryPrompt = false;
                     ride_recorder::resolveRecovery(ride_recorder::RECOVERY_DISCARD);
@@ -1228,7 +1232,8 @@ void handleTap(int x, int y) {
             bool edited = false;
             if (inRows && !toggleRow && (minus || plus)) {
                 int dir = plus ? 1 : -1;
-                if (row == 0) settings::setFtpWatts(settings::ftpWatts() + dir * 5);
+                // DOBA: row 0 is the mils system: either button flips it.
+                if (row == 0) milspec::setMilsSystem(milspec::milsSystem() == 6400 ? 6000 : 6400);
                 if (row == 1) settings::setTzMinutes(settings::tzMinutes() + dir * 30);
                 if (row == kSettingsBacklightRow) {
                     // Clamped, not wrapped: with a visible -/+ pair, "+" at
@@ -1986,8 +1991,8 @@ void renderListScreen(uint8_t* fb) {
 
     switch (screen) {
         case SCREEN_SENSORS: {
-            title = "PAIRED DEVICES";
-            footer = "tap a sensor to pair it · scanning...";
+            title = "PHONE LINK";
+            footer = "the OpenTrailPaper app pairs here (messages, settings)";
             // Row 0: the phone this device belongs to (fixed pairing, see
             // ble_server.cpp). Same row recipe as a sensor: name as the title,
             // status first in the subtitle, inverted while connected. Tapping
@@ -2033,7 +2038,7 @@ void renderListScreen(uint8_t* fb) {
             break;
         }
         case SCREEN_ROUTES: {
-            title = "NAVIGATE";
+            title = "ROUTES";
             paged = true;
             const bool sd = ride_recorder::sdMounted();
             footer = sd ? "put .gpx files in /routes on the SD card"
@@ -2069,14 +2074,14 @@ void renderListScreen(uint8_t* fb) {
                     snprintf(r.title, sizeof(r.title), "%s",
                              routeFiles[i - listPinned]);
                     snprintf(r.subtitle, sizeof(r.subtitle),
-                             "tap to ride this route");
+                             "tap to follow this route");
                 }
             }
             break;
         }
         case SCREEN_DIRECTIONS: {
             title = "DIRECTIONS";
-            footer = routes::navActive() ? "distances update as you ride"
+            footer = routes::navActive() ? "distances update as you move"
                                          : "navigation has ended";
             int n = routes::upcomingCount();
             for (int i = 0; i < n && count < (int)(sizeof(rows) / sizeof(rows[0]));
@@ -2102,8 +2107,8 @@ void renderListScreen(uint8_t* fb) {
             break;
         }
         case SCREEN_HISTORY: {
-            title = "RIDE HISTORY";
-            footer = "rides upload from /rides on the SD card";
+            title = "TRACKS";
+            footer = "tracks are .fit files in /rides on the SD card";
             paged = true;
             const bool sd = ride_recorder::sdMounted();
             if (!rideFiles)
@@ -2135,7 +2140,7 @@ void renderListScreen(uint8_t* fb) {
                 ListRow& r = rows[count];
                 if (i < listPinned) {
                     RideState s = g_state.snapshot();
-                    snprintf(r.title, sizeof(r.title), "Recording in progress");
+                    snprintf(r.title, sizeof(r.title), "Recording");   // DOBA: fits the mono face
                     uint32_t secs = s.elapsedS;
                     snprintf(r.subtitle, sizeof(r.subtitle),
                              "%.1f %s · %lu:%02lu:%02lu",
@@ -3283,6 +3288,9 @@ static void runConsoleLine(char* line) {
         if (arg && !strcasecmp(arg, "in") && mapMpp > 1.0f) mapMpp /= 2.0f;
         else if (arg && !strcasecmp(arg, "out") && mapMpp < mapMaxMpp()) mapMpp *= 2.0f;
         screen = SCREEN_MAP; noteActivity();
+    } else if (!strcasecmp(cmd, "greytest")) {   // DOBA: panel grey levels card
+        noteActivity();
+        greyTestShown = !(arg && !strcasecmp(arg, "off"));
     } else if (!strcasecmp(cmd, "mils")) {   // DOBA: mils 6000 | mils 6400
         if (arg) milspec::setMilsSystem(atoi(arg));
         Serial.printf("[mils] %d\n", milspec::milsSystem());
@@ -3962,6 +3970,8 @@ void task(void*) {
               ui::statusBar(s, fb);
               ui_render_nav_prompt(routes::activeName(),
                                    routes::maneuverCount(), fb);
+            } else if (greyTestShown) {   // DOBA: `greytest` console card
+              ui_render_grey_test(fb);
             } else {
             switch (screen) {
                 case SCREEN_DASH: {
@@ -4103,9 +4113,9 @@ void task(void*) {
                 case SCREEN_DIRECTIONS:
                     renderListScreen(fb);
                     ui::statusBar(s, fb,
-                                  screen == SCREEN_SENSORS    ? "PAIRED DEVICES"
-                                  : screen == SCREEN_ROUTES   ? "NAVIGATE"
-                                  : screen == SCREEN_HISTORY  ? "RIDES"
+                                  screen == SCREEN_SENSORS    ? "PHONE LINK"
+                                  : screen == SCREEN_ROUTES   ? "ROUTES"
+                                  : screen == SCREEN_HISTORY  ? "TRACKS"
                                                               : "DIRECTIONS");
                     break;
                 case SCREEN_SETTINGS: {
