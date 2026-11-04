@@ -24,6 +24,7 @@
 #include "ui_render.h"
 #include "map_view.h"
 #include "topo_layer.h"   // DOBA
+#include "doba_ui.h"      // DOBA
 #include "milspec.h"      // DOBA
 #include "map_tiles.h"
 #include "map_store.h"
@@ -67,8 +68,21 @@ size_t fbSize = 0;
 enum Screen { SCREEN_DASH, SCREEN_MAP, SCREEN_SUMMARY, SCREEN_MENU,
               SCREEN_SENSORS, SCREEN_ROUTES, SCREEN_HISTORY,
               SCREEN_SETTINGS, SCREEN_GPSDEBUG, SCREEN_DIRECTIONS,
-              SCREEN_MAPLAYERS };
-Screen screen = SCREEN_DASH;
+              SCREEN_MAPLAYERS,
+              // DOBA: the launcher, comms and library (doba_ui.h).
+              SCREEN_HOME, SCREEN_COMMS, SCREEN_COMPOSE, SCREEN_LIBRARY,
+              SCREEN_ARTICLE };
+#ifdef OTP_SIM
+// DOBA: the inherited OTP sim suites were written for a dashboard boot; they set
+// DOBA_START=dash (sim/tests/conftest.py). The device always boots to HOME.
+static Screen dobaStartScreen() {
+    const char* s = getenv("DOBA_START");
+    return (s && strcmp(s, "dash") == 0) ? SCREEN_DASH : SCREEN_HOME;
+}
+Screen screen = dobaStartScreen();
+#else
+Screen screen = SCREEN_HOME;   // DOBA: boot lands on the main screen
+#endif
 // Which cycle slot the rider is on (indexes dash_config::pages, which now
 // includes the MAP as a movable page). Deliberately NOT reset by navigation:
 // leaving for the menu or settings and coming back lands on the page the
@@ -757,6 +771,35 @@ bool listPagerTap(int x, int y) {
     return true;
 }
 
+// DOBA: which doba_ui page a screen is, and acting on where a page leads.
+doba_ui::Page dobaPage() {
+    switch (screen) {
+        case SCREEN_COMMS:   return doba_ui::COMMS;
+        case SCREEN_COMPOSE: return doba_ui::COMPOSE;
+        case SCREEN_LIBRARY: return doba_ui::LIBRARY;
+        case SCREEN_ARTICLE: return doba_ui::ARTICLE;
+        default:             return doba_ui::HOME;
+    }
+}
+void enterPagedList(Screen s);
+void startOrStopTrack();
+void dobaGo(doba_ui::Go g) {
+    switch (g) {
+        case doba_ui::STAY:        break;
+        case doba_ui::TO_HOME:     screen = SCREEN_HOME; break;
+        case doba_ui::TO_MAP:      screen = SCREEN_MAP; break;
+        case doba_ui::TO_POSITION: dashPage = firstContentPage(); screen = SCREEN_DASH; break;
+        case doba_ui::TO_LIBRARY:  screen = SCREEN_LIBRARY; break;
+        case doba_ui::TO_ARTICLE:  screen = SCREEN_ARTICLE; break;
+        case doba_ui::TO_COMMS:    screen = SCREEN_COMMS; break;
+        case doba_ui::TO_COMPOSE:  screen = SCREEN_COMPOSE; break;
+        case doba_ui::TO_TRACKS:   enterPagedList(SCREEN_HISTORY); break;
+        case doba_ui::TO_ROUTES:   enterPagedList(SCREEN_ROUTES); break;
+        case doba_ui::TO_SETTINGS: screen = SCREEN_SETTINGS; break;
+        case doba_ui::TO_RECORD:   startOrStopTrack(); break;
+    }
+}
+
 // Navigate up one level in the screen hierarchy (front button, short press).
 void goBack() {
     if (routes::navPending()) {
@@ -773,7 +816,12 @@ void goBack() {
         case SCREEN_DIRECTIONS: screen = directionsFrom; break;
         case SCREEN_SETTINGS:
         case SCREEN_ROUTES:
-        case SCREEN_HISTORY:  screen = SCREEN_MENU; break;
+        case SCREEN_HISTORY:  screen = SCREEN_HOME; break;   // DOBA: was the menu
+        case SCREEN_HOME:
+        case SCREEN_COMMS:
+        case SCREEN_COMPOSE:
+        case SCREEN_LIBRARY:
+        case SCREEN_ARTICLE:  dobaGo(doba_ui::back(dobaPage())); break;
         case SCREEN_SENSORS:  leaveList(); break;  // also stops the BLE scan
         case SCREEN_MENU:     screen = SCREEN_DASH; break;
         case SCREEN_MAP:
@@ -792,6 +840,18 @@ void goBack() {
             screen = SCREEN_DASH;
             break;
         case SCREEN_DASH:     break;  // already home
+    }
+}
+
+// DOBA: the menu's old row 0, shared with the main screen's RECORD tile.
+void startOrStopTrack() {
+    if (ride_recorder::isRecording()) {
+        pendingSummary = ride_recorder::summary();
+        screen = SCREEN_SUMMARY;
+    } else {
+        ride_recorder::startRide();
+        dashPage = firstContentPage();
+        screen = SCREEN_DASH;
     }
 }
 
@@ -1113,7 +1173,7 @@ void handleTap(int x, int y) {
             // map, and on the dashboard a stray glove brush did the same. The
             // flip now has deliberate targets — that strip, and the Home key,
             // which is the only way back to the map.
-            if (y < ui::STATUS_H) screen = SCREEN_MENU;
+            if (y < ui::STATUS_H) screen = SCREEN_HOME;   // DOBA: was the menu
             else if (screen == SCREEN_MAP && y >= ui::MAP_STRIP_TOP) {
                 dashPage = firstContentPage();
                 screen = SCREEN_DASH;
@@ -1155,15 +1215,7 @@ void handleTap(int x, int y) {
             int row = (y - kMenuRowTop) / kMenuRowH;
             if (y >= kMenuRowTop && row >= 0 && row < kMenuRowCount) {
                 switch (row) {
-                    case 0:
-                        if (ride_recorder::isRecording()) {
-                            pendingSummary = ride_recorder::summary();
-                            screen = SCREEN_SUMMARY;
-                        } else {
-                            ride_recorder::startRide();
-                            screen = SCREEN_DASH;
-                        }
-                        break;
+                    case 0: startOrStopTrack(); break;
                     case 1: enterPagedList(SCREEN_ROUTES); break;
                     case 2: sensorsFrom = SCREEN_MENU; enterSensors(); break;
                     case 3: enterPagedList(SCREEN_HISTORY); break;
@@ -1202,13 +1254,20 @@ void handleTap(int x, int y) {
                     }
                 }
             } else {
-                screen = SCREEN_MENU;
+                screen = SCREEN_HOME;   // DOBA
             }
             break;
         }
         case SCREEN_HISTORY:
             // Rows aren't actions (yet): any tap outside the pager goes back.
-            if (!listPagerTap(x, y)) screen = SCREEN_MENU;
+            if (!listPagerTap(x, y)) screen = SCREEN_HOME;   // DOBA
+            break;
+        case SCREEN_HOME:
+        case SCREEN_COMMS:
+        case SCREEN_COMPOSE:
+        case SCREEN_LIBRARY:
+        case SCREEN_ARTICLE:   // DOBA
+            dobaGo(doba_ui::tap(dobaPage(), x, y, g_state.snapshot()));
             break;
         case SCREEN_SETTINGS: {
             int row = (y - kMenuRowTop) / kSettingsRowH;
@@ -3282,6 +3341,10 @@ static void runConsoleLine(char* line) {
         else if (!strcasecmp(arg, "settings")) screen = SCREEN_SETTINGS;
         else if (!strcasecmp(arg, "gps"))      screen = SCREEN_GPSDEBUG;
         else if (!strcasecmp(arg, "layers"))   screen = SCREEN_MAPLAYERS;
+        else if (!strcasecmp(arg, "home"))     screen = SCREEN_HOME;      // DOBA
+        else if (!strcasecmp(arg, "comms"))    screen = SCREEN_COMMS;     // DOBA
+        else if (!strcasecmp(arg, "compose"))  screen = SCREEN_COMPOSE;   // DOBA
+        else if (!strcasecmp(arg, "library"))  screen = SCREEN_LIBRARY;   // DOBA
         else { Serial.printf("[cmd] unknown screen '%s'\n", arg); return; }
         noteActivity();
     } else if (!strcasecmp(cmd, "zoom")) {
@@ -3763,14 +3826,11 @@ void task(void*) {
                 // The carousel: every page in configured order, the map
                 // among them wherever the rider put it. With the default
                 // config this is exactly the old dash <-> map swap.
+                // DOBA: Home is home — the main screen; from there, the map.
                 if (screen == SCREEN_DASH || screen == SCREEN_MAP) {
-                    // Entered the map some other way (routes, strip tap)?
-                    // Continue the cycle from the map's slot.
-                    if (screen == SCREEN_MAP) dashPage = mapSlot();
-                    dashPage = (dashPage + 1) % dash_config::pageCount();
-                    screen = dash_config::page(dashPage).kind == DP_MAP
-                                 ? SCREEN_MAP
-                                 : SCREEN_DASH;
+                    screen = SCREEN_HOME;
+                } else if (screen == SCREEN_HOME) {
+                    screen = SCREEN_MAP;
                 } else {
                     goBack();
                 }
@@ -4118,6 +4178,18 @@ void task(void*) {
                                   : screen == SCREEN_HISTORY  ? "TRACKS"
                                                               : "DIRECTIONS");
                     break;
+                case SCREEN_HOME:
+                case SCREEN_COMMS:
+                case SCREEN_COMPOSE:
+                case SCREEN_LIBRARY:
+                case SCREEN_ARTICLE: {   // DOBA
+                    doba_ui::render(dobaPage(), s, fb);
+                    const char* t = screen == SCREEN_COMMS ? "COMMS"
+                                  : screen == SCREEN_COMPOSE ? "WRITE"
+                                  : screen == SCREEN_HOME ? nullptr : "LIBRARY";
+                    ui::statusBar(s, fb, t);
+                    break;
+                }
                 case SCREEN_SETTINGS: {
                     // Mesh state comes from the SERVICE, not settings: the tap
                     // only stages a request, and the stored flag is not written

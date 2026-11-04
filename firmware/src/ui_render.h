@@ -124,6 +124,19 @@ void valueWithUnit(const EpdFont* valueFont, int x0, int x1, int baselineY,
                    const char* value, const char* unit, uint8_t* fb,
                    uint8_t color = 0x00);
 
+// DOBA: the UI faces by role, so screens outside ui_render.cpp share them
+// without pulling the font data into another translation unit.
+enum FontRole : uint8_t {
+    F_TINY,     // Arial_L
+    F_SMALL,    // Arial_B
+    F_LABEL,    // ArialBold_14
+    F_KEY,      // ArialBold_20
+    F_BODY,     // article text
+    F_BODY_H,   // article headings
+    F_TITLE,    // Impact_T, list titles
+    F_BIG,      // Impact_V
+};
+const EpdFont* font(FontRole r);
 }  // namespace ui
 
 // Main ride screen. The fields, their order and their sizes come from `layout`

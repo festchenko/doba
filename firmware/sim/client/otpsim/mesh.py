@@ -54,11 +54,18 @@ US = (902.0, 928.0)
 
 # ---- crypto ----------------------------------------------------------------------------------
 
-_cc = ctypes.CDLL(ctypes.util.find_library("System") or "/usr/lib/libSystem.dylib")
+try:
+    _cc = ctypes.CDLL(ctypes.util.find_library("System") or "/usr/lib/libSystem.dylib")
+except OSError:          # DOBA: not macOS — no CommonCrypto; use `cryptography`
+    _cc = None
 
 
 def aes_ecb(key, block):
-    """One AES block (128/256-bit key), by CommonCrypto."""
+    """One AES block (128/256-bit key), by CommonCrypto (or `cryptography`)."""
+    if _cc is None:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        e = Cipher(algorithms.AES(bytes(key)), modes.ECB()).encryptor()
+        return e.update(bytes(block)) + e.finalize()
     out = ctypes.create_string_buffer(len(block))
     moved = ctypes.c_size_t(0)
     # CCCrypt(kCCEncrypt=0, kCCAlgorithmAES=0, kCCOptionECBMode=2, ...)

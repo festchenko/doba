@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "settings.h"
 #include "ble_sensors.h"
 #include <string.h>
@@ -110,7 +111,13 @@ void begin() {
         char rn[16] = "";
         prefs.getString("meshregion", rn, sizeof(rn));
         int ri = mesh::regionIndexByName(rn);
-        if (ri < 0) ri = mesh::regionIndexByName(MESH_REGION_DEFAULT);
+        const char* def = MESH_REGION_DEFAULT;
+#ifdef OTP_SIM
+        // DOBA: the inherited OTP mesh suites are written for the US band plan
+        // (many slots); conftest.py sets DOBA_MESH_REGION=US for them.
+        if (const char* e = getenv("DOBA_MESH_REGION")) if (*e) def = e;
+#endif
+        if (ri < 0) ri = mesh::regionIndexByName(def);
         meshRegionIdx = ri < 0 ? 0 : (uint8_t)ri;
     }
     meshTxDbm = (int8_t)constrain(prefs.getChar("meshtxdbm", 0), 0, MESH_TX_DBM_MAX);

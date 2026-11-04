@@ -226,16 +226,21 @@ def test_a_layout_sent_mid_ride_waits_for_the_ride_to_end(device, link):
 
 # -- moving between pages -------------------------------------------------------------------
 
-def test_the_home_key_steps_through_the_pages_in_order(device, link):
-    """The carousel, map included wherever it sits, wrapping round."""
+def test_the_home_key_goes_home_and_on_to_the_map(device, link):
+    """DOBA: the Home key no longer steps the carousel (OTP did). From any page
+    it opens the HOME launcher; from HOME it opens the map."""
     set_dash(link, "speed hero\npage map\npage stopwatch\npage workout\n")
     wait_pages(device, 4)
     device.wait_status(lambda s: s["page"] == 0 and s["screen"] == "dash")
-    want = [(1, "map"), (2, "dash"), (3, "dash"), (0, "dash"), (1, "map")]
-    for page, screen in want:
-        time.sleep(0.45)                                   # the key is debounced 400 ms
-        device.button("home")
-        device.wait_status(lambda s: s["page"] == page and s["screen"] == screen, timeout=3)
+    time.sleep(0.45)                                       # the key is debounced 400 ms
+    device.button("home")
+    device.wait_status(lambda s: s["screen"] == "other", timeout=3)
+    time.sleep(0.45)
+    device.button("home")
+    device.wait_status(lambda s: s["screen"] == "map", timeout=3)
+    time.sleep(0.45)
+    device.button("home")
+    device.wait_status(lambda s: s["screen"] == "other", timeout=3)
 
 
 def test_the_app_shows_any_page_but_never_over_a_menu(device, link):
@@ -245,14 +250,11 @@ def test_the_app_shows_any_page_but_never_over_a_menu(device, link):
     device.wait_status(lambda s: s["page"] == 2 and s["screen"] == "map", timeout=3)
     link.tell(show_page=pb.ShowPage(page=1))
     device.wait_status(lambda s: s["page"] == 1 and s["screen"] == "dash", timeout=3)
-    device.tap(270, 30)                                   # the status bar: the menu
+    device.tap(270, 30)                                   # DOBA: the status bar opens HOME
     device.wait_status(lambda s: s["screen"] == "other", timeout=3)
     link.tell(show_page=pb.ShowPage(page=0))
     time.sleep(1)
-    assert device.status()["screen"] == "other", "ShowPage took the panel from the menu"
-    time.sleep(0.45)
-    device.button("home")                                 # back out: the page the rider was on
-    device.wait_status(lambda s: s["screen"] == "dash" and s["page"] == 1, timeout=3)
+    assert device.status()["screen"] == "other", "ShowPage took the panel from HOME"
 
 
 def test_a_layout_losing_the_page_on_screen_moves_to_the_first(device, link):
@@ -268,10 +270,9 @@ def test_the_view_topic_tells_the_app_where_the_rider_is(device, link):
     link.expect_result(live_subscribe=pb.LiveSubscribe(topics=[pb.LIVE_TOPIC_VIEW]))
     wait_pages(device, 3)
     for page, screen in ((1, pb.SCREEN_MAP), (2, pb.SCREEN_DASH)):
-        time.sleep(0.45)
-        device.button("home")
+        link.tell(show_page=pb.ShowPage(page=page))      # DOBA: Home no longer steps pages
         f = link.wait_push("live", lambda f: f.HasField("view") and f.view.page == page, timeout=5)
         assert f.view.screen == screen and f.view.page_count == 3
-    device.tap(270, 30)                                   # menu: no page
+    device.tap(270, 30)                                   # DOBA: HOME, no page
     f = link.wait_push("live", lambda f: f.view.screen == pb.SCREEN_OTHER, timeout=5)
     assert not f.view.HasField("page")

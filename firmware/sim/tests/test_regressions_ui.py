@@ -217,9 +217,21 @@ def test_power_sheet_scrims_the_status_bar_too(device, tmp_path):
     still-on while shutting down. Above the sheet, the band is toned like the
     body."""
     g = open_power_sheet(device, tmp_path)
-    band, body = g.checker(0, 0, W, STATUS_H), g.checker(0, STATUS_H, W, SHEET_TOP)
+    body = g.checker(0, STATUS_H, W, SHEET_TOP)
     assert body > 0.6, "the body is not scrimmed (%.2f)" % body
-    assert band > 0.4, "the status band is crisp over a scrimmed screen (%.2f)" % band
+    # DOBA: the tactical band is white on black, so the scrim shows on its
+    # light text: the checker's 'on' cells go dark, the 'off' cells keep it.
+    on = off = 0
+    for y in range(0, STATUS_H):
+        row = g.rows[y]
+        for x in range(W):
+            if row[x] > 0x40:
+                if ((x >> 1) + (y >> 1)) % 2 == 0:
+                    on += 1
+                else:
+                    off += 1
+    assert off > 50, "no text in the status band (%d light px)" % off
+    assert on < 0.2 * off, "the status band is crisp over a scrimmed screen (%d vs %d)" % (on, off)
 
 
 HERO_BODY = (40, 130, 500, 300)     # inside the default layout's POWER hero, above the value
@@ -245,6 +257,9 @@ def test_a_cell_greying_in_place_is_scrubbed(device, link):
     and never drives them again, so the cell reads dirty. A cell greying out
     mid-ride (a power meter going quiet) must earn a scrub. The sim doesn't
     model the residue — it checks the firmware pays for the scrub."""
+    # DOBA: the default layout carries no sensor cells; give it OTP's.
+    r = link.request(set_dash=pb.DashConfig(text="power hero\nhr\ncadence\nspeed\n"))
+    assert r.WhichOneof("body") == "dash", r
     pair_sensor(device, link, "hr", bpm=140)
     pw = pair_sensor(device, link, "power", watts=220, cadence=88)
     device.wait_status(lambda s: s["ride"]["power"] == 220 and s["ride"]["hr"] == 140

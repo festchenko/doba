@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 ./build.sh > /dev/null
 if [ ! -x .venv/bin/python ]; then
     python3 -m venv .venv
-    .venv/bin/pip install -q "protobuf>=5,<7" pytest numpy pillow   # DOBA: numpy/pillow for test_topo
+    .venv/bin/pip install -q "protobuf>=5,<7" pytest numpy pillow cryptography   # DOBA: numpy/pillow for test_topo, cryptography for mesh on Linux
 fi
 cd tests
 exec ../.venv/bin/python -m pytest -p no:cacheprovider "$@"

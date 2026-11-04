@@ -33,12 +33,32 @@ Every change is marked `// DOBA:` in the sources.
 - `src/ui_render.cpp` — black status band in white monospace (`14:25 SAT 10
   REC … BAT 87%`); menu: Record Track / Routes / Phone Link / Tracks /
   Settings; settings row 0 is MILS (60-00 / 6400) instead of FTP; track wording
-  on the summary and sheets; a reticle mark and "D O B A" on boot and power-off.
+  on the summary and sheets; the boxed "D.O.B.A" wordmark and "DURABLE OFFLINE
+  BACKCOUNTRY ASSISTANT" on boot and power-off (`drawDobaMark`).
 - `src/dash_layout.*` — new fields `mgrs`, `latlon`, `course` (mils + degrees);
   altitude falls back to GPS; the default page is MGRS / lat-lon / azimuth /
   altitude + distance / time, and the vector-map strip course / altitude / sats.
 - `greytest` console command — a card of the 16 framebuffer levels, to see on
   the real panel which greys it tells apart (any touch closes it).
+
+## HOME, COMMS and LIBRARY (`src/doba_ui.*`, `doba_keyboard.*`, `doba_library.*`)
+- Boot lands on HOME: eight tiles — MAP, POSITION (MGRS), LIBRARY, COMMS (unread
+  badge, nodes heard), TRACKS, ROUTES, SETTINGS, RECORD/STOP. The Home key goes
+  HOME from any page and from HOME to the map; a tap on the status band goes
+  HOME. (OTP's Home key stepped the dashboard carousel.)
+- COMMS: radio on/off, the Meshtastic channel's messages, WRITE opens COMPOSE —
+  an on-device keyboard (EN / RU / UA / symbols, 200 bytes) that broadcasts with
+  `mesh_service::queueText`. No phone needed.
+- LIBRARY: books in `/doba/lib/<book>/` (`info.txt`, `index.dti`, `aNNNN.dta`,
+  made by `library/zim2doba.py`). Prefix search over folded titles (case, ё→е,
+  accents; table generated from `library/dobafold.py`), article text unpacked to
+  PSRAM, word-wrapped and paged; tap left/right half to turn pages.
+- Console: `screen home|comms|compose|library`.
+
+## Radio region
+- `config.h` MESH_REGION_DEFAULT is `EU_868` (869.4–869.65 MHz; OTP shipped
+  `US`, 902–928 MHz — wrong band for an 868 MHz board in Europe). `UA_868` is
+  in the table for use in Ukraine.
 
 ## Map style and the panel's greys
 The shipping display driver (EPD_Painter, fast mode) shows four greys:
@@ -51,10 +71,16 @@ white on the real panel: check with `greytest` on day one.
 ## Simulator
 - `sim/` builds and runs on Linux as well as macOS (`sim/linux/linux_compat.h`,
   `fopencookie`, `/proc/self/exe`, ELF section for RTC memory).
+- `otpsim/mesh.py` falls back to `cryptography` for AES off macOS.
+- The inherited OTP suites start the sim on the dashboard (`DOBA_START=dash`)
+  and the US band plan (`DOBA_MESH_REGION=US`, both
+  set in `sim/tests/conftest.py`); `test_boot.py` checks the real HOME boot.
+  Tests that encoded OTP's Home-key carousel were rewritten for Doba's.
 - `sim/tests/test_topo.py` — grey levels, orientation and centring checked on
   the simulated panel, with packs written by `maps/tilepack.py`.
 
 ## Not changed (yet)
 - BLE name, FIT product name and the version string are still OpenTrailPaper's,
   so the OpenTrailPaper phone app keeps working with the device (mesh chat,
-  settings) until Doba has its own on-device keyboard and settings.
+  settings). Mesh chat now also works on the device itself (COMMS).
+- Links, images and tables inside library articles are dropped.

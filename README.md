@@ -9,7 +9,7 @@ maps/       конвейер карт: OSM + рельеф → тайлы 4 би�
 firmware/   прошивка: форк OpenTrailPaper (Apache 2.0) + слой топокарты
 release/    готовые образы прошивки
 tools/      прошивка и подготовка SD-карты с Mac
-library/    библиотека: ZIM → лёгкий формат для ESP32 (дальше)
+library/    библиотека: ZIM (Kiwix) → лёгкий формат для ESP32
 ```
 
 ## День прошивки (когда приедет устройство)
@@ -26,8 +26,16 @@ library/    библиотека: ZIM → лёгкий формат для ESP32
    DOBA_BUILD=/Volumes/SSD/doba maps/make-region.sh groenlo
    tools/prepare-sd-mac.sh copy /Volumes/SSD/doba/tiles/groenlo
    ```
-3. **Проверить.** Вставить карту, включить, выйти на улицу за GPS, кнопка Home → карта. Проверить GPS, сон, LoRa (Meshtastic) — это работает из OpenTrailPaper без изменений.
-4. **Калибровка серого.** По USB в консоли (`screen /dev/cu.usbmodem* 115200` или Serial Monitor) ввести `greytest` — на экране 16 полос. Сфотографировать: по фото подстроим стиль карты под реальную панель.
+3. **Библиотека** (по желанию, можно позже):
+   ```bash
+   pip3 install libzim
+   DOBA_BUILD=/Volumes/SSD/doba library/fetch_zims.sh           # скачать ZIM с Kiwix
+   DOBA_BUILD=/Volumes/SSD/doba library/fetch_zims.sh convert   # ZIM → книги Доба
+   tools/prepare-sd-mac.sh copy-lib /Volumes/SSD/doba/lib
+   ```
+   Список книг — в начале `library/fetch_zims.sh`. Википедия EN без картинок ≈ 50 ГБ ZIM, конвертация идёт часами.
+4. **Проверить.** Вставить карту, включить — откроется главный экран (8 плиток). Кнопка Home: главный ↔ карта. Выйти на улицу за GPS. COMMS → TURN ON → WRITE — сообщение в эфир Meshtastic с экранной клавиатуры (EN/RU/UA). LIBRARY — поиск по началу названия.
+5. **Калибровка серого.** По USB в консоли (`screen /dev/cu.usbmodem* 115200` или Serial Monitor) ввести `greytest` — на экране 16 полос. Сфотографировать: по фото подстроим стиль карты под реальную панель.
 
 Что делает прошивка сейчас — в `firmware/DOBA.md`.
 

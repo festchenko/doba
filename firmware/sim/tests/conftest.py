@@ -17,6 +17,12 @@ from otpsim import LinkClient, SimDevice, SimPhone, pb  # noqa: E402
 # runner is slower, so it scales them (OTP_SIM_TIME_SCALE=3 in build.yml).
 TIME_SCALE = float(os.environ.get("OTP_SIM_TIME_SCALE", "1"))
 
+# Doba boots to its HOME screen; the suites inherited from OTP were written for
+# a dashboard boot, so they get one. test_boot.py checks the real HOME boot.
+os.environ.setdefault("DOBA_START", "dash")
+# Doba defaults to EU_868 (one LongFast slot); OTP's mesh suites assume US.
+os.environ.setdefault("DOBA_MESH_REGION", "US")
+
 ARTIFACTS = os.path.join(os.path.dirname(__file__), "..", "build", "test-artifacts")
 
 

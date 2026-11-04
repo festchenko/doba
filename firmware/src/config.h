@@ -108,7 +108,7 @@
 // same choice a stock Meshtastic node asks its owner to make. This is only the
 // value a fresh or factory-reset device starts on. It is a NAME, not an index,
 // so the table can grow without moving anyone's band.
-#define MESH_REGION_DEFAULT "US"
+#define MESH_REGION_DEFAULT "EU_868"   // DOBA: Europe + Ukraine, 868 MHz board (OTP: "US")
 // The SX1262's own output ceiling. A region's legal limit is often higher (US:
 // 30 dBm); the lower of the two is what the radio is driven at unless the rider
 // turns it down.

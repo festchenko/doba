@@ -2191,19 +2191,19 @@ void ui_render_shutdown_ack(bool savingRide, uint8_t* fb) {
 
 static void drawAppIcon(int cx, int topY, int height, uint8_t* fb, bool halo);
 
-// DOBA: the device mark — a reticle: ring, cross hairs broken at the centre,
-// and a north triangle on the ring. Primitives only, crisp at any size.
+// DOBA: the wordmark — "D.O.B.A" and what it stands for, in a ruled box.
+static const char* kDobaLine = "DURABLE OFFLINE BACKCOUNTRY ASSISTANT";
 static void drawDobaMark(int cx, int topY, int height, uint8_t* fb, bool halo = false) {
-    const int r = height / 2, cy = topY + r;
-    if (halo) epd_fill_circle(cx, cy, r + 8, 0xFF, fb);
-    for (int t = 0; t < 6; ++t) epd_draw_circle(cx, cy, r - t, 0x00, fb);
-    const int gap = r / 5, w = 4;
-    epd_fill_rect({cx - w / 2, cy - r - 10, w, r - gap + 10}, 0x00, fb);   // N hair
-    epd_fill_rect({cx - w / 2, cy + gap, w, r - gap + 10}, 0x00, fb);      // S
-    epd_fill_rect({cx - r - 10, cy - w / 2, r - gap + 10, w}, 0x00, fb);   // W
-    epd_fill_rect({cx + gap, cy - w / 2, r - gap + 10, w}, 0x00, fb);      // E
-    epd_fill_circle(cx, cy, 5, 0x00, fb);
-    epd_fill_triangle(cx, topY - 26, cx - 14, topY - 4, cx + 14, topY - 4, 0x00, fb);
+    (void)height;
+    const EpdFont* big = &Impact_M;
+    const EpdFont* sub = &Arial_L;
+    const int w = 470, h = 190, x = cx - w / 2;
+    if (halo) epd_fill_rect({x - 8, topY - 8, w + 16, h + 16}, 0xFF, fb);
+    epd_fill_rect({x, topY, w, h}, 0xFF, fb);
+    for (int t = 0; t < 4; ++t) epd_draw_rect({x + t, topY + t, w - 2 * t, h - 2 * t}, 0x00, fb);
+    ui::text(big, cx, topY + 112, "D.O.B.A", fb, EPD_DRAW_ALIGN_CENTER, 0x00);
+    epd_fill_rect({x + 24, topY + 146, w - 48, 2}, 0x00, fb);
+    ui::text(sub, cx, topY + 174, kDobaLine, fb, EPD_DRAW_ALIGN_CENTER, 0x00);
 }
 
 void ui_render_shutdown_screen(uint8_t* fb) {
@@ -2212,7 +2212,7 @@ void ui_render_shutdown_screen(uint8_t* fb) {
     // The device's front door, on the way out too: mark and wordmark above the
     // band, over the map. The icon gets a white halo shell and the wordmark a
     // white outline — both sit on whatever the map drew there.
-    drawDobaMark(cx, 200, 168, fb, /*halo=*/true);   // DOBA
+    drawDobaMark(cx, 180, 190, fb, /*halo=*/true);   // DOBA
 
     // A solid band so the text stays legible over the map backdrop behind it.
     const int bandY = 402, bandH = 116;
@@ -2305,8 +2305,7 @@ void ui_render_boot_screen(const char* version, const char* const* lines,
     // log is what it is doing, not what it is. Both sized to leave the log the
     // lower two thirds.
     const int cx = W / 2;
-    drawDobaMark(cx, ui::MARGIN + ui::STEP + 20, 150, fb);   // DOBA
-    ui::label(cx, 268, "D O B A", fb, ui::INK, &Impact_T);
+    drawDobaMark(cx, ui::MARGIN + 20, 200, fb);   // DOBA
     char hdr[64];
     snprintf(hdr, sizeof(hdr), "doba · otp %s · esp32-s3 · 540x960 epd", version);
     ui::text(&Arial_L, cx, 296, hdr, fb, EPD_DRAW_ALIGN_CENTER, ui::INK);
@@ -4026,4 +4025,25 @@ void ui_render_grey_test(uint8_t* fb) {
         snprintf(n, sizeof n, "%2d %s", v, v == 0 ? "BLK" : v == 5 ? "DRK" : v == 10 ? "LGT" : v == 15 ? "WHT" : "");
         ui::text(&Arial_B, 14, y + bh / 2 + 6, n, fb, EPD_DRAW_ALIGN_LEFT, 0x00);
     }
+}
+
+
+// DOBA: see ui_render.h.
+const EpdFont* ui::font(ui::FontRole r) {
+    switch (r) {
+        case F_TINY:   return &Arial_L;
+        case F_SMALL:  return &Arial_B;
+        case F_LABEL:  return &ArialBold_14;
+        case F_KEY:    return &ArialBold_20;
+#ifdef VFONT
+        case F_BODY:   return vf_face_digit(VF_LABELS, 17);
+        case F_BODY_H: return vf_face_digit(VF_VALUES, 24);
+#else
+        case F_BODY:   return &ArialBold_14;
+        case F_BODY_H: return &ArialBold_20;
+#endif
+        case F_TITLE:  return &Impact_T;
+        case F_BIG:    return &Impact_V;
+    }
+    return &Arial_B;
 }

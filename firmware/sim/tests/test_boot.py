@@ -13,6 +13,26 @@ def test_boots_to_the_dashboard(device, tmp_path):
     assert open(shot, "rb").read(8) == b"\x89PNG\r\n\x1a\n"
 
 
+def test_doba_boots_to_home_and_the_home_key_toggles_the_map(monkeypatch, tmp_path):
+    """DOBA: the device boots to the HOME launcher (the other suites ask the
+    sim for OTP's dashboard boot). Home from HOME opens the map, Home from the
+    map comes back, and a tap on a tile opens its page."""
+    import time
+    monkeypatch.setenv("DOBA_START", "home")
+    with SimDevice.start(args=["--gps-baud", "115200"]) as dev:
+        dev.wait_status(lambda s: s["screen"] == "other" and s["paints"] > 0)
+        g = dev.screenshot(str(tmp_path / "home.png"))
+        assert open(g, "rb").read(8) == b"\x89PNG\r\n\x1a\n"
+        time.sleep(0.45)
+        dev.button("home")
+        dev.wait_status(lambda s: s["screen"] == "map", timeout=3)
+        time.sleep(0.45)
+        dev.button("home")
+        dev.wait_status(lambda s: s["screen"] == "other", timeout=3)
+        out = dev.console("screen comms", wait_ms=800)
+        assert dev.status()["screen"] == "other", out
+
+
 @pytest.mark.parametrize("module_baud", [9600, 115200, 38400])
 def test_gps_module_ends_at_115200_whatever_it_started_at(module_baud):
     """The L76K keeps its baud on its backup supply; the firmware finds it

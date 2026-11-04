@@ -1,0 +1,35 @@
+#pragma once
+
+// DOBA: the offline library — Wikipedia and reference ZIMs converted on a
+// computer (library/zim2doba.py) into a format the ESP32 reads with a few KB:
+//
+//   /doba/lib/<book>/info.txt     name=..., lang=...
+//   /doba/lib/<book>/index.dti    sorted fixed-width title index (128 B records)
+//   /doba/lib/<book>/aNNNN.dta    articles, each its own zlib stream
+//
+// Index header (32 B): "DOBAIX1\0", u32 count, u32 record size (128),
+// u32 chunk count, 12 B reserved. Record: key[56] (folded title, see
+// doba_fold), title[56] (display, UTF-8), u16 chunk, u16 flags, u32 offset,
+// u32 length, u32 reserved. Article text, inflated, is UTF-8 lines whose first
+// byte is the kind: T title, H section, S subsection, P paragraph, B bullet.
+
+#include <cstddef>
+#include <cstdint>
+
+#include "doba_keyboard.h"
+
+namespace doba_lib {
+
+int count();            // books found on the card (scanned once, then cached)
+void rescan();
+
+void renderSearch(kbd::Keyboard& k, uint8_t* fb);
+bool tapSearch(kbd::Keyboard& k, int x, int y);   // true: an article was opened
+void renderArticle(uint8_t* fb);
+void tapArticle(int x, int y);
+
+// Title folding, identical to library/zim2doba.py fold(): lower case, accents
+// and ё dropped, punctuation to single spaces. out gets at most cap-1 bytes.
+void fold(const char* in, char* out, size_t cap);
+
+}  // namespace doba_lib

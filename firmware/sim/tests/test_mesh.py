@@ -846,3 +846,17 @@ def test_mesh_traffic_during_a_ride_leaves_the_recording_alone(mesh):
     with open(os.path.join(dev.sd, "rides", rides[0]), "rb") as f:
         check_fit(f.read())
     assert lock_warnings(dev) == []
+
+
+def test_doba_starts_on_the_eu_868_band(monkeypatch):
+    """DOBA: a fresh device is an EU node (MESH_REGION_DEFAULT "EU_868"): once
+    the mesh is on it listens where a stock EU LongFast node does, 869.525 MHz."""
+    monkeypatch.setenv("DOBA_MESH_REGION", "")
+    dev = start_device()
+    try:
+        m = Mesh(dev, radio_on=False)
+        m.radio(True, announce=False)
+        assert dev.lora()["freq_mhz"] == pytest.approx(869.525, abs=1e-3)
+        assert abs(m.state().freq_hz - 869525000) < 100
+    finally:
+        dev.stop()

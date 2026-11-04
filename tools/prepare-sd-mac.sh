@@ -4,6 +4,7 @@
 #   tools/prepare-sd-mac.sh list                         # find the card
 #   tools/prepare-sd-mac.sh format disk4                 # ERASES disk4 -> FAT32 "DOBA"
 #   tools/prepare-sd-mac.sh copy /path/to/tiles/groenlo  # copy packs to /Volumes/DOBA
+#   tools/prepare-sd-mac.sh copy-lib /path/to/lib        # copy library books
 #
 # The device reads only FAT32 (not exFAT, which cards over 32 GB come with).
 set -euo pipefail
@@ -32,6 +33,15 @@ case "${1:-}" in
     find "$DST" -name '._*' -delete 2>/dev/null || true
     echo "== on the card:"; du -sh "$DST/doba/map"
     ;;
+  copy-lib)
+    SRC="${2:?usage: copy-lib <dir with one folder per book>}"
+    DST="${3:-/Volumes/DOBA}"
+    mkdir -p "$DST/doba/lib"
+    rsync -rt --progress --exclude '.*' "$SRC/" "$DST/doba/lib/"
+    dot_clean -m "$DST" 2>/dev/null || true
+    find "$DST" -name '._*' -delete 2>/dev/null || true
+    echo "== on the card:"; du -sh "$DST/doba/lib"/*
+    ;;
   *)
-    sed -n 2,9p "$0"; exit 1 ;;
+    sed -n 2,10p "$0"; exit 1 ;;
 esac
