@@ -6,3 +6,7 @@ __pycache__/
 .venv/
 .DS_Store
 *.part
+firmware/vendor/
+firmware/.pio/
+firmware/sim/build/
+firmware/sim/.venv/

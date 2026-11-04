@@ -1,0 +1,1184 @@
+#include "map_view.h"
+
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <esp_heap_caps.h>
+
+#include "epdiy.h"
+#include "epd_compat.h"
+#include "ride_state.h"
+#include "routes.h"
+#include "map_store.h"
+#include "ui_render.h"
+#include "vfont_faces.h"
+
+namespace {
+
+// Layout bands (portrait 540x960, design 1f)
+constexpr int MAP_TOP = ui::STATUS_H;
+constexpr int STRIP_TOP = ui::MAP_STRIP_TOP;   // 3-cell footer below
+constexpr int MAP_BOTTOM = STRIP_TOP;
+
+// The fast DU refresh is strictly 1-bit (grays snap to white), so all
+// map ink must be pure black. Road classes differ by width/dash instead.
+constexpr uint8_t ROAD_INK = 0x00;
+constexpr uint8_t WATER_GRAY = 0xC8;  // rare; invisible in DU, fine
+
+struct Style {
+    int width;
+    uint8_t color;
+    int dashLen;     // 0 = solid
+    int gapLen;
+    bool dither;     // draw as a 50% black/white checker so it reads light-grey
+                     // even through the fast 1-bit DU refresh
+};
+
+Style styleFor(MapFeatureClass cls, float mpp) {
+    switch (cls) {
+        // Zoomed out (mpp>=16) only arterials survive shedding and there are
+        // thousands of them; width<=2 takes the fast Bresenham draw path instead
+        // of filled triangles + round caps — a big cut in draw time. Full width
+        // up close where a bold arterial reads against the finer roads.
+        case MAP_ROAD_MAJOR:     return {mpp >= 16.0f ? 2 : 5, ROAD_INK, 0, 0, false};
+        // primary/secondary/tertiary form a width hierarchy (4/3/2) so the road
+        // grade reads at a glance. Primary is never shed (thins to 2 at ≥16 like
+        // arterial); secondary/tertiary shed at ≥32.
+        case MAP_ROAD_PRIMARY:   return {mpp >= 16.0f ? 2 : 4, ROAD_INK, 0, 0, false};
+        case MAP_ROAD_SECONDARY: return {3, ROAD_INK, 0, 0, false};
+        case MAP_ROAD_TERTIARY:  return {2, ROAD_INK, 0, 0, false};
+        case MAP_ROAD_MINOR:     return {2, ROAD_INK, 0, 0, false};
+        // Trails: a light-grey dithered thin line (was heavy black dashes).
+        case MAP_PATH:           return {1, ROAD_INK, 0, 0, true};
+        case MAP_WATER:          return {0, 0, 0, 0, false};   // filled, not stroked
+        case MAP_PARK:           return {0, 0, 0, 0, false};   // filled (hatch), not stroked
+    }
+    return {1, 0x00, 0, 0, false};
+}
+
+// Scanline-fill a screen-space polygon with a sparse black dither so it reads as
+// a pale grey tint and survives the fast 1-bit DU refresh. Even-odd rule.
+// Native-fb-aligned mask (1 byte/fb-byte) of the current frame's dithered dark
+// fills (water/parks) — the only regions where DU ghosting settles in, so the
+// settle-clean flashes exactly them and nothing else. Rebuilt every map render.
+uint8_t* s_ditherMask = nullptr;
+size_t s_ditherMaskSize = 0;
+
+void ditherMaskReset() {
+    size_t sz = (size_t)(epd_width() / 2) * epd_height();
+    if (!s_ditherMask) {
+        s_ditherMask = (uint8_t*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
+        s_ditherMaskSize = s_ditherMask ? sz : 0;
+    }
+    if (s_ditherMask) memset(s_ditherMask, 0, s_ditherMaskSize);
+}
+
+// Mark the native byte holding app pixel (x,y) as dithered fill, only inside the
+// map band [MAP_TOP, MAP_BOTTOM) so the status bar/footer never flash.
+inline void ditherMaskMark(int x, int y) {
+    if (!s_ditherMask || y < MAP_TOP || y >= MAP_BOTTOM) return;
+    // INVERTED_PORTRAIT: native_x = app_y, native_y = epd_height()-1 - app_x.
+    int nx = y, ny = epd_height() - 1 - x;
+    if (nx < 0 || nx >= epd_width() || ny < 0 || ny >= epd_height()) return;
+    s_ditherMask[(size_t)ny * (epd_width() / 2) + (nx >> 1)] = 1;
+}
+
+// Coarse 16 px grid of where this frame's park hatch landed (1 bit/cell, 34x60
+// cells = 255 bytes). Roads only get their white casing in park cells: on white
+// ground a casing is invisible, so drawing it everywhere would just double the
+// road draw time for nothing. Rebuilt with the dither mask every map render.
+// A park under water (a recreation area spanning a bay) still marks its cells,
+// so a bridge over it is cased too — which reads better on the dots anyway.
+constexpr int PARK_CELL_SHIFT = 4;
+constexpr int PARK_COLS = (540 >> PARK_CELL_SHIFT) + 1;
+constexpr int PARK_ROWS = (960 >> PARK_CELL_SHIFT);
+uint8_t s_parkGrid[(PARK_COLS * PARK_ROWS + 7) / 8];
+
+void parkGridMarkSpan(int y, int xL, int xR) {
+    const int base = (y >> PARK_CELL_SHIFT) * PARK_COLS;
+    for (int c = xL >> PARK_CELL_SHIFT; c <= (xR >> PARK_CELL_SHIFT); ++c)
+        s_parkGrid[(base + c) >> 3] |= 1 << ((base + c) & 7);
+}
+
+inline bool parkGridAt(int x, int y) {
+    if (x < 0 || x >= 540 || y < 0 || y >= 960) return false;
+    const int i = (y >> PARK_CELL_SHIFT) * PARK_COLS + (x >> PARK_CELL_SHIFT);
+    return (s_parkGrid[i >> 3] >> (i & 7)) & 1;
+}
+
+// Fill patterns. FILL_DOTS (water) and FILL_HATCH (parks) keep the old bool
+// call sites' meaning (false/true).
+enum FillPattern : int {
+    FILL_DOTS = 0,      // 75% dots — water
+    FILL_HATCH = 1,     // 2-px diagonal stripes — parks
+    FILL_CHECKER = 2,   // 1-px 50% checker — bike-route band (reads as flat grey,
+                        // which is what sets it apart from the textured fills)
+};
+
+// FILL_DOTS: dot dither (water). FILL_HATCH: diagonal hatch (parks) — a
+// visually distinct texture so green areas don't read the same as water.
+// mask=true also records the polygon interior in s_ditherMask (EVERY covered
+// pixel, not just the dithered-on ones) for the ghost settle-clean.
+void fillDitheredPolygon(const int16_t* pts, int n, uint8_t* fb, int pattern = FILL_DOTS,
+                         bool mask = false) {
+    if (n < 3) return;
+    int minY = 100000, maxY = -100000;
+    for (int i = 0; i < n; ++i) {
+        int y = pts[i * 2 + 1];
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+    }
+    if (minY < 0) minY = 0;
+    if (maxY > 959) maxY = 959;
+    int xs[64];
+    for (int y = minY; y <= maxY; ++y) {
+        int cnt = 0;
+        for (int i = 0; i < n && cnt < 64; ++i) {
+            int j = (i + 1) % n;
+            int y0 = pts[i * 2 + 1], y1 = pts[j * 2 + 1];
+            if ((y0 <= y && y1 > y) || (y1 <= y && y0 > y)) {
+                int x0 = pts[i * 2], x1 = pts[j * 2];
+                xs[cnt++] = x0 + (int)((int64_t)(y - y0) * (x1 - x0) / (y1 - y0));
+            }
+        }
+        for (int a = 0; a < cnt; ++a)
+            for (int b = a + 1; b < cnt; ++b)
+                if (xs[b] < xs[a]) { int t = xs[a]; xs[a] = xs[b]; xs[b] = t; }
+        for (int a = 0; a + 1 < cnt; a += 2) {
+            int xL = xs[a] < 0 ? 0 : xs[a];
+            int xR = xs[a + 1] > 539 ? 539 : xs[a + 1];
+            if (xL > xR) continue;
+            if (mask && pattern == FILL_HATCH) parkGridMarkSpan(y, xL, xR);
+            // Screentones, not flat tone. Both fills are 1-bit patterns, because
+            // a true grey value is not displayable on the fast DU refresh — but
+            // the PATTERN has to be coarse enough to read as texture. A 1-pixel
+            // checkerboard is 50% ink yet resolves as mushy flat grey, which is
+            // what parks used to look like: darker than before, but no longer
+            // recognisably a screentone the way the water is.
+            //
+            //   Water — 75% dots (3 of every 2x2). Dense and dark, still clearly
+            //           dotted. This is the one that already looked right.
+            //   Parks — 50% ink as 2-pixel diagonal stripes on a 4-pixel pitch.
+            //           Same darkness as the 1-pixel hatch it replaces, but the
+            //           stripes are visible, so parks read as hatched ground and
+            //           stay distinct from water at a glance.
+            for (int x = xL; x <= xR; ++x) {
+                if (mask) ditherMaskMark(x, y);
+                bool on = pattern == FILL_HATCH     ? (((x - y) & 3) < 2)
+                          : pattern == FILL_CHECKER ? (((x ^ y) & 1) == 0)
+                                                    : !((x & 1) && (y & 1));
+                // The bike band writes BOTH colours: over a park's hatch or a
+                // water fill it then still reads as its own clean grey ribbon
+                // instead of melting into the texture beneath.
+                if (on) epd_draw_pixel(x, y, 0x00, fb);
+                else if (pattern == FILL_CHECKER) epd_draw_pixel(x, y, 0xFF, fb);
+            }
+        }
+    }
+}
+
+// Bresenham line that plots only the checkerboard-even pixels, so it reads as a
+// light grey on the 1-bit panel and survives the fast DU refresh (unlike a
+// solid grey value, which DU snaps to black or white).
+void ditherLine(int x0, int y0, int x1, int y1, uint8_t* fb) {
+    int dx = abs(x1 - x0), dy = -abs(y1 - y0);
+    int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    for (;;) {
+        if (((x0 ^ y0) & 1) == 0) epd_draw_pixel(x0, y0, 0x00, fb);
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+// Thick segment as a quad (two triangles) plus round caps.
+void thickSegment(float x0, float y0, float x1, float y1, int width,
+                  uint8_t color, uint8_t* fb) {
+    // Fast path for thin strokes — minor roads, paths and rail (width 2) are the
+    // vast majority of map features, and one or two Bresenham lines rasterize
+    // far cheaper than two filled triangles. This is the bulk of the map draw
+    // time on a dense view.
+    if (width <= 2) {
+        int ix0 = lroundf(x0), iy0 = lroundf(y0);
+        int ix1 = lroundf(x1), iy1 = lroundf(y1);
+        epd_draw_line(ix0, iy0, ix1, iy1, color, fb);
+        if (width == 2) {
+            float dx = x1 - x0, dy = y1 - y0;
+            float len = sqrtf(dx * dx + dy * dy);
+            if (len >= 0.5f) {
+                int ox = lroundf(-dy / len), oy = lroundf(dx / len);
+                if (ox || oy)
+                    epd_draw_line(ix0 + ox, iy0 + oy, ix1 + ox, iy1 + oy, color, fb);
+            }
+        }
+        return;
+    }
+    float dx = x1 - x0, dy = y1 - y0;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 0.5f) return;
+    float half = width / 2.0f;
+    float px = -dy / len * half, py = dx / len * half;
+
+    int ax = lroundf(x0 + px), ay = lroundf(y0 + py);
+    int bx = lroundf(x0 - px), by = lroundf(y0 - py);
+    int cx = lroundf(x1 - px), cy = lroundf(y1 - py);
+    int ex = lroundf(x1 + px), ey = lroundf(y1 + py);
+    epd_fill_triangle(ax, ay, bx, by, cx, cy, color, fb);
+    epd_fill_triangle(ax, ay, cx, cy, ex, ey, color, fb);
+
+    if (width >= 4) {
+        epd_fill_circle(lroundf(x0), lroundf(y0), (int)half, color, fb);
+        epd_fill_circle(lroundf(x1), lroundf(y1), (int)half, color, fb);
+    }
+}
+
+void drawSegmentStyled(float x0, float y0, float x1, float y1,
+                       const Style& st, uint8_t* fb) {
+    if (st.dither) {
+        ditherLine(lroundf(x0), lroundf(y0), lroundf(x1), lroundf(y1), fb);
+        return;
+    }
+    if (st.dashLen == 0) {
+        thickSegment(x0, y0, x1, y1, st.width, st.color, fb);
+        return;
+    }
+    float dx = x1 - x0, dy = y1 - y0;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 0.5f) return;
+    float ux = dx / len, uy = dy / len;
+    float pos = 0;
+    while (pos < len) {
+        float end = pos + st.dashLen;
+        if (end > len) end = len;
+        thickSegment(x0 + ux * pos, y0 + uy * pos, x0 + ux * end,
+                     y0 + uy * end, st.width, st.color, fb);
+        pos = end + st.gapLen;
+    }
+}
+
+void drawPolyline(const int16_t* pts, int count, const Style& st, uint8_t* fb) {
+    for (int i = 0; i + 1 < count; ++i) {
+        drawSegmentStyled(pts[i * 2], pts[i * 2 + 1], pts[i * 2 + 2],
+                          pts[i * 2 + 3], st, fb);
+    }
+}
+
+// White casing under the segments of a way that touch a park cell, so a road or
+// trail crossing the hatch reads as a clean line on white instead of black (or
+// grey dots) lost in black stripes. Solid and round-capped whatever the road's
+// own style, so the joints of a bend leave no stripe showing through. Tested at
+// both ends and every half cell between, so a long segment that crosses a park
+// with no vertex inside it is still caught.
+void drawParkCasing(const int16_t* pts, int count, int width, uint8_t* fb) {
+    if (width < 4) width = 4;   // thickSegment rounds the caps from 4 up
+    constexpr float STEP = (1 << PARK_CELL_SHIFT) / 2.0f;
+    for (int i = 0; i + 1 < count; ++i) {
+        const float x0 = pts[i * 2], y0 = pts[i * 2 + 1];
+        const float x1 = pts[i * 2 + 2], y1 = pts[i * 2 + 3];
+        const float dx = x1 - x0, dy = y1 - y0;
+        const int n = (int)(sqrtf(dx * dx + dy * dy) / STEP) + 1;
+        bool inPark = false;
+        for (int k = 0; k <= n && !inPark; ++k)
+            inPark = parkGridAt(lroundf(x0 + dx * k / n), lroundf(y0 + dy * k / n));
+        if (inPark) thickSegment(x0, y0, x1, y1, width, 0xFF, fb);
+    }
+}
+
+// --- cycling layer ------------------------------------------------------------
+
+// Bike-route band: a flat 50% grey ribbon centred under the way, drawn beneath
+// all the roads so the road keeps its own weight on top and the band shows as a
+// halo either side of it. Grey-on-white is the one road treatment nothing else
+// on the map uses (navigation route = solid/dashed black 14 px, water = dots,
+// parks = stripes), and the pattern is 1-bit so it survives the DU refresh.
+// Width carries the network level. Each segment is a filled quad and each
+// joint an octagon; the checker is in absolute screen space so overlaps merge.
+void drawBikeBand(const int16_t* pts, int count, int width, uint8_t* fb) {
+    const float half = width / 2.0f;
+    for (int i = 0; i + 1 < count; ++i) {
+        float x0 = pts[i * 2], y0 = pts[i * 2 + 1];
+        float x1 = pts[i * 2 + 2], y1 = pts[i * 2 + 3];
+        float dx = x1 - x0, dy = y1 - y0;
+        float len = sqrtf(dx * dx + dy * dy);
+        if (len < 0.5f) continue;
+        float px = -dy / len * half, py = dx / len * half;
+        int16_t q[8] = {(int16_t)lroundf(x0 + px), (int16_t)lroundf(y0 + py),
+                        (int16_t)lroundf(x1 + px), (int16_t)lroundf(y1 + py),
+                        (int16_t)lroundf(x1 - px), (int16_t)lroundf(y1 - py),
+                        (int16_t)lroundf(x0 - px), (int16_t)lroundf(y0 - py)};
+        fillDitheredPolygon(q, 4, fb, FILL_CHECKER, true);
+    }
+    // Round the joints so a bend has no notch on its outside. Only up close:
+    // zoomed out the band is <= 8 px, a notch is a pixel or two, and the joints
+    // were a third of the band's draw time at 16 m/px.
+    if (width <= 8) return;
+    for (int i = 1; i + 1 < count; ++i) {
+        int16_t o[16];
+        for (int k = 0; k < 8; ++k) {
+            float a = k * (float)M_PI / 4.0f;
+            o[k * 2] = (int16_t)lroundf(pts[i * 2] + cosf(a) * half);
+            o[k * 2 + 1] = (int16_t)lroundf(pts[i * 2 + 1] + sinf(a) * half);
+        }
+        fillDitheredPolygon(o, 8, fb, FILL_CHECKER, true);
+    }
+}
+
+int bikeBandWidth(int level, float mpp) {
+    // local / regional / national. Narrower zoomed out, where the roads under
+    // it thin to 2 px and a fat band would merge neighbouring streets.
+    static const int nearW[4] = {0, 12, 14, 16};
+    static const int farW[4] = {0, 6, 8, 10};
+    return mpp >= 8.0f ? farW[level & 3] : nearW[level & 3];
+}
+
+// Painted lane / track along a road: a bold dashed lane line either side of
+// the road, each as wide as the road line itself (2-3 px), with a 2 px white gap
+// between it and the road. The whole ribbon is cleared to white first. This
+// replaces a 1 px dithered dotted line, which was sparse single pixels and
+// all but invisible on the panel. Nothing else on the map looks like a road
+// flanked by dashes. The route is solid/dashed black 14 px, the bike-route band
+// flat checker grey, a cycleway a single 2 px dashed line, parks diagonal
+// stripes and water dots. It is pure 1-bit black/white, so it survives the DU
+// refresh. Drawn in its own pass BEFORE the roads: the white clears any
+// park/water texture under the lanes, and every road (the laned road's own
+// line included) then paints on top, so crossings stay clean. Cheap: one white
+// quad per segment plus a short thin stroke per dash.
+constexpr int kLaneGap = 2;                    // white between road and lane line
+constexpr float kLaneDash = 5.0f, kLaneSpace = 3.0f;
+int bikeLaneLineWidth(int roadWidth) {
+    return roadWidth < 2 ? 2 : roadWidth > 3 ? 3 : roadWidth;
+}
+
+void drawBikeLanes(const int16_t* pts, int count, int roadWidth, uint8_t* fb) {
+    const int lw = bikeLaneLineWidth(roadWidth);
+    const int ribbon = roadWidth + 2 * (kLaneGap + lw);
+    // Clear the whole ribbon first (round caps fill the joints), then ink the
+    // lane lines, so one segment's white never eats the previous one's dashes.
+    for (int i = 0; i + 1 < count; ++i)
+        thickSegment(pts[i * 2], pts[i * 2 + 1], pts[i * 2 + 2], pts[i * 2 + 3],
+                     ribbon, 0xFF, fb);
+    const float off = roadWidth / 2.0f + kLaneGap + lw / 2.0f;
+    const float period = kLaneDash + kLaneSpace;
+    float along = 0;   // distance along the way, so dashes run on across joints
+    for (int i = 0; i + 1 < count; ++i) {
+        float x0 = pts[i * 2], y0 = pts[i * 2 + 1];
+        float x1 = pts[i * 2 + 2], y1 = pts[i * 2 + 3];
+        float dx = x1 - x0, dy = y1 - y0;
+        float len = sqrtf(dx * dx + dy * dy);
+        if (len < 0.5f) continue;
+        float ux = dx / len, uy = dy / len;
+        float px = -uy * off, py = ux * off;
+        float t = 0;
+        while (t < len) {
+            float inPeriod = fmodf(along + t, period);
+            if (inPeriod >= kLaneDash) { t += period - inPeriod; continue; }
+            float end = t + (kLaneDash - inPeriod);
+            if (end > len) end = len;
+            float ax = x0 + ux * t, ay = y0 + uy * t;
+            float bx = x0 + ux * end, by = y0 + uy * end;
+            thickSegment(ax + px, ay + py, bx + px, by + py, lw, ROAD_INK, fb);
+            thickSegment(ax - px, ay - py, bx - px, by - py, lw, ROAD_INK, fb);
+            t = end;
+        }
+        along += len;
+    }
+}
+
+
+// POI icons: 24 px. Circles for the comfort stops (water, toilets), squares for
+// bike service (repair stand, shop), so the two families read apart before the
+// glyph does. Solid black with a white glyph = free to use; a hollow (white,
+// black ring) icon = fee / customers only / seasonal. A 2 px white halo keeps
+// the icon off whatever road it sits on.
+constexpr int POI_R = 12;
+
+// Toilets: the restroom pictogram (man | woman, like the 🚻 sign), 17x13.
+// Riders outside Europe don't read "WC"; the figures read everywhere.
+const char* const kToiletGlyph[13] = {
+    "..###...#...###..",
+    "..###...#...###..",
+    "........#........",
+    ".#####..#...###..",
+    ".#####..#..#####.",
+    ".#####..#..#####.",
+    ".#####..#.#######",
+    ".#####..#.#######",
+    ".#####..#.#######",
+    ".##.##..#..##.##.",
+    ".##.##..#..##.##.",
+    ".##.##..#..##.##.",
+    ".##.##..#..##.##.",
+};
+
+void drawGlyphRows(const char* const* rows, int nRows, int cx, int cy,
+                   uint8_t ink, uint8_t* fb) {
+    const int w = (int)strlen(rows[0]);
+    const int x0 = cx - w / 2, y0 = cy - nRows / 2;
+    for (int r = 0; r < nRows; ++r)
+        for (int c = 0; c < w; ++c)
+            if (rows[r][c] == '#') epd_draw_pixel(x0 + c, y0 + r, ink, fb);
+}
+
+void drawPoiIcon(const MapPoi& p, uint8_t* fb) {
+    const int cx = p.x, cy = p.y;
+    const bool hollow = (p.flags & MAP_PF_RESTRICTED) != 0;
+    const uint8_t bg = hollow ? 0xFF : 0x00, ink = hollow ? 0x00 : 0xFF;
+    const bool square = p.type == MAP_POI_REPAIR || p.type == MAP_POI_BIKE_SHOP;
+    const int r = POI_R;
+    if (square) {
+        epd_fill_rect({cx - r - 2, cy - r - 2, 2 * r + 5, 2 * r + 5}, 0xFF, fb);
+        epd_fill_rect({cx - r, cy - r, 2 * r + 1, 2 * r + 1}, bg, fb);
+        if (hollow) {
+            epd_draw_rect({cx - r, cy - r, 2 * r + 1, 2 * r + 1}, 0x00, fb);
+            epd_draw_rect({cx - r + 1, cy - r + 1, 2 * r - 1, 2 * r - 1}, 0x00, fb);
+        }
+    } else {
+        epd_fill_circle(cx, cy, r + 2, 0xFF, fb);
+        epd_fill_circle(cx, cy, r, bg, fb);
+        if (hollow) {
+            epd_draw_circle(cx, cy, r, 0x00, fb);
+            epd_draw_circle(cx, cy, r - 1, 0x00, fb);
+        }
+    }
+    switch (p.type) {
+        case MAP_POI_WATER:   // drop: a round belly under a pointed top
+            epd_fill_circle(cx, cy + 3, 5, ink, fb);
+            epd_fill_triangle(cx, cy - 8, cx - 5, cy + 2, cx + 5, cy + 2, ink, fb);
+            break;
+        case MAP_POI_TOILETS:
+            drawGlyphRows(kToiletGlyph, 13, cx, cy, ink, fb);
+            break;
+        case MAP_POI_REPAIR: {   // wrench, handle bottom-left to head top-right
+            thickSegment(cx - 6, cy + 6, cx + 2, cy - 2, 3, ink, fb);
+            epd_fill_circle(cx + 3, cy - 3, 5, ink, fb);
+            epd_fill_circle(cx + 6, cy - 6, 3, bg, fb);   // open jaw
+            // A pump on the stand: a small plus in the free corner.
+            if (p.flags & MAP_PF_PUMP) {
+                epd_fill_rect({cx - 8, cy - 7, 7, 2}, ink, fb);
+                epd_fill_rect({cx - 5, cy - 10, 2, 7}, ink, fb);
+            }
+            break;
+        }
+        case MAP_POI_BIKE_SHOP: {   // bicycle: two wheels and a frame
+            epd_draw_circle(cx - 5, cy + 3, 4, ink, fb);
+            epd_draw_circle(cx + 5, cy + 3, 4, ink, fb);
+            epd_draw_line(cx - 5, cy + 3, cx - 1, cy - 3, ink, fb);
+            epd_draw_line(cx - 1, cy - 3, cx + 4, cy - 3, ink, fb);
+            epd_draw_line(cx + 4, cy - 3, cx + 5, cy + 3, ink, fb);
+            epd_draw_line(cx - 1, cy - 3, cx + 1, cy + 3, ink, fb);
+            epd_draw_line(cx - 5, cy + 3, cx + 1, cy + 3, ink, fb);
+            epd_draw_line(cx + 4, cy - 3, cx + 3, cy - 6, ink, fb);   // bars
+            epd_draw_line(cx - 2, cy - 5, cx + 0, cy - 5, ink, fb);   // saddle
+            break;
+        }
+    }
+}
+
+// Icons in priority order with greedy collision culling: a repair stand beats a
+// water point beats a toilet beats a shop for the same patch of screen, and an
+// icon that would land under the rider marker is skipped (it is drawn over it).
+uint16_t poiLayerBit(uint8_t type) {
+    switch (type) {
+        case MAP_POI_WATER: return MAP_LAYER_WATER;
+        case MAP_POI_TOILETS: return MAP_LAYER_TOILETS;
+        case MAP_POI_REPAIR: return MAP_LAYER_REPAIR;
+        case MAP_POI_BIKE_SHOP: return MAP_LAYER_BIKE_SHOPS;
+    }
+    return 0;
+}
+
+void drawPois(const MapScreenData& map, uint8_t* fb) {
+    if (!map.pois || map.poiCount <= 0) return;
+    static const uint8_t order[] = {MAP_POI_REPAIR, MAP_POI_WATER,
+                                    MAP_POI_TOILETS, MAP_POI_BIKE_SHOP};
+    constexpr int kMaxDrawn = 96;
+    int16_t drawnX[kMaxDrawn], drawnY[kMaxDrawn];
+    int drawn = 0;
+    // Zoomed out the icons are thinned harder: at 8 m/px a dense city has an
+    // icon every block, and the map under them is the thing being read.
+    const int gap = map.metersPerPixel >= 8.0f ? 4 * POI_R : 2 * POI_R + 4;
+    // Keep clear of the chrome drawn over the map afterwards — compass, zoom
+    // buttons, scale bar, nav banner — which would cut an icon in half.
+    const int pad = POI_R + 3;
+    const int compY = mapCompassCy(map.navBannerVisible);
+    auto underChrome = [&](int x, int y) {
+        const int cdx = x - kMapCompass.cx, cdy = y - compY, cr = 28 + pad;
+        if (cdx * cdx + cdy * cdy < cr * cr) return true;
+        if (x > kMapZoom.zoomX - pad && y > kMapZoom.layersY - pad &&
+            y < kMapZoom.zoomOutY + kMapZoom.size + pad) return true;
+        if (x < 190 + pad && y > MAP_BOTTOM - 48 - pad) return true;   // scale bar
+        if (map.navBannerVisible && y < 64 + 138 + pad) return true;
+        return false;
+    };
+    for (uint8_t type : order) {
+        for (int i = 0; i < map.poiCount && drawn < kMaxDrawn; ++i) {
+            const MapPoi& p = map.pois[i];
+            if (p.type != type) continue;
+            if (!(map.layers & poiLayerBit(p.type))) continue;   // rider hid it
+            if (p.y < MAP_TOP + POI_R || p.y > MAP_BOTTOM - POI_R ||
+                p.x < POI_R || p.x > 540 - POI_R) continue;
+            const int rdx = p.x - map.riderX, rdy = p.y - map.riderY;
+            if (rdx * rdx + rdy * rdy < 36 * 36) continue;
+            if (underChrome(p.x, p.y)) continue;
+            bool hit = false;
+            for (int k = 0; k < drawn && !hit; ++k)
+                hit = abs(drawnX[k] - p.x) < gap && abs(drawnY[k] - p.y) < gap;
+            if (hit) continue;
+            drawPoiIcon(p, fb);
+            drawnX[drawn] = p.x;
+            drawnY[drawn] = p.y;
+            drawn++;
+        }
+    }
+}
+
+// Other riders from a private mesh channel: a black dot ringed in white so it
+// reads over roads and fills alike, hollow once their fix is getting old, with
+// their short name beside it on a white chip. One who is off the edge of the
+// map is a small arrow at the edge pointing their way, so the rider can tell
+// which way the group went without zooming out to find them.
+void drawPeers(const MapScreenData& map, uint8_t* fb) {
+    constexpr int R = 26;      // ring outside radius
+    constexpr int RING = 4;    // and its weight
+    for (int i = 0; i < map.peerCount; ++i) {
+        const MapPeer& p = map.peers[i];
+        float ux = 0, uy = 0;
+        if (p.offscreen) {
+            const float dx = p.x - map.riderX, dy = p.y - map.riderY;
+            const float len = sqrtf(dx * dx + dy * dy);
+            if (len < 1) continue;
+            ux = dx / len;
+            uy = dy / len;
+        }
+        // Off the screen the ring becomes a pin: a broad black point out of
+        // it toward them, twice as long as the ring is wide, so which way reads at a
+        // glance and never as a road or the compass needle.
+        auto pin = [&](int tipR, int halfW, uint8_t c) {
+            const int tx = p.x + lroundf(ux * tipR), ty = p.y + lroundf(uy * tipR);
+            const int lx = p.x - lroundf(uy * halfW), ly = p.y + lroundf(ux * halfW);
+            const int rx = p.x + lroundf(uy * halfW), ry = p.y - lroundf(ux * halfW);
+            epd_fill_triangle(tx, ty, lx, ly, rx, ry, c, fb);
+        };
+        // White under it first, so roads don't run through the marker.
+        epd_fill_circle(p.x, p.y, R + 3, 0xFF, fb);
+        if (p.offscreen) pin(3 * R + 6, R + 3, 0xFF);
+        if (p.offscreen) pin(3 * R, R, 0x00);
+        if (p.stale) {
+            // Not heard from for a while: the ring dashed, where they WERE.
+            for (int a = 0; a < 360; a += 2) {
+                if ((a / 20) % 2) continue;
+                const float r = a * (float)M_PI / 180.0f;
+                for (int d = R - RING + 1; d <= R; ++d)
+                    epd_draw_pixel(p.x + lroundf(cosf(r) * d),
+                                   p.y + lroundf(sinf(r) * d), 0x00, fb);
+            }
+        } else {
+            epd_fill_circle(p.x, p.y, R, 0x00, fb);
+        }
+        epd_fill_circle(p.x, p.y, R - RING, 0xFF, fb);
+        // Two letters at the size one used to be, a step down for a wide
+        // pair ("Mw") so they stay inside the ring.
+        const EpdFont* f = &ArialBold_14;
+        if (ui::textWidth(f, p.initials) > 2 * (R - RING) - 4) f = &Arial_B;
+        ui::text(f, p.x, p.y + epdc_digit_height(f) / 2, p.initials, fb,
+                 EPD_DRAW_ALIGN_CENTER, 0x00);
+        if (!p.label[0]) continue;
+        // The distance on a chip beside it, on whichever side has room and
+        // is not where the pointer goes.
+        const int tw = ui::textWidth(&Arial_B, p.label);
+        const int gap = R + 8;
+        bool left = p.x + gap + tw + 12 > 540 || ux > 0.3f;
+        if (left && p.x - gap - tw - 12 < 0) left = false;
+        const int cx = left ? p.x - gap - tw - 12 : p.x + gap;
+        epd_fill_rect({cx, p.y - 16, tw + 12, 32}, 0xFF, fb);
+        for (int k = 0; k < 2; ++k)
+            epd_draw_rect({cx + k, p.y - 16 + k, tw + 12 - 2 * k, 32 - 2 * k}, 0x00, fb);
+        ui::text(&Arial_B, cx + 6, p.y + epdc_digit_height(&Arial_B) / 2,
+                 p.label, fb, EPD_DRAW_ALIGN_LEFT, 0x00);
+    }
+}
+
+void drawRider(int x, int y, float headingDeg, uint8_t* fb) {
+    float rad = (headingDeg - 90.0f) * (float)M_PI / 180.0f;
+    float c = cosf(rad), s = sinf(rad);
+    auto rot = [&](float lx, float ly, int& ox, int& oy) {
+        ox = x + lroundf(lx * c - ly * s);
+        oy = y + lroundf(lx * s + ly * c);
+    };
+    int nx, ny, lx, ly, rx, ry, bx, by;
+    rot(24, 0, nx, ny);
+    rot(-15, -13, lx, ly);
+    rot(-15, 13, rx, ry);
+    rot(-8, 0, bx, by);
+
+    // White halo circle with black ring (design: circled position marker)
+    epd_fill_circle(x, y, 30, 0xFF, fb);
+    for (int r = 28; r <= 30; ++r) epd_draw_circle(x, y, r, 0x00, fb);
+    epd_fill_triangle(nx, ny, lx, ly, bx, by, 0x00, fb);
+    epd_fill_triangle(nx, ny, rx, ry, bx, by, 0x00, fb);
+}
+
+void drawScaleBar(float metersPerPixel, bool miles, uint8_t* fb) {
+    int x = 20, y = MAP_BOTTOM - 26;
+    char buf[16];
+    float barM;
+    if (miles) {
+        // Round imperial rungs (metres, label): feet then miles.
+        struct Rung { float m; const char* lbl; };
+        static const Rung rungs[] = {
+            {30.48f, "100 FT"}, {76.2f, "250 FT"}, {152.4f, "500 FT"},
+            {304.8f, "1000 FT"}, {804.67f, "0.5 MI"}, {1609.34f, "1 MI"},
+            {3218.69f, "2 MI"}};
+        const Rung* pick = &rungs[0];
+        for (const Rung& r : rungs) if (r.m / metersPerPixel <= 160) pick = &r;
+        barM = pick->m;
+        snprintf(buf, sizeof(buf), "%s", pick->lbl);
+    } else {
+        const int targets[] = {50, 100, 200, 500, 1000, 2000};
+        int meters = targets[0];
+        for (int t : targets) if (t / metersPerPixel <= 160) meters = t;
+        barM = meters;
+        if (meters >= 1000) snprintf(buf, sizeof(buf), "%d KM", meters / 1000);
+        else snprintf(buf, sizeof(buf), "%d M", meters);
+    }
+    int px = (int)(barM / metersPerPixel);
+    epd_fill_rect({x, y, px, 4}, 0x00, fb);
+    ui::text(&Arial_B, x, y - 10, buf, fb);
+}
+
+void drawCompass(int cx, int cy, float northDeg, bool trackUp, uint8_t* fb) {
+    epd_fill_circle(cx, cy, 28, 0xFF, fb);
+    for (int r = 26; r <= 28; ++r) epd_draw_circle(cx, cy, r, 0x00, fb);
+
+    // Needle points to true north.
+    float a = northDeg * (float)M_PI / 180.0f;
+    float nxd = sinf(a), nyd = -cosf(a);   // unit vector toward north
+    float pxd = -nyd, pyd = nxd;           // perpendicular
+    int tipX = cx + lroundf(nxd * 19), tipY = cy + lroundf(nyd * 19);
+    int b1X = cx + lroundf(pxd * 7), b1Y = cy + lroundf(pyd * 7);
+    int b2X = cx - lroundf(pxd * 7), b2Y = cy - lroundf(pyd * 7);
+    epd_fill_triangle(tipX, tipY, b1X, b1Y, b2X, b2Y, 0x00, fb);
+
+    if (trackUp) {
+        // underline marks track-up mode
+        epd_fill_rect({cx - 12, cy + 34, 24, 3}, 0x00, fb);
+    }
+}
+
+}  // namespace
+
+const MapTouchZones kMapZoom = {540 - 78, 560, 640, 76, 560 - 76 - 8};
+const MapCompassZone kMapCompass = {540 - 46, 64 + 48, 34};
+// Bottom edge of the turn-by-turn banner (ui_dashboard's kNavBanner is
+// {0, STATUS_H, 540, 138}); the compass drops below this while navigating.
+constexpr int kNavBannerBottom = 64 + 138;
+
+int mapCompassCy(bool navBannerVisible) {
+    return navBannerVisible ? kNavBannerBottom + kMapCompass.r + 14
+                            : kMapCompass.cy;
+}
+
+void ui_map_draw_zoom_button(bool zoomIn, bool pressed, uint8_t* fb) {
+    EpdRect r = {kMapZoom.zoomX, zoomIn ? kMapZoom.zoomInY : kMapZoom.zoomOutY,
+                 kMapZoom.size, kMapZoom.size};
+    const uint8_t face = pressed ? 0x00 : 0xFF;   // pressed = filled ink
+    const uint8_t mark = pressed ? 0xFF : 0x00;
+    epd_fill_rect(r, face, fb);
+    epd_draw_rect(r, 0x00, fb);
+    epd_draw_rect({r.x + 1, r.y + 1, r.width - 2, r.height - 2}, 0x00, fb);
+    int cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+    epd_fill_rect({cx - 14, cy - 2, 28, 5}, mark, fb);
+    if (zoomIn) epd_fill_rect({cx - 2, cy - 14, 5, 28}, mark, fb);
+}
+
+// MAP LAYERS button: same box as the zoom buttons, stacked above them, with a
+// "stack of sheets" glyph — two offset outlined squares, the front one filled.
+static void drawLayersButton(uint8_t* fb) {
+    EpdRect r = {kMapZoom.zoomX, kMapZoom.layersY, kMapZoom.size, kMapZoom.size};
+    epd_fill_rect(r, 0xFF, fb);
+    epd_draw_rect(r, 0x00, fb);
+    epd_draw_rect({r.x + 1, r.y + 1, r.width - 2, r.height - 2}, 0x00, fb);
+    const int cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+    // Back sheet (outline), then the front sheet offset down-left (solid).
+    for (int b = 0; b < 3; ++b)
+        epd_draw_rect({cx - 10 + b, cy - 20 + b, 30 - 2 * b, 26 - 2 * b}, 0x00, fb);
+    epd_fill_rect({cx - 20, cy - 6, 30, 26}, 0xFF, fb);
+    epd_fill_rect({cx - 18, cy - 4, 26, 22}, 0x00, fb);
+}
+
+// ---- MAP LAYERS screen -------------------------------------------------------
+
+namespace {
+struct LayerRow { uint16_t bit; const char* label; };
+const LayerRow kLayerRows[kMapLayerCount] = {
+    {MAP_LAYER_BIKE_ROUTES, "BIKE ROUTES"},
+    {MAP_LAYER_CYCLEWAYS, "CYCLEWAYS & LANES"},
+    {MAP_LAYER_WATER, "DRINKING WATER"},
+    {MAP_LAYER_TOILETS, "TOILETS"},
+    {MAP_LAYER_REPAIR, "REPAIR STATIONS"},
+    {MAP_LAYER_BIKE_SHOPS, "BIKE SHOPS"},
+};
+constexpr int kSampleCx = 24 + 16 + 30;   // CONTENT_X + CELL_PAD + half a sample
+constexpr int kLabelX = 24 + 16 + 76;     // text starts right of the sample
+
+// A sample of what the row's layer draws, in the map's own styles.
+void drawLayerSample(int row, int cx, int cy, uint8_t* fb) {
+    switch (row) {
+        case 0: {   // route band under a residential street
+            int16_t pts[4] = {(int16_t)(cx - 28), (int16_t)cy, (int16_t)(cx + 28), (int16_t)cy};
+            drawBikeBand(pts, 2, 14, fb);
+            thickSegment(cx - 28, cy, cx + 28, cy, 2, ROAD_INK, fb);
+            break;
+        }
+        case 1: {   // dashed cycleway above a road with bike lanes
+            drawSegmentStyled(cx - 28, cy - 12, cx + 28, cy - 12, {2, ROAD_INK, 7, 4, false}, fb);
+            int16_t road[4] = {(int16_t)(cx - 28), (int16_t)(cy + 9), (int16_t)(cx + 28), (int16_t)(cy + 9)};
+            drawBikeLanes(road, 2, 2, fb);
+            thickSegment(cx - 28, cy + 9, cx + 28, cy + 9, 2, ROAD_INK, fb);
+            break;
+        }
+        default: {
+            static const uint8_t types[] = {MAP_POI_WATER, MAP_POI_TOILETS,
+                                            MAP_POI_REPAIR, MAP_POI_BIKE_SHOP};
+            MapPoi p = {(int16_t)cx, (int16_t)cy, types[row - 2], 0};
+            drawPoiIcon(p, fb);
+            break;
+        }
+    }
+}
+}  // namespace
+
+void ui_render_map_layers(uint16_t mask, uint8_t* fb) {
+    const int W = epd_rotated_display_width();
+    for (int i = 0; i < kMapLayerCount; ++i) {
+        const int y = kMapLayersRowTop + i * kMapLayersRowH;
+        const int midY = y + kMapLayersRowH / 2;
+        drawLayerSample(i, kSampleCx, midY, fb);
+        ui::text(&Arial_B, kLabelX, midY + 8, kLayerRows[i].label, fb,
+                 EPD_DRAW_ALIGN_LEFT, 0x00);
+        ui_settings_toggle(kSettingsToggleX, midY - kSettingsToggleH / 2,
+                           kSettingsToggleW, kSettingsToggleH,
+                           (mask & kLayerRows[i].bit) != 0, fb);
+        epd_fill_rect({0, y + kMapLayersRowH - 3, W, 3}, 0x00, fb);
+    }
+    // What the switches do and do not do — so a rider who turns everything on
+    // and sees nothing knows the tiles are the missing piece, not the setting.
+    const int fy = kMapLayersRowTop + kMapLayerCount * kMapLayersRowH + 44;
+    ui::text(&Arial_L, W / 2, fy, "Shown on the map when the downloaded", fb,
+             EPD_DRAW_ALIGN_CENTER, 0x00);
+    ui::text(&Arial_L, W / 2, fy + 30, "tiles include them. Home to go back.", fb,
+             EPD_DRAW_ALIGN_CENTER, 0x00);
+}
+
+int ui_map_layers_hit(int x, int y) {
+    if (y < kMapLayersRowTop) return -1;
+    const int row = (y - kMapLayersRowTop) / kMapLayersRowH;
+    if (row < 0 || row >= kMapLayerCount) return -1;
+    // The whole row toggles: the switch is the visual, the row the target —
+    // a gloved thumb on the label should not do nothing.
+    (void)x;
+    return row;
+}
+
+uint16_t ui_map_layer_bit(int row) {
+    return (row >= 0 && row < kMapLayerCount) ? kLayerRows[row].bit : 0;
+}
+
+// Native-fb-aligned mask of the current frame's water/park fills (1 = covered).
+// Null until the first map render. Used by the ghost settle-clean.
+const uint8_t* ui_map_dither_mask() { return s_ditherMask; }
+
+bool ui_render_map_base(const MapScreenData& map, uint8_t* fb, bool (*keepGoing)()) {
+    // Checked every few items: a single road is far too quick to be worth asking
+    // about, and a full frame of them is seconds with a finger waiting.
+    const auto cancelled = [keepGoing](int i) {
+        return keepGoing && (i & 15) == 0 && !keepGoing();
+    };
+    // Map features: parks + water under roads, all in grays. Parks (hatch) are
+    // the base layer, then water (dots) over them, then trails, then roads in
+    // tier order on top. Rail/transit removed by request.
+    // mask=true records the water, so a zoom can scrub exactly that: its dots stay
+    // black from frame to frame and show the old roads, and nothing else needs it.
+    ditherMaskReset();
+    memset(s_parkGrid, 0, sizeof(s_parkGrid));
+    for (int i = 0; i < map.parkCount; ++i) {
+        if (cancelled(i)) return false;
+        fillDitheredPolygon(map.parks[i].pts, map.parks[i].pointCount, fb, FILL_HATCH, false);
+    }
+    for (int i = 0; i < map.waterCount; ++i) {
+        if (cancelled(i)) return false;
+        fillDitheredPolygon(map.water[i].pts, map.water[i].pointCount, fb, FILL_DOTS, true);
+    }
+    // Park casings: every way's white border goes down before any road or bike
+    // band, so a casing never cuts into another road at a junction and a route
+    // band still paints its own grey over it. Road width + 2 px each side.
+    // Footpaths are left bare: a big park is a mesh of them, and cased they
+    // turned the whole park into white worms that buried the roads through it.
+    // A dedicated cycleway (a solid dash, drawn below) is cased like a road.
+    if (map.parkCount > 0) {
+        const bool infra = (map.layers & MAP_LAYER_CYCLEWAYS) != 0;
+        for (int i = 0; i < map.featureCount; ++i) {
+            if (cancelled(i)) return false;
+            const MapPolyline& f = map.features[i];
+            int w = styleFor(f.cls, map.metersPerPixel).width;
+            if (f.cls == MAP_PATH)
+                w = (infra && (f.flags & MAP_WF_CYCLEWAY)) ? 2 : 0;
+            if (w > 0) drawParkCasing(f.pts, f.pointCount, w + 4, fb);
+        }
+    }
+    // Bike-route bands under every road, lowest network first so a national
+    // route's wider band is not covered by a local one's.
+    //
+    // Infrastructure first: where the way's own lane / cycleway styling is on
+    // screen, it wins and the band is left off. In a city the numbered local
+    // network (SF: 27 lcn routes in the centre alone) runs along nearly every
+    // laned street, and the band — the heaviest bike style — buried the lane
+    // dots and cycleway dashes, so everything read as "bike route". The band
+    // now means "signed route with no dedicated space" (shared streets), plus
+    // laned routes zoomed out past where the lane lines draw, and every route
+    // when the Cycleways & lanes layer is off.
+    const bool infraOn = (map.layers & MAP_LAYER_CYCLEWAYS) != 0;
+    const bool lanesOn = infraOn && map.metersPerPixel <= 4.0f;
+    for (int lvl = 1; lvl <= 3 && (map.layers & MAP_LAYER_BIKE_ROUTES); ++lvl) {
+        const int bw = bikeBandWidth(lvl, map.metersPerPixel);
+        for (int i = 0; i < map.featureCount; ++i) {
+            const uint8_t fl = map.features[i].flags;
+            if ((fl & MAP_WF_ROUTE_MASK) != lvl) continue;
+            if ((infraOn && (fl & MAP_WF_CYCLEWAY)) ||
+                (lanesOn && (fl & MAP_WF_BIKE_LANE)))
+                continue;
+            drawBikeBand(map.features[i].pts, map.features[i].pointCount, bw, fb);
+        }
+    }
+    // Bike lanes under all the roads (see drawBikeLanes), sized off
+    // the laned road's own width so they scale with the road grade.
+    if (lanesOn) {
+        for (int i = 0; i < map.featureCount; ++i) {
+            const MapPolyline& f = map.features[i];
+            if (!(f.flags & MAP_WF_BIKE_LANE) || f.cls == MAP_PATH) continue;
+            drawBikeLanes(f.pts, f.pointCount,
+                               styleFor(f.cls, map.metersPerPixel).width, fb);
+        }
+    }
+    // Back-to-front: higher-grade roads paint on top at intersections.
+    const MapFeatureClass order[] = {MAP_PATH, MAP_ROAD_MINOR, MAP_ROAD_TERTIARY,
+                                     MAP_ROAD_SECONDARY, MAP_ROAD_PRIMARY,
+                                     MAP_ROAD_MAJOR};
+    // A dedicated cycleway is a solid-dash black line, a step up from the faint
+    // dithered footpath it would otherwise share a class with.
+    const Style cyclewayStyle = {2, ROAD_INK, 7, 4, false};
+    for (MapFeatureClass cls : order) {
+        const Style st = styleFor(cls, map.metersPerPixel);
+        for (int i = 0; i < map.featureCount; ++i) {
+            if (cancelled(i)) return false;
+            const MapPolyline& f = map.features[i];
+            if (f.cls != cls) continue;
+            // With the layer off, cycleways and laned roads draw in their own
+            // class's style, exactly as on a map without the flags.
+            const bool bikeInfra = (map.layers & MAP_LAYER_CYCLEWAYS) != 0;
+            const bool cycleway = bikeInfra && (f.flags & MAP_WF_CYCLEWAY) != 0 &&
+                                  (cls == MAP_PATH || cls == MAP_ROAD_MINOR);
+            drawPolyline(f.pts, f.pointCount, cycleway ? cyclewayStyle : st, fb);
+        }
+    }
+    return true;
+}
+
+namespace {
+// What goes over the base layer, redrawn on every frame.
+void renderMapTop(const MapScreenData& map, uint8_t* fb) {
+    // Route: 14 px black; ridden part solid, ahead dashed (design 1f)
+    if (map.route && map.routePointCount > 1) {
+        int ridden = map.riddenPointCount;
+        if (ridden < 1) ridden = 1;
+        if (ridden > map.routePointCount) ridden = map.routePointCount;
+        drawPolyline(map.route, ridden, {14, 0x00, 0, 0}, fb);
+        if (ridden < map.routePointCount) {
+            drawPolyline(map.route + (ridden - 1) * 2,
+                         map.routePointCount - ridden + 1,
+                         {14, 0x00, 26, 16}, fb);
+        }
+    }
+
+    // POIs over the route: a water stop next to the line being ridden is
+    // exactly the one that must not disappear under it.
+    drawPois(map, fb);
+
+    drawRider(map.riderX, map.riderY, map.headingDeg, fb);
+}
+}  // namespace
+
+void ui_render_map_features(const MapScreenData& map, const RideState& s, uint8_t* fb) {
+    (void)s;
+    ui_render_map_base(map, fb);
+    renderMapTop(map, fb);
+}
+
+void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
+                   bool baseDrawn, void (*onBase)(const uint8_t* fb)) {
+    const int W = epd_rotated_display_width();
+    const int H = epd_rotated_display_height();
+    char buf[32];
+
+    if (!baseDrawn) {
+        ui_render_map_base(map, fb);
+        if (onBase) onBase(fb);
+    }
+    renderMapTop(map, fb);
+    drawScaleBar(map.metersPerPixel, s.useMiles, fb);
+    // The turn banner occupies the top of the map, exactly where the compass
+    // lives (compass spans y 78..146; the banner runs to y 202), so the north
+    // indicator was drawn underneath it and invisible while navigating. Drop it
+    // clear of the banner instead of hiding it.
+    drawCompass(kMapCompass.cx, mapCompassCy(map.navBannerVisible),
+                map.northDeg, map.trackUp, fb);
+
+    // No map covers this position — tell the rider how to get one instead of
+    // showing a blank screen.
+    if (!map.hasMap) {
+        const int bw = 500, bh = 96;
+        const int bx = (W - bw) / 2, by = (H - bh) / 2 - 30;
+        epd_fill_rect({bx, by, bw, bh}, 0xFF, fb);
+        for (int i = 0; i < 2; ++i)
+            epd_draw_rect({bx - i, by - i, bw + 2 * i, bh + 2 * i}, 0x00, fb);
+        // Downloaded maps live on the card, so without one the app's advice
+        // would not help: say what is actually missing.
+        const char* head = "NO MAP HERE";
+        const char* sub = "Download this area from the app";
+        if (s.sdCard == SD_CARD_NONE) {
+            head = "NO SD CARD";
+            sub = "Insert a FAT32 card for maps";
+        } else if (s.sdCard == SD_CARD_UNREADABLE) {
+            head = "SD CARD UNREADABLE";
+            sub = "Reformat it as FAT32 (not exFAT)";
+        }
+        ui::text(&Arial_B, W / 2, by + 38, head, fb, EPD_DRAW_ALIGN_CENTER,
+                 0x00);
+        ui::text(&Arial_L, W / 2, by + 70, sub, fb, EPD_DRAW_ALIGN_CENTER,
+                 0x00);
+    }
+
+    // Over the NO MAP box: where the group is matters most when there is no
+    // map to read, and the edge arrows sit in the box's rows.
+    drawPeers(map, fb);
+
+    // Label when the map is centered on the phone's position (device GPS cold).
+    // No background box by request — just the text.
+    if (map.phonePosition) {
+        ui::text(&Arial_L, 21, ui::STATUS_H + 28, "PHONE GPS", fb,
+                 EPD_DRAW_ALIGN_LEFT, 0x00);
+    }
+
+    // Zoom buttons (design 1f, right edge)
+    ui_map_draw_zoom_button(true, false, fb);
+    drawLayersButton(fb);
+    ui_map_draw_zoom_button(false, false, fb);
+
+    // Status bar drawn after the map (epdiy has no clipping)
+    epd_fill_rect({0, 0, W, ui::STATUS_H - 3}, 0xFF, fb);
+    ui::statusBar(s, fb);
+
+    // Footer: three cells drawn with the SAME primitive as the dashboard, so a
+    // rider glancing down sees the same object in both places — caption top-left
+    // at the shared size, value+unit centred as a pair.
+    epd_fill_rect({0, STRIP_TOP, W, H - STRIP_TOP}, ui::PAPER, fb);
+    epd_fill_rect({0, STRIP_TOP, W, ui::RULE_HEAVY}, ui::INK, fb);
+
+    // Dash-page spacing, not flush thirds: the same 24 px screen margin and
+    // 12 px gutters the data pages use, so the strip reads as three cells with
+    // air rather than one wall-to-wall box.
+    const int fy = STRIP_TOP + ui::RULE_HEAVY + ui::GUTTER;
+    const int fh = H - fy - ui::GUTTER;
+    const int colW = (ui::CONTENT_W - 2 * ui::GUTTER) / 3;
+
+    // Fields come from the rider's config (`map` line in dashboard.cfg).
+    // One override stays: while navigating, if no cell already shows ROUTE
+    // LEFT, it replaces the third — the strip's oldest behaviour, and the one
+    // number a rider on a route actually wants.
+    uint8_t f3[3] = {map.stripFields[0], map.stripFields[1], map.stripFields[2]};
+    if (map.showRemaining) {
+        bool has = f3[0] == DF_ROUTE_LEFT || f3[1] == DF_ROUTE_LEFT ||
+                   f3[2] == DF_ROUTE_LEFT;
+        if (!has) f3[2] = DF_ROUTE_LEFT;
+    }
+
+    char vals[3][24];
+    const char* units3[3];
+    const char* labels[3];
+    for (int c = 0; c < 3; ++c) {
+        if (f3[c] >= DF_COUNT) f3[c] = DF_SPEED;
+        units3[c] = "";
+        dashFieldValue(f3[c], s, vals[c], sizeof(vals[c]), &units3[c]);
+        // Time fields render compact H:MM here, as the strip always did before
+        // it was configurable. The full H:MM:SS is a dash-cell luxury: in a
+        // 156 px strip cell its worst case ("88:88:88") drags the WHOLE row's
+        // shared face down to the smallest sizes — seconds nobody reads at a
+        // glance costing half the type size of all three cells.
+        if (f3[c] == DF_RIDE_TIME || f3[c] == DF_MOVING_TIME) {
+            uint32_t sec = f3[c] == DF_RIDE_TIME ? s.elapsedS : s.movingS;
+            snprintf(vals[c], sizeof(vals[c]), "%lu:%02lu",
+                     (unsigned long)(sec / 3600), (unsigned long)((sec / 60) % 60));
+        }
+        labels[c] = dashFieldLabel(f3[c]);
+    }
+
+
+    // The strip's own worst-case sizing strings: dashSizingHint's, except the
+    // compact time format above.
+    auto stripHint = [](uint8_t f) {
+        return (f == DF_RIDE_TIME || f == DF_MOVING_TIME) ? "88:88"
+                                                          : dashSizingHint(f);
+    };
+
+    // One caption size across the strip, as on the data page.
+    const EpdFont* lf = ui::kLabelLadder[ui::LABEL_LADDER_N - 1];
+    for (int k = 0; k < ui::LABEL_LADDER_N; ++k) {
+        bool fits = true;
+        for (int c = 0; c < 3; ++c)
+            if (ui::labelWidth(ui::kLabelLadder[k], labels[c]) >
+                colW - 2 * ui::CELL_PAD) fits = false;
+        if (fits) { lf = ui::kLabelLadder[k]; break; }
+    }
+
+    // Common value face across the three, so the strip reads as one row —
+    // sized against each field's WORST-CASE string, not the live value, so a
+    // number crossing a digit boundary can never resize the strip mid-ride.
+    // The unit no longer sits beside the value (in a 124 px inner cell it
+    // cost two ladder steps of type size); the cell is a three-band column:
+    // caption high, big bare number, small unit on the bottom edge.
+    const int capBand = 34;    // caption band, from the cell top
+    const int unitBand = 26;   // unit band, from the cell bottom
+    // The value's side padding is 6, not CELL_PAD's 16: nothing sits beside
+    // the number, and those 20 px are exactly one ladder step of type size.
+    const int valuePad = 6;
+    int vi = 0;
+    for (int c = 0; c < 3; ++c) {
+        const int idx = ui::valueFontIndex(ui::kValueLadder,
+                                           stripHint(f3[c]),
+                                           colW - 2 * valuePad,
+                                           fh - capBand - unitBand, 0);
+        if (idx > vi) vi = idx;
+    }
+    const EpdFont* vf = ui::kValueLadder[vi];
+    for (int c = 0; c < 3; ++c) {
+        EpdRect r = {ui::CONTENT_X + c * (colW + ui::GUTTER), fy, colW, fh};
+        epd_draw_rect(r, ui::INK, fb);
+        epd_draw_rect({r.x + 1, r.y + 1, r.width - 2, r.height - 2}, ui::INK,
+                      fb);
+        const int cx = r.x + r.width / 2;
+        // Left-aligned caption, the dash cells' own idiom: label() centres on
+        // a point, so hand it the tracked width's midpoint.
+        const int lw = ui::labelWidth(lf, labels[c]);
+        ui::label(r.x + ui::CELL_PAD + lw / 2, r.y + 24, labels[c], fb,
+                  ui::INK, lf);
+        // Value centred in the band between caption and unit. Impact digit
+        // faces carry cap height in ascender, so baseline = centre + asc/2
+        // is optical centre.
+        const int bandTop = r.y + capBand;
+        const int bandBot = r.y + fh - unitBand;
+        const int base = (bandTop + bandBot) / 2 + vf->ascender / 2;
+        ui::text(vf, cx, base, vals[c], fb, EPD_DRAW_ALIGN_CENTER);
+        if (units3[c][0])
+            ui::text(&Arial_L, cx, r.y + fh - 10, units3[c], fb,
+                     EPD_DRAW_ALIGN_CENTER, ui::DARK);
+        // Greyed like a dash cell when the source is gone — a strip cell must
+        // never show a live-looking number from a dead sensor either.
+        if (!dashFieldAvailable(f3[c], s) && !s.showOffline)
+            ui::fillTone({r.x + 3, bandTop, r.width - 6, bandBot - bandTop},
+                         ui::TONE_33, fb);
+    }
+}
+
+// Whole-route preview for the "Start navigation?" accept page: fits the entire
+// route into the area above the prompt sheet so the rider can recognize it
+// before accepting. Independent of the live map zoom/center.
+void ui_render_route_preview(uint8_t* fb) {
+    const int n = routes::pointCount();
+    if (n < 2) return;
+    const int W = epd_rotated_display_width();
+
+
+    // Viewport: below the status bar, above the accept sheet. The sheet is 520 px
+    // tall now, so fitting to 600 put the lower third of the route behind it —
+    // the rider was asked to accept a route they could only half see.
+    const int H = epd_rotated_display_height();
+    const int top = ui::STATUS_H + 8, bot = (H - 520) - 16;
+    const int left = 20, right = W - 20;
+    const int vw = right - left, vh = bot - top;
+
+    double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+    for (int i = 0; i < n; ++i) {
+        double la, lo;
+        routes::point(i, la, lo);
+        if (la < minLat) minLat = la;
+        if (la > maxLat) maxLat = la;
+        if (lo < minLon) minLon = lo;
+        if (lo > maxLon) maxLon = lo;
+    }
+    const double clat = (minLat + maxLat) / 2, clon = (minLon + maxLon) / 2;
+    const double cosc = cos(clat * M_PI / 180.0);
+    double mLat = (maxLat - minLat) * 111320.0;
+    double mLon = (maxLon - minLon) * 111320.0 * cosc;
+    if (mLat < 1) mLat = 1;
+    if (mLon < 1) mLon = 1;
+    double mpp = fmax(mLon / vw, mLat / vh) * 1.12;   // fit + 12% margin
+    if (mpp < 0.5) mpp = 0.5;
+
+    const int cx = left + vw / 2, cy = top + vh / 2;
+    auto toScreen = [&](double la, double lo, int16_t& sx, int16_t& sy) {
+        sx = (int16_t)(cx + (lo - clon) * 111320.0 * cosc / mpp);
+        sy = (int16_t)(cy - (la - clat) * 111320.0 / mpp);
+    };
+
+    // Major-road context behind the route so the shape is recognizable. The
+    // status bar + accept sheet are drawn AFTER this, covering any roads that
+    // spill above/below the preview viewport (see ui_dashboard draw order).
+    static MapScreenData ctx;
+    ctx.route = nullptr;
+    ctx.routePointCount = 0;
+    map_store::renderInto(clat, clon, (float)mpp, cx, cy, 0.0f, ctx);
+    // Parks (hatch) + water (dots) under the roads, so the coast/bay + green
+    // areas read — matches the map screen. Spill above/below the viewport is
+    // masked by the status bar + accept sheet drawn afterwards.
+    for (int i = 0; i < ctx.parkCount; ++i) {
+        fillDitheredPolygon(ctx.parks[i].pts, ctx.parks[i].pointCount, fb, FILL_HATCH);
+    }
+    for (int i = 0; i < ctx.waterCount; ++i) {
+        fillDitheredPolygon(ctx.water[i].pts, ctx.water[i].pointCount, fb);
+    }
+    for (int i = 0; i < ctx.featureCount; ++i) {
+        if (ctx.features[i].cls != MAP_ROAD_MAJOR) continue;
+        drawPolyline(ctx.features[i].pts, ctx.features[i].pointCount,
+                     {3, 0x00, 0, 0}, fb);
+    }
+
+    // Subsample into a fixed buffer so any route length fits.
+    static int16_t pts[1024 * 2];
+    const int cap = 1024;
+    const int stride = (n + cap - 1) / cap;
+    int m = 0;
+    for (int i = 0; i < n && m < cap; i += stride) {
+        double la, lo;
+        routes::point(i, la, lo);
+        toScreen(la, lo, pts[m * 2], pts[m * 2 + 1]);
+        m++;
+    }
+    // Always include the final point so the end marker lands on the route end.
+    {
+        double la, lo;
+        routes::point(n - 1, la, lo);
+        if (m < cap) { toScreen(la, lo, pts[m * 2], pts[m * 2 + 1]); m++; }
+    }
+
+    drawPolyline(pts, m, {8, 0x00, 0, 0}, fb);
+
+    // Start (filled dot) and end (ring) markers.
+    int16_t sx, sy, ex, ey;
+    { double la, lo; routes::point(0, la, lo); toScreen(la, lo, sx, sy); }
+    { double la, lo; routes::point(n - 1, la, lo); toScreen(la, lo, ex, ey); }
+    epd_fill_circle(sx, sy, 10, 0x00, fb);
+    epd_fill_circle(ex, ey, 11, 0xFF, fb);
+    for (int r = 7; r <= 11; ++r) epd_draw_circle(ex, ey, r, 0x00, fb);
+}

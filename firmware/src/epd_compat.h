@@ -1,0 +1,216 @@
+#pragma once
+
+// Drop-in replacement for the drawing half of epdiy, so the panel can be driven
+// by EPD_Painter instead.
+//
+// WHY THIS EXISTS
+// epdiy and EPD_Painter cannot coexist: epd_renderer_init() asserts a non-NULL
+// board, calls board->init() and epd_control_reg_init(), and claims LCD_CAM. But
+// epdiy's *drawing* functions are pure software — they only touch a caller-owned
+// framebuffer. So we keep epdiy's HEADERS for the types (EpdRect, EpdFont,
+// EpdFontProperties, rotation enums), do not compile any epdiy source, and
+// implement the 13 drawing functions our renderers actually call right here.
+//
+// The payoff: ui_render.cpp (891 lines), map_view.cpp (469 lines) and all four
+// font data headers compile COMPLETELY UNCHANGED, and tools/preview keeps
+// working. Only the panel layer in ui_dashboard.cpp changes.
+//
+// The framebuffer stays in epdiy's exact 4bpp format — 2 pixels per byte, low
+// nibble = even x, 0x0 black .. 0xF white, 480 bytes per native row. Keeping
+// that format is what makes the renderers portable; conversion to
+// EPD_Painter's 8bpp level buffer happens once, at paint time (see
+// epdc_paint()), not throughout the drawing code.
+//
+// Implementations here are written from scratch (Bresenham, scanline fills,
+// glyph blitting) rather than copied from epdiy, which is LGPL-3.0 while this
+// project is Apache-2.0.
+
+#include <stdint.h>
+
+#include "epdiy.h"   // TYPES ONLY — no epdiy source is compiled or linked
+
+// ---------------------------------------------------------------------------
+// Panel layer (the part that replaces epd_hl_* / epd_init / epd_poweron)
+// ---------------------------------------------------------------------------
+
+// Bring up EPD_Painter and allocate the 4bpp framebuffer plus the 8bpp level
+// buffer paint() consumes. Returns false if either allocation or the driver
+// fails. Sets the rotation our UI is laid out for.
+bool epdc_begin();
+
+// The 4bpp framebuffer the renderers draw into. Stable for the process
+// lifetime; never freed.
+uint8_t* epdc_framebuffer();
+
+// Push the framebuffer to the panel. Converts 4bpp -> EPD_Painter levels and
+// calls paint(), whose own delta engine drives only what changed — so there is
+// no need for the dirty-rect bookkeeping the epdiy path required.
+void epdc_paint();
+
+// Block until the panel has actually finished being driven.
+//
+// epdc_paint() is ASYNCHRONOUS on the EPD_Painter backend: paint() hands the
+// buffer to the driver's epd_paint task and returns as soon as that task has
+// picked it up ("wait until this buffer has been picked up by the paint loop"),
+// while the rows are still being clocked out. Normally that is exactly what we
+// want — the UI task gets on with the next frame. It is wrong only when the
+// very next thing we do stops the CPU: deep sleep mid-drive leaves a partially
+// written image on the glass, which is what the shutdown screen was showing.
+//
+// No-op on the epdiy backend, whose epd_hl_update_screen() already blocks.
+void epdc_paint_wait();
+
+// Paint through src/epd_scan.cpp instead of the driver's paint path. Takes effect from
+// the next frame, in either direction. Refuses, and stays off, if the panel layer has
+// no tables for it or the memory is not there. No-ops on the epdiy backend.
+bool epdc_scan_enable(bool on);
+bool epdc_scan_enabled();
+bool epdc_scan_tune(int drivePasses, int prime);
+void epdc_scan_report();
+
+// Cut the panel's high-voltage rails (VPOS/VNEG/VGH/VGL/VCOM) before deep sleep.
+//
+// Without this the TPS65185 keeps generating rails for the whole sleep. The
+// EPD_Painter backend does drop them on its own — but on a 5-second idle timer
+// run by its own `panel_idle_off` task, and shutdownDevice() stops the CPU long
+// inside that window, so the timer never fires. The enables are latched in the
+// XL9555 expander, which sits on the always-on 3V3, so nothing else drops them
+// either. (The epdiy backend powered the rails down around every paint, which is
+// why this only became a problem with the EPD_Painter port.)
+//
+// One call, after the last paint has fully completed:
+//
+//   epdc_paint_wait();       // farewell frame fully driven
+//   epdc_power_off_wait();   // sit out the driver's own 5 s idle countdown
+//
+// There USED to be an epdc_power_off_soon() that shortened the driver's idle
+// timeout to 1 s before the farewell paint, to make this wait short. That was
+// a race: the countdown is re-armed at DRIVE START and keeps ticking while
+// rows are still being clocked, so a clear or paint pass longer than the tick
+// phase had its rails cut mid-drive — the farewell screen sometimes froze
+// half-written. Waiting out the stock 5 s countdown after the drive is done
+// is slower but cannot cut a frame short.
+//
+// powerOff() itself is private to the driver, and reproducing it here would mean
+// duplicating its TPS-register-then-expander sequencing — so this drives the
+// driver's own path instead of reimplementing it.
+//
+// Safe for the image: e-paper holds its last frame with no power at all, which is
+// the whole premise of the farewell screen.
+void epdc_power_off_wait();
+
+// Last panel step before deep sleep, after the rails are verifiably down:
+// return every ESP32 pin on the panel bus (data, CL, SPH, SPV, CKV, LE) to
+// plain GPIO driven LOW, so gpio_deep_sleep_hold_en() freezes them low. The
+// driver leaves CKV/SPV high after powerOff(), and a held-high pin back-feeds
+// the panel's unpowered logic rail for the whole sleep. The panel must not be
+// driven again after this; nothing re-inits the bus until the next boot.
+void epdc_park_pins();
+
+// After epdc_power_off_wait(): read back what the PMIC and the expander's panel
+// control lines actually hold, and if any rail is still enabled, drive the
+// driver's own power-off sequence from here (TPS ENABLE=0, then OE/MODE/PWRUP/
+// VCOM low, then WAKEUP low). Logs before and after. Returns true when the
+// panel is verifiably down. The blind wait used to be the only evidence, and a
+// device measured ~30 mA "off" says it was not always enough.
+bool epdc_power_off_verify();
+
+// Drive the whole panel to white. `passes` > 1 repeats it: e-paper keeps its
+// image through power-off, so the first boot after a different firmware needs
+// several passes to shift what is physically on the glass (one was not enough,
+// verified on hardware).
+//
+// Leaves the framebuffer untouched — it resets what is on the GLASS and the
+// driver's record of it, not what the renderers have drawn. So the sequence
+// "draw, clear, paint" puts the drawn frame on a scrubbed panel, which is what
+// the shutdown screen wants.
+void epdc_clear(int passes = 1);
+
+// Scrub ONLY the regions that differ between the glass and the frame about to
+// be painted, instead of the whole panel.
+//
+// WHY THIS EXISTS. The driver's delta engine never drives a black pixel black
+// again — the dark plane is masked to pixels the screenbuffer records as white
+// (EPD_Painter.S, epd_painter_ink_dual) — so residue never comes from
+// over-driving. It comes from the other direction: the same kernel records
+// "lightened pixels ... as white" the moment it issues one light pulse. If deep
+// black does not fully erase in that pulse, the leftover grey is now INVISIBLE
+// to the driver — its model says white, so no later frame will ever drive those
+// pixels again. That is the haze the dashboard used to leave under the map's
+// streets, and why only a clear fixed it: a clear is the one operation that
+// resyncs the driver's model to the glass.
+//
+// A whole-panel clear was a blunt way to buy that resync. This clears the
+// changed rectangles only (computeDirtyRects + a SOFT partial clear).
+//
+// `tolerance` is how many wasted pixels of clean area may sit inside one
+// rectangle before it is split — 0 gives tight rects, large values collapse
+// toward one full-screen rect. It matters because the driver caps the scan at
+// 32 rectangles and stops scanning once it hits that ceiling, leaving anything
+// below unscrubbed; merging generously keeps the count under it.
+//
+// Falls back to a whole-panel clear on the epdiy backend, which has no
+// dirty-rect machinery.
+void epdc_clear_dirty(int tolerance = 0);
+
+// A hard clear of just these rectangles, in rotated (UI) coordinates, for use straight
+// after epdc_clear_dirty(), before the paint. Every pixel in them is driven whatever
+// it held, so what was on the glass before cannot show through what is drawn next. A
+// fine tone needs this: its dots sample old content pixel by pixel, and a dot that
+// lands on a pixel with a different history shows. Flashes those rectangles.
+// Panel scan only, and a no-op otherwise.
+void epdc_clear_rects(const EpdRect* rects, int count);
+
+// Scrub an exact shape instead of rectangles: bit n of `bits` is byte n of the
+// framebuffer. Those pixels go to white and the next paint draws them from there, and
+// nothing else on the panel is touched. Panel scan only, and a no-op otherwise.
+void epdc_scrub_bits(const uint8_t* bits);
+
+// Number of grey levels the driver is currently using (4 by default). Exposed
+// so the UI can decide between real greys and screentones.
+// Ink height of a digit ('0') in this font. Use this, not the height reported
+// by epd_get_string_rect, to decide whether a number fits a box: that rect is
+// the background band (ascender..descender), which is far taller than the
+// digits and rejects faces that would fit comfortably.
+int epdc_digit_height(const EpdFont* font);
+
+int epdc_grey_levels();
+
+// ---------------------------------------------------------------------------
+// The epdiy drawing API we implement. Signatures match epdiy exactly.
+// ---------------------------------------------------------------------------
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int epd_width();
+int epd_height();
+int epd_rotated_display_width();
+int epd_rotated_display_height();
+void epd_set_rotation(enum EpdRotation rotation);
+enum EpdRotation epd_get_rotation();
+
+void epd_draw_pixel(int x, int y, uint8_t color, uint8_t* framebuffer);
+void epd_draw_hline(int x, int y, int length, uint8_t color, uint8_t* framebuffer);
+void epd_draw_vline(int x, int y, int length, uint8_t color, uint8_t* framebuffer);
+void epd_draw_line(int x0, int y0, int x1, int y1, uint8_t color, uint8_t* framebuffer);
+void epd_fill_rect(EpdRect rect, uint8_t color, uint8_t* framebuffer);
+void epd_draw_rect(EpdRect rect, uint8_t color, uint8_t* framebuffer);
+void epd_draw_circle(int x0, int y0, int r, uint8_t color, uint8_t* framebuffer);
+void epd_fill_circle(int x0, int y0, int r, uint8_t color, uint8_t* framebuffer);
+void epd_fill_triangle(int x0, int y0, int x1, int y1, int x2, int y2,
+                       uint8_t color, uint8_t* framebuffer);
+
+EpdFontProperties epd_font_properties_default();
+// Returns EpdDrawError to match epdiy's declaration exactly; always SUCCESS
+// here, since there is no hardware to fail.
+enum EpdDrawError epd_write_string(const EpdFont* font, const char* string,
+                                   int* cursor_x, int* cursor_y,
+                                   uint8_t* framebuffer,
+                                   const EpdFontProperties* properties);
+EpdRect epd_get_string_rect(const EpdFont* font, const char* string, int x, int y,
+                            int margin, const EpdFontProperties* properties);
+
+#ifdef __cplusplus
+}
+#endif

@@ -1,0 +1,112 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+#include "map_view.h"
+
+// Manages vector maps on the SD card plus the embedded default map. Two kinds
+// of user map coexist:
+//   * H3 tiles under /maps/tiles/<h3id>.ebm — small per-cell maps streamed
+//     from the phone one at a time. Indexed by bbox in RAM; loaded on demand
+//     into a small PSRAM LRU cache while rendering, so resident memory stays
+//     bounded no matter how much of the world is on the card.
+//   * Whole maps under /maps/*.ebm — the older single-blob format, kept as a
+//     fallback and loaded entirely into PSRAM when it covers the position.
+// The embedded default map is the final fallback.
+
+namespace map_store {
+
+// Load tiles index + the best whole map for a starting position (or the
+// embedded default). Call after the SD card is mounted.
+void begin(double lat, double lon);
+
+// If the currently loaded whole map doesn't cover (lat, lon), load the
+// downloaded one that does. Answered from the in-RAM bounds index, so outside
+// the downloaded area (where there is nothing to load) this costs no SD access
+// at all — it runs every second, on the bus the recorder writes the FIT to.
+void ensureForPosition(double lat, double lon);
+
+// Free every cached tile blob (PSRAM). The map redraws exactly the same, just
+// re-reading from the card; call it before staging something large in PSRAM,
+// such as an OTA image, which needs its ~2 MB in one contiguous piece.
+void releaseCache();
+
+// Re-read the tile and whole-map indexes from the card. Call after something
+// other than saveTile/saveAndActivate could have changed /maps — i.e. when a
+// host computer releases the SD after mounting it over USB.
+void rescanCard();
+
+// Called between tiles while a frame is being built. Return false to abandon
+// the rest of it — the frame draws the tiles it already has, which are the ones
+// nearest the rider, and the caller can get on with whatever was more urgent.
+using KeepRendering = bool (*)();
+// Render the map around (lat, lon) into `out`: projects every H3 tile that
+// overlaps the viewport (loading them from SD on demand), falling back to the
+// whole-map / embedded blob where no tiles cover. Replaces a direct
+// map_tiles::project() call.
+// `cachedOnly` draws ONLY tiles already resident, never touching the card, and
+// marks the frame partial if that left anything out. It is what makes a zoom
+// feel immediate: the ground around the rider is already in RAM at any zoom it
+// was just drawn at, so it can be re-projected and put on the glass in
+// milliseconds while the outer ring is still being read.
+void renderInto(double lat, double lon, float metersPerPixel, int centerX,
+                int centerY, float rotateDeg, MapScreenData& out,
+                KeepRendering keepGoing = nullptr, bool cachedOnly = false);
+
+// Save a freshly received whole .ebm to /maps/<name>.ebm and make it active.
+// Returns false on SD/parse error.
+bool saveAndActivate(const char* name, const uint8_t* data, size_t len);
+
+// Save a single received H3 tile to /maps/tiles/<id>.ebm and refresh the
+// index so it renders immediately. Returns false on SD/parse error.
+// `version`: the record the phone sent with it ("cdn:<hash>" / "phone:<secs>",
+// tile_versions.h), kept in /maps/tiles.ver for tileVersions(). Null for an
+// app that sends none, which clears any earlier record for the file.
+bool saveTile(const char* id, const uint8_t* data, size_t len,
+              const char* version = nullptr);
+
+// Whether tile <id> (H3 id without extension) is already on the card.
+bool hasTile(const char* id);
+
+// Whether any map (a downloaded tile, a whole map, or the embedded default)
+// actually covers (lat, lon). False => the map screen has nothing to draw here
+// and should show a "download this area" prompt.
+bool coversPosition(double lat, double lon);
+// Changes whenever a tile or POI file does, so anything derived from them can tell
+// it is out of date.
+uint32_t generation();
+// Every tile a north-up view at this zoom wants is on the card, so it has no blank
+// ground in it. Reads no tile data.
+bool coversView(double lat, double lon, float metersPerPixel);
+
+// Terrain elevation (metres) at (lat, lon), interpolated from the DEM grid
+// baked into the covering tile (ELV1 block). NAN if no tile/elevation covers
+// the point. Call from the UI task only (shares the tile LRU cache).
+float elevationAt(double lat, double lon);
+
+// Copy up to maxOut tile ids (H3 ids, no extension) into out for the app's
+// dedup check. Returns the count written. `sizes` (optional, maxOut entries)
+// gets each file's size, read from its directory entry.
+int listTileIds(char out[][24], int maxOut, const char* ext = ".ebm",
+                uint32_t* sizes = nullptr);
+
+// The version each of `ids` was saved with (.poi files when `poi`), into
+// vers[i]: "" where the device has no record, or the record is for a file of a
+// different size than sizes[i] (changed behind the device's back, e.g. over
+// USB). One sequential read of /maps/tiles.ver; compacts it when it is mostly
+// superseded records. BLE server task (SD access).
+void tileVersions(const char (*ids)[24], const uint32_t* sizes, int n, bool poi,
+                  char (*vers)[24]);
+
+// Free bytes on the SD card (for the app to show remaining space).
+uint32_t sdFreeKB();
+
+// Coverage bounds of a stored map, for the app's "already downloaded" overlay.
+struct MapBounds { double s, w, n, e; bool builtin; };
+
+// Fill `out` with the embedded default + each downloaded /maps/*.ebm. Returns
+// the count. Reads only each file's 36-byte header.
+int listMaps(MapBounds* out, int maxOut);
+
+}

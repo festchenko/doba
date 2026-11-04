@@ -1,0 +1,448 @@
+#include "settings.h"
+#include "ble_sensors.h"
+#include <string.h>
+
+#include <Arduino.h>
+#include <Preferences.h>
+#include <cmath>
+
+#include "config.h"
+#include "mesh_proto.h"
+#include "wheel_speed.h"
+
+namespace {
+
+Preferences prefs;
+float compassOff = NAN;
+int ftp = FTP_WATTS;
+int tz = TIMEZONE_OFFSET_MINUTES;
+int bl = 0;  // backlight level 0-3; OFF until the rider turns it on — e-paper
+             // needs no light in daylight, and a lit panel drains a fresh device
+bool miles = false;  // false = km, true = miles
+bool clk24 = true;   // true = 24-hour clock, false = 12-hour
+bool usbDrv = true;  // true = expose SD as USB drive when plugged into a host
+// false = a field whose sensor is unpaired is dropped from the dashboard and
+// the rest re-pack; true = it stays, showing no data. ON by default: a new
+// device should show the layout the rider configured, gaps and all, rather
+// than a silently re-packed one that hides which sensors are missing.
+bool showOff = true;
+uint16_t mapLayerMask = 0x003F;   // MAP_LAYERS_ALL: every cycling layer on
+// Seconds of no movement (power, cadence, wheel and GPS all quiet) before the
+// ride timer auto-pauses. 0 disables auto-pause entirely.
+int autoPause = 10;
+int wheelMm = wheel_speed::kDefaultCircMm;   // wheel speed sensor circumference
+bool wkPauseStep = false;
+bool panelScanOn = false;   // paint through epd_scan.cpp, not the driver's path
+// Per kind, a ';'-separated list of paired addresses, most recent first (max
+// SENSOR_MAX_PAIRED). Stored under the same NVS key as the old single address,
+// which parses as a one-entry list — no migration.
+char addrs[ble_sensors::KIND_COUNT][settings::SENSOR_MAX_PAIRED * 18 + 4] = {};
+char addrScratch[ble_sensors::KIND_COUNT][18];   // sensorAddr()/sensorAddrAt() return into these
+char names[ble_sensors::KIND_COUNT][32] = {};   // remembered vendor/model per paired kind
+double lastLat = 0, lastLon = 0;
+bool rtcSynced = false;  // has GPS ever written UTC to the coin-cell RTC?
+// Mesh messaging, OFF until the rider turns it on. Joining a public mesh means
+// announcing yourself on it and spending battery listening, and neither should
+// happen because a firmware update landed — it is a choice, so the device waits to
+// be asked. The Mesh tab has the switch.
+bool meshOn = false;
+// "" = no explicit channel; mesh_service derives the name from the modem preset.
+char meshChan[16] = "";
+uint8_t meshKey = 1;
+// Modem preset index into mesh::kPresets. Unlike the channel name this IS stored
+// as a plain value: it is a user choice with no compile-time twin to follow.
+uint8_t meshPresetIdx = MESH_PRESET_DEFAULT;
+// Bitmask of channels we share our position on. 0 = none, which is the default:
+// telling a public mesh where you are should be a decision, not an accident.
+uint8_t meshPosMask = 0;
+// Region index (resolved from the stored NAME at load), TX power (0 = max the
+// region and radio allow) and frequency-slot override (0 = from the name).
+uint8_t meshRegionIdx = 0;
+int8_t  meshTxDbm = 0;
+uint8_t meshSlot = 0;
+char meshLong[40] = "";
+char phName[32] = "";   // paired phone's GAP name, ASCII-folded
+char phId[20] = "";     // its identity address, "aa:bb:cc:dd:ee:ff"
+char meshShort[8] = "";
+const char* KEYS[ble_sensors::KIND_COUNT] = {"sens_hr", "sens_pwr", "sens_cad", "sens_rdr", "sens_spd"};
+const char* NAME_KEYS[ble_sensors::KIND_COUNT] = {"snm_hr", "snm_pwr", "snm_cad", "snm_rdr", "snm_spd"};
+
+}  // namespace
+
+namespace settings {
+
+void begin() {
+    prefs.begin("bike", false);
+    compassOff = prefs.getFloat("cmpoff", NAN);
+    ftp = prefs.getInt("ftp", FTP_WATTS);
+    tz = prefs.getInt("tz", TIMEZONE_OFFSET_MINUTES);
+    bl = prefs.getInt("bl", 0);
+    miles = prefs.getBool("miles", false);
+    clk24 = prefs.getBool("clk24", true);
+    // Key bumped to usbdrv2 so the new OFF default takes effect even on devices
+    // that had the old (default-ON) "usbdrv" value stored. OFF = the device
+    // keeps the SD (logs/recording) when plugged in.
+    usbDrv = prefs.getBool("usbdrv2", false);
+    showOff = prefs.getBool("showoff", true);
+    mapLayerMask = prefs.getUShort("maplayers", 0x003F);
+    autoPause = prefs.getInt("apause", 10);
+    wkPauseStep = prefs.getBool("wkpstep", false);
+    panelScanOn = prefs.getBool("pscan", false);
+    for (int k = 0; k < ble_sensors::KIND_COUNT; ++k) {
+        prefs.getString(KEYS[k], addrs[k], sizeof(addrs[k]));
+        prefs.getString(NAME_KEYS[k], names[k], sizeof(names[k]));
+    }
+    lastLat = prefs.getDouble("lastlat", 0);
+    lastLon = prefs.getDouble("lastlon", 0);
+    rtcSynced = prefs.getBool("rtcok", false);
+    meshOn = prefs.getBool("meshon", false);
+    prefs.getString("meshchan", meshChan, sizeof(meshChan));   // "" = use the preset
+    meshKey = (uint8_t)constrain(prefs.getUChar("meshkey", 1), 1, 10);
+    meshPresetIdx = prefs.getUChar("meshpreset", MESH_PRESET_DEFAULT);
+    meshPosMask = prefs.getUChar("meshposch", 0);
+    // A preset written by a newer firmware that knew more of them must not leave
+    // this build driving the radio with garbage.
+    if (meshPresetIdx >= mesh::PRESET_COUNT) meshPresetIdx = MESH_PRESET_DEFAULT;
+    {
+        // Stored by name: a region this build does not know (written by a newer
+        // one) must not leave the radio on an index that means something else
+        // here, so it falls back to the build default rather than to slot 0.
+        char rn[16] = "";
+        prefs.getString("meshregion", rn, sizeof(rn));
+        int ri = mesh::regionIndexByName(rn);
+        if (ri < 0) ri = mesh::regionIndexByName(MESH_REGION_DEFAULT);
+        meshRegionIdx = ri < 0 ? 0 : (uint8_t)ri;
+    }
+    meshTxDbm = (int8_t)constrain(prefs.getChar("meshtxdbm", 0), 0, MESH_TX_DBM_MAX);
+    meshSlot = prefs.getUChar("meshslot", 0);
+    prefs.getString("meshlong", meshLong, sizeof(meshLong));
+    prefs.getString("meshshort", meshShort, sizeof(meshShort));
+    prefs.getString("phname", phName, sizeof(phName));
+    prefs.getString("phid", phId, sizeof(phId));
+    wheelMm = prefs.getInt("wheelmm", wheel_speed::kDefaultCircMm);
+    if (!wheel_speed::validCircMm(wheelMm)) wheelMm = wheel_speed::kDefaultCircMm;
+    Serial.printf("[cfg] ftp=%dW tz=%dmin wheel=%dmm sensors=[%s|%s|%s|%s|%s]\n", ftp, tz,
+                  wheelMm, addrs[0], addrs[1], addrs[2], addrs[3], addrs[4]);
+}
+
+int ftpWatts() { return ftp; }
+void setFtpWatts(int w) {
+    ftp = constrain(w, 50, 500);
+    prefs.putInt("ftp", ftp);
+}
+
+bool panelScan() { return panelScanOn; }
+void setPanelScan(bool on) {
+    panelScanOn = on;
+    prefs.putBool("pscan", on);
+}
+
+bool workoutPauseEachBlock() { return wkPauseStep; }
+void setWorkoutPauseEachBlock(bool on) {
+    wkPauseStep = on;
+    prefs.putBool("wkpstep", on);
+}
+
+int autoPauseSec() { return autoPause; }
+void setAutoPauseSec(int s) {
+    autoPause = constrain(s, 0, 120);
+    prefs.putInt("apause", autoPause);
+}
+
+int wheelCircMm() { return wheelMm; }
+bool setWheelCircMm(int mm) {
+    if (!wheel_speed::validCircMm(mm)) return false;
+    if (mm != wheelMm) {
+        wheelMm = mm;
+        prefs.putInt("wheelmm", wheelMm);
+    }
+    return true;
+}
+
+int tzMinutes() { return tz; }
+void setTzMinutes(int m) {
+    tz = constrain(m, -12 * 60, 14 * 60);
+    prefs.putInt("tz", tz);
+}
+
+int backlight() { return bl; }
+void setBacklight(int b) {
+    bl = constrain(b, 0, 3);
+    prefs.putInt("bl", bl);
+}
+
+bool useMiles() { return miles; }
+void setUseMiles(bool m) {
+    miles = m;
+    prefs.putBool("miles", miles);
+}
+
+bool clock24h() { return clk24; }
+void setClock24h(bool h) {
+    clk24 = h;
+    prefs.putBool("clk24", clk24);
+}
+
+bool usbDrive() { return usbDrv; }
+void setUsbDrive(bool on) {
+    usbDrv = on;
+    prefs.putBool("usbdrv2", usbDrv);
+}
+
+bool showOffline() { return showOff; }
+uint16_t mapLayers() { return mapLayerMask; }
+void setMapLayers(uint16_t mask) {
+    if (mask == mapLayerMask) return;
+    mapLayerMask = mask;
+    prefs.putUShort("maplayers", mapLayerMask);
+}
+void setShowOffline(bool on) {
+    showOff = on;
+    prefs.putBool("showoff", showOff);
+}
+
+// Split addrs[kind] into up to SENSOR_MAX_PAIRED entries of `out`.
+static int splitAddrs(int kind, char out[][18]) {
+    int n = 0;
+    const char* p = addrs[kind];
+    while (*p && n < SENSOR_MAX_PAIRED) {
+        const char* e = strchr(p, ';');
+        size_t len = e ? (size_t)(e - p) : strlen(p);
+        if (len > 0 && len < 18) {
+            memcpy(out[n], p, len);
+            out[n][len] = 0;
+            ++n;
+        }
+        if (!e) break;
+        p = e + 1;
+    }
+    return n;
+}
+
+static void joinAddrs(int kind, char in[][18], int n) {
+    addrs[kind][0] = 0;
+    size_t used = 0;
+    for (int i = 0; i < n; ++i) {
+        used += snprintf(addrs[kind] + used, sizeof(addrs[kind]) - used, "%s%s",
+                         i ? ";" : "", in[i]);
+    }
+    prefs.putString(KEYS[kind], addrs[kind]);
+}
+
+int sensorAddrCount(int kind) {
+    if (kind < 0 || kind >= ble_sensors::KIND_COUNT) return 0;
+    char list[SENSOR_MAX_PAIRED][18];
+    return splitAddrs(kind, list);
+}
+
+const char* sensorAddrAt(int kind, int i) {
+    if (kind < 0 || kind >= ble_sensors::KIND_COUNT) return "";
+    char list[SENSOR_MAX_PAIRED][18];
+    int n = splitAddrs(kind, list);
+    if (i < 0 || i >= n) return "";
+    snprintf(addrScratch[kind], sizeof(addrScratch[kind]), "%s", list[i]);
+    return addrScratch[kind];
+}
+
+const char* sensorAddr(int kind) { return sensorAddrAt(kind, 0); }
+
+bool sensorPaired(int kind, const char* addr) {
+    if (kind < 0 || kind >= ble_sensors::KIND_COUNT || !addr || !addr[0]) return false;
+    char list[SENSOR_MAX_PAIRED][18];
+    int n = splitAddrs(kind, list);
+    for (int i = 0; i < n; ++i)
+        if (strcasecmp(list[i], addr) == 0) return true;
+    return false;
+}
+
+void addSensorAddr(int kind, const char* addr) {
+    if (kind < 0 || kind >= ble_sensors::KIND_COUNT || !addr || !addr[0] || strlen(addr) >= 18) return;
+    char list[SENSOR_MAX_PAIRED][18];
+    int n = splitAddrs(kind, list);
+    // Move-to-front: the newest pairing is the first the scanner reports and
+    // the one the console/app calls "the" paired sensor.
+    char next[SENSOR_MAX_PAIRED][18];
+    int m = 0;
+    snprintf(next[m++], 18, "%s", addr);
+    for (int i = 0; i < n && m < SENSOR_MAX_PAIRED; ++i)
+        if (strcasecmp(list[i], addr) != 0) snprintf(next[m++], 18, "%s", list[i]);
+    joinAddrs(kind, next, m);
+}
+
+void removeSensorAddr(int kind, const char* addr) {
+    if (kind < 0 || kind >= ble_sensors::KIND_COUNT || !addr) return;
+    char list[SENSOR_MAX_PAIRED][18];
+    int n = splitAddrs(kind, list);
+    char next[SENSOR_MAX_PAIRED][18];
+    int m = 0;
+    for (int i = 0; i < n; ++i)
+        if (strcasecmp(list[i], addr) != 0) snprintf(next[m++], 18, "%s", list[i]);
+    joinAddrs(kind, next, m);
+}
+
+void clearSensorAddrs(int kind) {
+    if (kind < 0 || kind >= ble_sensors::KIND_COUNT) return;
+    addrs[kind][0] = 0;
+    prefs.putString(KEYS[kind], "");
+}
+
+const char* sensorName(int kind) {
+    return (kind >= 0 && kind < ble_sensors::KIND_COUNT) ? names[kind] : "";
+}
+
+void setSensorName(int kind, const char* name) {
+    if (kind < 0 || kind >= ble_sensors::KIND_COUNT || !name || !name[0]) return;
+    snprintf(names[kind], sizeof(names[kind]), "%s", name);
+    prefs.putString(NAME_KEYS[kind], names[kind]);
+}
+
+const char* phoneName() { return phName; }
+const char* phoneId() { return phId; }
+
+void setPhoneId(const char* id) {
+    if (!id || strcmp(id, phId) == 0) return;   // no flash write per reconnect
+    snprintf(phId, sizeof(phId), "%s", id);
+    prefs.putString("phid", phId);
+}
+
+void setPhoneName(const char* name) {
+    if (!name || strcmp(name, phName) == 0) return;
+    snprintf(phName, sizeof(phName), "%s", name);
+    prefs.putString("phname", phName);
+}
+
+void clearPhone() {
+    phName[0] = 0;
+    phId[0] = 0;
+    prefs.remove("phname");
+    prefs.remove("phid");
+}
+
+bool lastPosition(double& lat, double& lon) {
+    if (lastLat == 0 && lastLon == 0) return false;
+    lat = lastLat;
+    lon = lastLon;
+    return true;
+}
+
+void setLastPosition(double lat, double lon) {
+    lastLat = lat;
+    lastLon = lon;
+    prefs.putDouble("lastlat", lat);
+    prefs.putDouble("lastlon", lon);
+}
+
+float compassOffsetDeg() { return compassOff; }
+void setCompassOffsetDeg(float deg) {
+    // Written rarely on purpose — NVS has a finite erase budget and this is a
+    // slowly-learned constant, not a live value. aux_sensors only calls this
+    // when the learned offset has actually drifted a few degrees.
+    compassOff = deg;
+    prefs.putFloat("cmpoff", deg);
+}
+
+bool meshEnabled() { return meshOn; }
+void setMeshEnabled(bool on) {
+    if (meshOn == on) return;
+    meshOn = on;
+    prefs.putBool("meshon", on);
+}
+
+// "" means the rider has chosen no channel name, and mesh_service then derives it
+// from the modem preset the way a stock Meshtastic node does. Deliberately NOT
+// defaulted to a fixed string here: pinning a name would keep a device on
+// LongFast's frequency slot after its preset moved to MediumFast, which no stock
+// node would be listening on.
+const char* meshChannel() { return meshChan; }
+uint8_t meshChannelKey() { return meshKey; }
+
+void setMeshChannel(const char* name, uint8_t keyIndex) {
+    // An EMPTY name is a real value here — it means "no pinned channel, follow the
+    // modem preset" — so it must be STORED, not rejected. This guard existed in
+    // three layers (here, mesh_service::setChannel and applyChannelChange) and
+    // this was the last one: clearing the channel worked in RAM and silently came
+    // back on the next boot, because the empty string never reached NVS.
+    if (!name) return;
+    snprintf(meshChan, sizeof(meshChan), "%s", name);
+    meshKey = (uint8_t)constrain((int)keyIndex, 1, 10);
+    prefs.putString("meshchan", meshChan);
+    prefs.putUChar("meshkey", meshKey);
+}
+
+size_t meshPrivateChannels(uint8_t* out, size_t cap) {
+    return prefs.getBytes("meshchans", out, cap);
+}
+
+void setMeshPrivateChannels(const uint8_t* data, size_t len) {
+    // An empty set removes the key rather than storing zero bytes, so a device
+    // with no private channels reads back cleanly.
+    if (!data || len == 0) prefs.remove("meshchans");
+    else prefs.putBytes("meshchans", data, len);
+}
+
+uint8_t meshPositionChannels() { return meshPosMask; }
+void setMeshPositionChannels(uint8_t mask) {
+    if (meshPosMask == mask) return;
+    meshPosMask = mask;
+    prefs.putUChar("meshposch", mask);
+}
+
+uint8_t meshPreset() { return meshPresetIdx; }
+void setMeshPreset(uint8_t index) {
+    if (index >= mesh::PRESET_COUNT) return;
+    meshPresetIdx = index;
+    prefs.putUChar("meshpreset", index);
+}
+
+uint8_t meshRegion() { return meshRegionIdx; }
+void setMeshRegion(uint8_t index) {
+    if (index >= mesh::REGION_COUNT) return;
+    meshRegionIdx = index;
+    prefs.putString("meshregion", mesh::kRegions[index].name);
+}
+
+int8_t meshTxPower() { return meshTxDbm; }
+void setMeshTxPower(int8_t dbm) {
+    meshTxDbm = (int8_t)constrain(dbm, 0, MESH_TX_DBM_MAX);
+    prefs.putChar("meshtxdbm", meshTxDbm);
+}
+
+uint8_t meshFreqSlot() { return meshSlot; }
+void setMeshFreqSlot(uint8_t slot) {
+    meshSlot = slot;
+    prefs.putUChar("meshslot", slot);
+}
+
+const char* meshLongName() { return meshLong; }
+const char* meshShortName() { return meshShort; }
+
+void setMeshNames(const char* longName, const char* shortName) {
+    if (longName && longName[0]) {
+        snprintf(meshLong, sizeof(meshLong), "%s", longName);
+        prefs.putString("meshlong", meshLong);
+    }
+    if (shortName && shortName[0]) {
+        snprintf(meshShort, sizeof(meshShort), "%s", shortName);
+        prefs.putString("meshshort", meshShort);
+    }
+}
+
+bool meshPrivateKey(uint8_t out[32]) {
+    // Read straight from NVS rather than cached: it is needed once per boot, and
+    // a copy of a private key sitting in a global for no reason is one too many.
+    return prefs.getBytesLength("meshpriv") == 32 &&
+           prefs.getBytes("meshpriv", out, 32) == 32;
+}
+
+void setMeshPrivateKey(const uint8_t key[32]) {
+    prefs.putBytes("meshpriv", key, 32);
+}
+
+bool rtcTrusted() { return rtcSynced; }
+void setRtcTrusted(bool ok) {
+    if (rtcSynced == ok) return;
+    rtcSynced = ok;
+    prefs.putBool("rtcok", ok);
+}
+
+}  // namespace settings

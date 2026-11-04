@@ -1,0 +1,1320 @@
+#include "ride_recorder.h"
+
+#include <Arduino.h>
+#include <SD.h>
+#include <SPI.h>
+#include <driver/gpio.h>
+#include <dirent.h>
+#include <sys/stat.h>
+
+#include <algorithm>
+
+#include "ff.h"
+
+#include "config.h"
+#include "fit_writer.h"
+#include "sd_bus.h"
+#include "settings.h"
+#include "speed_source.h"
+#include "usb_storage.h"
+#include "diag.h"
+#include "crash_report.h"
+
+namespace {
+
+FitWriter fit;
+bool sdOk = false;
+// Whether the last mount attempt found a card at all: it answered CMD0 but
+// SD.begin() still failed. That is a card the FAT driver cannot read — exFAT
+// (the SDXC default; FatFs is built with FF_FS_EXFAT 0) or unformatted — and
+// the rider fixes it differently from an empty slot, so the UI says which.
+bool cardAnswered = false;
+// Set when a mount succeeds AFTER boot gave up. Everything gated on the boot
+// mount (routes, the map index, USB mass storage) was skipped in that case and
+// has to be re-run, or the card sits mounted and completely unused.
+bool lateMount = false;
+char ridePath[48];
+
+// The rider started a ride and hasn't stopped it. Deliberately NOT derived from
+// fit.isOpen(): the FIT handle lives on an SPI bus shared with the map store,
+// the diag log and USB mass storage, and a ride must outlive any trouble down
+// there. Only startRide()/stopRide() move this.
+bool rideActive = false;
+bool loggedFileLost = false;   // so a lost handle logs once, not once a second
+// A ride file write came up short (FitWriter::writeFailed): noticed once, and
+// whether it was the card filling up, which the rider is told about.
+bool fileWriteFailed = false;
+bool cardFull = false;
+
+double lastLat = 0, lastLon = 0;
+bool havePrevFix = false;
+// millis() of the last position written. The phone path needs the real gap
+// between points to derive speed; the device path is a steady 1 Hz.
+uint32_t lastFixMs = 0;
+// The phone fix already written, so a position that arrives every ~1 s is not
+// re-stamped on every 1 s tick, and which source the log last reported.
+uint32_t lastPhoneFixMs = 0;
+bool phoneSourceLogged = false;
+double distanceM = 0;
+// Wheel-sensor distance baseline: RideState::wheelDistM only ever grows, so
+// each tick's travel is the difference from the last tick's value.
+double lastWheelDistM = 0;
+bool haveWheelBase = false;
+uint32_t timerS = 0;
+uint32_t lastFlushS = 0;
+
+// Auto-pause. timerS only counts while the bike is (apparently) moving;
+// pausedS collects the rest, so wall-clock elapsed is always timerS + pausedS
+// — that sum is what endUtc fallbacks and the FIT session's elapsed/timer
+// split rely on. stoppedS is the run of consecutive stopped ticks that has to
+// reach settings::autoPauseSec() before the timer actually freezes.
+bool autoPaused = false;
+uint32_t stoppedS = 0;
+uint32_t pausedS = 0;
+uint32_t pauseEntryS = 0;   // pausedS when this pause began, for the resume log
+uint32_t lastMoveMs = 0;    // last tick with POSITIVE movement evidence
+uint32_t manualResumeMs = 0;   // when the rider tapped resume; 0 = never
+
+// Where the phone last said we were when the bike stopped — the anchor for
+// motionEvidence's fallback witness. Seated by the pause state machine when
+// movement ends, dropped the moment anything says we're moving, so each stop
+// measures displacement from its own stopping point rather than a stale one.
+double phoneAnchorLat = 0, phoneAnchorLon = 0;
+float phoneAnchorAccM = 0;
+bool phoneAnchorValid = false;
+
+// Stats for the summary screen
+uint32_t movingS = 0;
+time_t startUtc = 0, endUtc = 0;
+uint64_t powerSum = 0;
+uint32_t powerCount = 0;
+uint64_t hrSum = 0;
+uint32_t hrCount = 0;
+double climbedM = 0;
+float climbBaseAlt = 0;
+bool climbBaseValid = false;
+
+// Normalized power: 30 s rolling average, 4th-power mean
+uint16_t npRing[30];
+int npRingCount = 0, npRingHead = 0;
+double npSum4 = 0;
+uint32_t npCount = 0;
+
+// The interrupted ride boot found, held for the rider's CONTINUE / SAVE /
+// DISCARD (see recoverInterruptedRides). The scan's replayed stats stay here
+// so the prompt can show real numbers and CONTINUE can restore them.
+char pendingRecPath[48] = "";
+FitWriter::RepairResult pendingScan;
+bool havePendingRec = false;
+
+// Grade: altitude change over the last ~30 m of travel
+double gradeMarkDist = 0;
+float gradeMarkAlt = 0;
+bool gradeMarkValid = false;
+
+double haversineM(double lat1, double lon1, double lat2, double lon2) {
+    const double R = 6371000.0;
+    double dLat = radians(lat2 - lat1);
+    double dLon = radians(lon2 - lon1);
+    double a = sin(dLat / 2) * sin(dLat / 2) +
+               cos(radians(lat1)) * cos(radians(lat2)) *
+               sin(dLon / 2) * sin(dLon / 2);
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a));
+}
+
+void makeRidePath(char* out, size_t len, time_t utc) {
+    struct tm tmv;
+    // Named for the rider's wall clock, not UTC — an evening ride used to get
+    // tomorrow's date in its name (UTC rolls over at 4-5 pm Pacific). Same
+    // shifted-epoch trick as the diag log (diag.cpp localNow()): only the NAME
+    // is local; the timestamps inside the FIT stay true UTC, which is what
+    // every FIT consumer expects.
+    time_t local = utc + (time_t)settings::tzMinutes() * 60;
+    gmtime_r(&local, &tmv);
+    snprintf(out, len, RIDE_DIR "/%04d%02d%02d-%02d%02d%02d.fit",
+             tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+             tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+}
+
+// A reset mid-ride (watchdog, brownout, flat battery) leaves the ride on the
+// card without the lap/session/activity tail and CRC that make it an activity,
+// so Strava and friends reject it — the ride looks lost even though every
+// record is sitting there. Put those files back together at boot, before the
+// UI or a USB host can touch the card.
+//
+// IMPORTANT: gather the filenames with the directory open, then CLOSE it before
+// opening any file to repair. Opening a file (repair) while a directory handle
+// is still iterating is a known way to wedge / corrupt the ESP32 SD (FatFs)
+// stack — which showed up as "the device can't recognize the SD card".
+void recoverInterruptedRides() {
+    // Keep the NEWEST files when the directory outgrows the scan window, not
+    // the first ones FAT happens to hand back. FAT iterates in entry order
+    // (roughly oldest-first), so "stop after 32" meant a card with 32+ rides
+    // never scanned recent files at all — this morning's interrupted ride
+    // included, silently. Basenames are timestamps, so lexical order IS
+    // chronological: evict the smallest name when the window is full.
+    constexpr int MAX_SCAN = 32;
+    char names[MAX_SCAN][40];
+    int nameCount = 0;
+    int totalSeen = 0;
+
+    sdLock();
+    File dir = SD.open(RIDE_DIR);
+    if (dir) {
+        for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+            if (!f.isDirectory()) {
+                const char* nm = f.name();
+                const char* base = strrchr(nm, '/');
+                base = base ? base + 1 : nm;
+                // Skip our own quarantine markers — they are not rides, and
+                // repairing one would only breed a ".bad.bad".
+                size_t len = strlen(base);
+                if (len >= 4 && strcmp(base + len - 4, ".bad") == 0) {
+                    f.close();
+                    continue;
+                }
+                totalSeen++;
+                int slot = -1;
+                if (nameCount < MAX_SCAN) {
+                    slot = nameCount++;
+                } else {
+                    int minIdx = 0;
+                    for (int i = 1; i < MAX_SCAN; ++i)
+                        if (strcmp(names[i], names[minIdx]) < 0) minIdx = i;
+                    if (strcmp(base, names[minIdx]) > 0) slot = minIdx;
+                }
+                if (slot >= 0) {
+                    strncpy(names[slot], base, sizeof(names[0]) - 1);
+                    names[slot][sizeof(names[0]) - 1] = 0;
+                }
+            }
+            f.close();
+        }
+        dir.close();   // directory fully closed before any repair opens a file
+    }
+    if (totalSeen > MAX_SCAN)
+        diag::log("ride recovery: %d files on card, scanning the newest %d",
+                  totalSeen, MAX_SCAN);
+
+    char toDelete[8][48];
+    char toRepair[8][48];
+    int deleteCount = 0;
+    int repairCount = 0;
+    int repaired = 0;
+    for (int i = 0; i < nameCount; ++i) {
+        char path[48];
+        snprintf(path, sizeof(path), RIDE_DIR "/%.39s", names[i]);
+
+        // Quarantine before touching the file, clear it after. If we never get
+        // to the clear — watchdog, panic, power cut — the marker survives on the
+        // card and the next boot skips this file instead of dying on it again.
+        // Without this, one unrepairable ride is a permanent brick that only a
+        // card reader can undo.
+        char mark[56];
+        snprintf(mark, sizeof(mark), "%s.bad", path);
+        if (SD.exists(mark)) {
+            diag::log("ride skipped (previous recovery did not survive it): %s",
+                      path);
+            continue;
+        }
+        { File m = SD.open(mark, FILE_WRITE); if (m) m.close(); }
+
+        // Read-only scan first: an unfinished ride is NOT finalized here any
+        // more. The newest one is held for the rider to CONTINUE / SAVE /
+        // DISCARD on the boot prompt; only older leftovers (a previous prompt
+        // the rider never answered, then another reset) are quietly repaired.
+        FitWriter::RepairResult r = FitWriter::analyze(SD, path);
+        SD.remove(mark);   // survived — this file is not the problem
+        if (r.status == FitWriter::RepairResult::UNFINISHED) {
+            if (!havePendingRec || strcmp(path, pendingRecPath) > 0) {
+                // Demote the previous candidate — repair it below.
+                if (havePendingRec && repairCount < 8)
+                    snprintf(toRepair[repairCount++], sizeof(toRepair[0]), "%s",
+                             pendingRecPath);
+                snprintf(pendingRecPath, sizeof(pendingRecPath), "%s", path);
+                pendingScan = r;
+                havePendingRec = true;
+            } else if (repairCount < 8) {
+                snprintf(toRepair[repairCount++], sizeof(toRepair[0]), "%s", path);
+            }
+        } else if (r.status == FitWriter::RepairResult::EMPTY) {
+            // Died before the first GPS fix: a header and nothing else.
+            if (deleteCount < 8) {
+                snprintf(toDelete[deleteCount++], sizeof(toDelete[0]), "%s", path);
+            }
+        }
+    }
+    for (int i = 0; i < repairCount; ++i) {
+        FitWriter::RepairResult r = FitWriter::repair(SD, toRepair[i]);
+        if (r.status == FitWriter::RepairResult::REPAIRED) {
+            repaired++;
+            diag::log("ride recovered: %s — %.2f km, %lu s (%d pts)", toRepair[i],
+                      r.distanceM / 1000.0, (unsigned long)r.elapsedS, r.records);
+        }
+    }
+    for (int i = 0; i < deleteCount; ++i) SD.remove(toDelete[i]);
+    sdUnlock();
+
+    if (havePendingRec) {
+        diag::log("ride interrupted: %s — %.2f km, %lu s — awaiting rider",
+                  pendingRecPath, pendingScan.distanceM / 1000.0,
+                  (unsigned long)pendingScan.records);
+    }
+    if (repaired) {
+        Serial.printf("[rec] recovered %d interrupted ride(s)\n", repaired);
+    }
+}
+
+void resetStats() {
+    distanceM = 0;
+    haveWheelBase = false;
+    timerS = 0;
+    movingS = 0;
+    lastFlushS = 0;
+    autoPaused = false;
+    stoppedS = 0;
+    pausedS = 0;
+    pauseEntryS = 0;
+    lastMoveMs = 0;
+    manualResumeMs = 0;
+    phoneAnchorValid = false;
+    havePrevFix = false;
+    lastFixMs = 0;
+    lastPhoneFixMs = 0;
+    phoneSourceLogged = false;
+    powerSum = powerCount = 0;
+    hrSum = hrCount = 0;
+    climbedM = 0;
+    climbBaseValid = false;
+    npRingCount = npRingHead = 0;
+    npSum4 = 0;
+    npCount = 0;
+    gradeMarkValid = false;
+    gradeMarkDist = 0;
+}
+
+void accumulateStats(const RideState& s) {
+    if (s.speedKmh > 3.0f) movingS++;
+
+    if (s.powerW != 0xFFFF) {
+        powerSum += s.powerW;
+        powerCount++;
+        // Normalized power: mean of (30 s rolling avg)^4, 4th root
+        npRing[npRingHead] = s.powerW;
+        npRingHead = (npRingHead + 1) % 30;
+        if (npRingCount < 30) npRingCount++;
+        if (npRingCount == 30) {
+            uint32_t sum = 0;
+            for (int i = 0; i < 30; ++i) sum += npRing[i];
+            double avg = sum / 30.0;
+            npSum4 += avg * avg * avg * avg;
+            npCount++;
+        }
+    }
+    if (s.heartRateBpm != 0xFF) {
+        hrSum += s.heartRateBpm;
+        hrCount++;
+    }
+
+    // Climb from the barometer when one is fitted, else the map DEM elevation.
+    // (The GPS chip's altitude is intentionally unused either way — far too
+    // noisy.) 3 m hysteresis smooths the accumulation; the barometer is smooth
+    // enough not to need it, but keeping one path means ascent totals do not
+    // change character depending on what is plugged in.
+    if (s.baroValid || s.mapElevationValid) {
+        float elev = s.baroValid ? s.baroAltM : s.mapElevationM;
+        if (!climbBaseValid) {
+            climbBaseAlt = elev;
+            climbBaseValid = true;
+        } else if (elev > climbBaseAlt + 3.0f) {
+            climbedM += elev - climbBaseAlt;
+            climbBaseAlt = elev;
+        } else if (elev < climbBaseAlt - 3.0f) {
+            climbBaseAlt = elev;
+        }
+    }
+}
+
+// Is the bike moving? Judged from the most direct evidence available, sensors
+// before GPS: turning pedals (power or cadence non-zero) or a turning wheel is
+// movement no matter what the position fix thinks — a trainer ride must never
+// pause — while GPS speed is the witness of last resort, catching the coasting
+// descent where pedals and cranks are all still.
+//
+// Three answers, not two. MOVING and STOPPED are positive testimony: a sensor
+// only votes while its data is fresh (a sleeping power meter abstains rather
+// than testifying "0 W"). A wheel sensor that is still sending packets with
+// no new revolution testifies "stopped"; one that has gone silent abstains,
+// like the meter. BLIND is no witnesses
+// at all — no fix, every sensor asleep — and the CALLER decides what that
+// means, because it depends on history this function doesn't have: blind
+// moments after real movement is a tunnel and the timer should run; blind
+// with no movement in living memory is a desk, a trainer-less garage, or a
+// bike carried into a cafe, and "no evidence of moving" should not keep the
+// timer counting forever. (The first version returned moving-when-blind
+// unconditionally, and a ride recorded indoors with no fix never paused at
+// all — and a fix LOST while paused would have resumed the timer.)
+//
+// `resuming` raises the GPS bar from rolling speed to distinctly-riding speed:
+// a stationary fix wobbles, and a wobble that un-pauses the ride would need
+// another full stopped streak to re-pause it.
+enum class Motion { MOVING, STOPPED, BLIND };
+
+Motion motionEvidence(const RideState& s, bool resuming) {
+    const uint32_t now = millis();
+    auto fresh = [&](uint32_t ms) { return ms != 0 && now - ms < 5000; };
+    int witnesses = 0;
+    bool moving = false;
+    if (fresh(s.powerMs) && s.powerW != 0xFFFF) {
+        witnesses++;
+        if (s.powerW > 0) moving = true;
+    }
+    if (fresh(s.cadenceMs) && s.cadenceRpm != 0xFF) {
+        witnesses++;
+        if (s.cadenceRpm > 0) moving = true;
+    }
+    if (speed_source::sensorFresh(s, now)) witnesses++;   // wheel sensor talking
+    if (fresh(s.wheelMoveMs)) moving = true;   // rev counter advanced recently
+    if (s.gpsFix) {
+        witnesses++;
+        // The receiver's own speed: the `resuming` bar exists for GPS wobble.
+        if (s.gpsSpeedKmh > (resuming ? 5.0f : 3.0f)) moving = true;
+    } else if (s.phoneFixValid && now - s.phoneFixMs < 10000 &&
+               s.phoneAccM > 0 && s.phoneAccM <= 50.0f) {
+        // No fix of our own: the PHONE's location is the witness of last
+        // resort — same accuracy gate as the record stream's fallback. It has
+        // no speed, so movement is displacement from the anchor seated where
+        // the bike stopped: farther than the combined accuracy circles (floor
+        // 30 m) is a rider leaving, not a fix wandering. This is what lets a
+        // ride parked INDOORS — device GPS dead, phone still located — resume
+        // as the rider pulls away instead of waiting out a fresh device fix.
+        witnesses++;
+        if (phoneAnchorValid) {
+            const float leash = fmaxf(30.0f, phoneAnchorAccM + s.phoneAccM);
+            if (haversineM(phoneAnchorLat, phoneAnchorLon,
+                           s.phoneLat, s.phoneLon) > leash) moving = true;
+        }
+        // Anchor not seated yet: this fix still counts as a witness (it can
+        // testify "stopped"), and the state machine seats the anchor from it.
+    }
+    if (moving) return Motion::MOVING;
+    return witnesses ? Motion::STOPPED : Motion::BLIND;
+}
+
+// How long a blind spell keeps the benefit of the doubt after the last
+// positive movement. Long enough to coast through any ordinary tunnel or a
+// minute of dense tree cover without the timer flinching; short enough that a
+// bike carried indoors stops accruing ride time within a couple of minutes.
+// Riders with a power meter, cadence or wheel sensor are barely affected —
+// their sensors keep testifying where GPS goes deaf.
+constexpr uint32_t BLIND_GRACE_MS = 120 * 1000;
+
+// GPS altitude is very noisy (±10-30 m with no barometer), so a short
+// baseline makes grade jump around randomly. We heavily smooth the
+// altitude and measure the rise over a long (100 m) baseline, then clamp
+// to a sane range and slew-limit the output. Result is a stable, if
+// coarse, grade instead of noise.
+float gradeSmoothAlt = 0;
+bool gradeAltPrimed = false;
+float gradeOut = 0;
+
+float updateGrade(float altitudeM) {
+    // EMA on altitude first — kills per-fix jitter.
+    if (!gradeAltPrimed) {
+        gradeSmoothAlt = altitudeM;
+        gradeAltPrimed = true;
+    } else {
+        gradeSmoothAlt += 0.15f * (altitudeM - gradeSmoothAlt);
+    }
+
+    if (!gradeMarkValid) {
+        gradeMarkDist = distanceM;
+        gradeMarkAlt = gradeSmoothAlt;
+        gradeMarkValid = true;
+        return NAN;
+    }
+
+    double dDist = distanceM - gradeMarkDist;
+    if (dDist < 100.0) return NAN;  // need a long baseline; keep last value
+
+    float raw = (gradeSmoothAlt - gradeMarkAlt) / (float)dDist * 100.0f;
+    if (raw > 25.0f) raw = 25.0f;
+    if (raw < -25.0f) raw = -25.0f;
+    // Slew-limit so the shown number eases toward the new estimate.
+    gradeOut += 0.5f * (raw - gradeOut);
+
+    gradeMarkDist = distanceM;
+    gradeMarkAlt = gradeSmoothAlt;
+    return gradeOut;
+}
+
+}  // namespace
+
+namespace ride_recorder {
+
+namespace {
+
+// Arduino SD/SPI recovery, under sdLock. The card stays powered across an
+// ESP reset on this board. CMD0 has a valid CRC even if the previous session
+// enabled CRC checking. This is NOT IDF's CMD52 issue (#14000): Arduino SD
+// does not issue CMD52. Capture real wire responses instead of cardType(),
+// which is always NONE after SD.begin() has cleaned up a failed mount.
+struct SdProbe {
+    uint8_t r1 = 0xff;
+    uint8_t cmd8 = 0xff;
+    uint32_t echo = 0;
+    bool ready = false;
+    uint32_t waitMs = 0;
+};
+
+SdProbe sdSpiForceIdle() {
+    SdProbe probe;
+    SPI.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
+    digitalWrite(BOARD_LORA_CS, HIGH);
+    digitalWrite(BOARD_SD_CS, HIGH);
+    for (int i = 0; i < 10; ++i) SPI.transfer(0xFF);
+    digitalWrite(BOARD_SD_CS, LOW);
+    uint32_t start = millis();
+    // Let any previous write finish before issuing reset. Yield between polls;
+    // the caller's PM guard stays held across each yield.
+    do {
+        if (SPI.transfer(0xFF) == 0xFF) { probe.ready = true; break; }
+        delay(1);
+    } while (millis() - start < 500);
+    probe.waitMs = millis() - start;
+    auto command = [](const uint8_t* packet) {
+        for (int i = 0; i < 6; ++i) SPI.transfer(packet[i]);
+        uint8_t r1 = 0xff;
+        for (int i = 0; i < 10; ++i) {
+            r1 = SPI.transfer(0xff);
+            if (!(r1 & 0x80)) break;
+        }
+        return r1;
+    };
+    static const uint8_t cmd0[] = {0x40, 0, 0, 0, 0, 0x95};
+    probe.r1 = command(cmd0);
+    digitalWrite(BOARD_SD_CS, HIGH);
+    SPI.transfer(0xFF);
+    if (probe.r1 == 1) {
+        digitalWrite(BOARD_SD_CS, LOW);
+        SPI.transfer(0xFF);
+        static const uint8_t cmd8[] = {0x48, 0, 0, 1, 0xaa, 0x87};
+        probe.cmd8 = command(cmd8);
+        if (probe.cmd8 == 1)
+            for (int i = 0; i < 4; ++i)
+                probe.echo = (probe.echo << 8) | SPI.transfer(0xff);
+        digitalWrite(BOARD_SD_CS, HIGH);
+        SPI.transfer(0xFF);
+    }
+    SPI.endTransaction();
+    return probe;
+}
+
+bool mountLocked(bool logFailures) {
+    // settleMs is waited BEFORE the attempt. The old schedule (three tries, 50 ms
+    // apart) gave the card ~100 ms to come up and then declared it absent, which
+    // on this board is simply too early: measured on a cold boot with a known-good
+    // 32 GB SDHC, every probe inside the first ~1.5 s failed and the mount only
+    // took at ~2 s (investigations/sd-boot-mount-2026-08-05.log). Boot therefore
+    // ALWAYS missed the card and left the device in its "no SD" state until the
+    // 30 s background retry rescued it — by which point map/route loading had
+    // already been skipped for the session.
+    //
+    // The cost is paid only on failure: a card that answers immediately still
+    // mounts on the first attempt with zero added delay, and a genuinely absent
+    // card costs ~2.3 s of settle on top of SD.begin()'s own timeouts. Boot is
+    // never blocked on the result — a failed mount just disables recording.
+    static const struct { uint32_t settleMs; uint32_t freq; } kAttempts[] = {
+        {0,    4000000},
+        {100,  4000000},
+        {400,  4000000},
+        {800,  4000000},
+        {1000, 1000000},   // last-ditch, slow clock for a marginal card
+    };
+    unsigned attempt = 0;
+    bool answered = false;   // published once at the end: read lock-free
+    for (auto& a : kAttempts) {
+        ++attempt;
+        uint32_t f = a.freq;
+        if (a.settleMs) delay(a.settleMs);   // let the card/bus settle first
+        uint32_t start = millis();
+        diag::storageStage(2, attempt);
+        SdProbe probe = sdSpiForceIdle();
+        if (probe.r1 == 1) answered = true;
+        if (logFailures)
+            diag::log("sd probe: try=%u uptime=%lu ready=%d wait=%lu cmd0=0x%02x "
+                      "cmd8=0x%02x echo=0x%08lx CS=%d/%d MISO=%d",
+                      attempt, (unsigned long)start, probe.ready,
+                      (unsigned long)probe.waitMs, probe.r1, probe.cmd8,
+                      (unsigned long)probe.echo, digitalRead(BOARD_SD_CS),
+                      digitalRead(BOARD_LORA_CS), digitalRead(BOARD_SPI_MISO));
+        // max_files: the library default is 5 open files for the WHOLE firmware,
+        // and a ride holds one of them open from start to finish. Ten leaves room
+        // for a map tile, a route, a diag flush and a BLE download at the same
+        // time without opens starting to fail mid-ride.
+        diag::storageStage(3, attempt, probe.r1);
+        bool mounted = SD.begin(BOARD_SD_CS, SPI, f, "/sd", 10);
+        diag::storageStage(mounted ? 4 : 5, attempt, probe.r1);
+        diag::drainDriverLogs();
+        if (mounted) {
+            diag::log("sd mount: OK try=%u clock=%luHz duration=%lums type=%u size=%lluMB",
+                      attempt, (unsigned long)f, (unsigned long)(millis() - start),
+                      SD.cardType(), SD.cardSize() / (1024ULL * 1024ULL));
+            cardAnswered = true;
+            return true;
+        }
+        if (logFailures) {
+            // Deliberately NOT logging cardType()/cardSize() here. A previous
+            // version did, to tell "card not talking" from "bad filesystem", but
+            // that reading can never happen: SD.begin() unmounts, uninits and
+            // sets _pdrv = 0xFF itself before returning false, and both accessors
+            // early-return on that sentinel. They report NONE/0 unconditionally,
+            // so the line only ever looked like a dead card. (Arduino-esp32
+            // SD.cpp: begin() 38-42, cardType() 62, cardSize() 70.)
+            diag::log("sd mount: FAILED try=%u clock=%luHz duration=%lums settle=%lu "
+                      "(CMD0 idle=%d; later SD init/FAT failure still possible)",
+                      attempt, (unsigned long)f, (unsigned long)(millis() - start),
+                      (unsigned long)a.settleMs, probe.r1 == 1);
+        }
+        SD.end();
+        diag::drainDriverLogs();
+    }
+    cardAnswered = answered;
+    return false;
+}
+
+}  // namespace
+
+bool begin() {
+    sdLock();
+    // SD and LoRa share the SPI bus; a floating LoRa CS corrupts SD traffic.
+    pinMode(BOARD_LORA_CS, OUTPUT);
+    digitalWrite(BOARD_LORA_CS, HIGH);
+    pinMode(BOARD_SD_CS, OUTPUT);
+    digitalWrite(BOARD_SD_CS, HIGH);
+
+    // Keep the chip selects driven in automatic light sleep. Do not latch
+    // them with gpio_hold here: normal SPI traffic must still toggle CS.
+    gpio_sleep_sel_dis((gpio_num_t)BOARD_SD_CS);
+    gpio_sleep_sel_dis((gpio_num_t)BOARD_LORA_CS);
+    SPI.begin(BOARD_SPI_SCLK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
+    sdOk = mountLocked(true);
+    if (sdOk && !SD.exists(RIDE_DIR)) SD.mkdir(RIDE_DIR);
+    sdUnlock();
+    if (!sdOk) {
+        diag::log("sd: boot mount failed; recording unavailable, diagnostics in RAM/flash; use 'diag'");
+        diag::checkpoint("boot SD mount failed");
+        return false;
+    }
+    diag::log("sd: ready, %lu MB free", (unsigned long)sdFreeMB());
+    // Recovery deliberately does NOT run here. It used to, and a card carrying
+    // interrupted rides could then take longer than the interrupt watchdog
+    // allows — the device reset mid-recovery, which tore one more file, and the
+    // next boot found strictly more work than the last. That is an unbreakable
+    // boot loop, and it is unbreakable from the device: the only escape was
+    // pulling the card. setup() must not contain unbounded card work. The UI
+    // task calls recoverRides() once it is running, still before usb_storage
+    // hands the card to a host.
+    return true;
+}
+
+// Once per ride, the first time the FIT writer reports a short write: say
+// what happened, and if it is the card filling up, put it in front of the
+// rider (status bar, end-of-ride sheet). The ride keeps timing either way.
+static void noteWriteFailure() {
+    if (fileWriteFailed || !fit.writeFailed()) return;
+    fileWriteFailed = true;
+    cardFull = sdFreeMB() == 0;
+    if (cardFull) {
+        diag::log("rec: SD card full — ride file stops at %lu s; the ride keeps "
+                  "timing", (unsigned long)timerS);
+        g_state.with([](RideState& st) { st.cardFull = true; });
+    } else {
+        diag::log("rec: ride file write failed (%s) at %lu s — records not being "
+                  "written", ridePath, (unsigned long)timerS);
+    }
+}
+
+void startRide() {
+    // A new ride while an interrupted one still awaits a decision settles it
+    // the safe way: finalize and keep it. Its file must be closed before a
+    // new one opens anyway.
+    if (havePendingRec) resolveRecovery(RECOVERY_SAVE);
+    if (!sdOk || rideActive || usb_storage::hostActive()) return;
+
+    RideState s = g_state.snapshot();
+    if (!s.timeValid) {
+        Serial.println("[rec] no GPS time yet — can't start ride");
+        return;
+    }
+
+    makeRidePath(ridePath, sizeof(ridePath), s.utc);
+    sdLock();
+    bool opened = fit.begin(SD, ridePath, s.utc);
+    sdUnlock();
+    if (!opened) {
+        // The mount was only ever established at boot, so a card that dropped
+        // since then failed every ride for the rest of the session. One remount
+        // and one retry — cheap, and the difference between losing a ride and
+        // not. (rideActive is still false here, so remount() will proceed.)
+        diag::log("[rec] ride file open failed — remounting");
+        if (remount("ride file open failed")) {
+            sdLock();
+            opened = fit.begin(SD, ridePath, s.utc);
+            sdUnlock();
+        }
+    }
+    if (!opened) {
+        Serial.printf("[rec] failed to open %s\n", ridePath);
+        diag::log("[rec] ride NOT started: cannot open %s", ridePath);
+        return;
+    }
+
+    startUtc = s.utc;
+    resetStats();
+    rideActive = true;
+    loggedFileLost = false;
+    fileWriteFailed = cardFull = false;
+    g_state.with([](RideState& st) {
+        st.recording = true;
+        st.ridePaused = false;
+        st.distanceM = 0;
+        st.elapsedS = 0;
+        st.movingS = 0;
+        st.climbedM = 0;
+        st.gradeValid = false;
+    });
+    diag::log("ride start -> %s", ridePath);
+    noteWriteFailure();   // a card already full fails the very first bytes
+}
+
+void stopRide(bool save) {
+    if (!rideActive) return;
+    rideActive = false;
+    RideState s = g_state.snapshot();
+    // Wall-clock fallback is timer PLUS paused time — the timer alone stopped
+    // tracking the clock the first time the ride auto-paused.
+    endUtc = s.timeValid ? s.utc : startUtc + timerS + pausedS;
+    RideSummary sm = summary();   // fold the roll-up into the FIT session message
+    sdLock();
+    const bool saved = fit.finish(endUtc, distanceM, timerS,
+                                  {movingS, sm.avgSpeedKmh, sm.avgPowerW, sm.normPowerW,
+                                   sm.avgHrBpm, (float)climbedM});
+    if (!save) SD.remove(ridePath);
+    sdUnlock();
+    noteWriteFailure();   // the closing writes can be the ones that don't fit
+    const char* why = cardFull ? "SD card full"
+                    : fit.writeFailed() ? "SD write failed" : "ride file lost";
+    if (!save) {
+        diag::log("ride discarded");
+    } else if (!saved) {
+        diag::log("rec: ride NOT saved (%s): %s", why, ridePath);
+    } else if (fit.cutShort()) {
+        // A valid file, but not the whole ride: say so, never plain "saved".
+        diag::log("rec: ride cut short (%s) and kept up to there: %.2f km "
+                  "ridden, %lu s", why, distanceM / 1000.0, (unsigned long)timerS);
+    } else {
+        diag::log("ride saved: %.2f km, %lu s (+%lu s paused)", distanceM / 1000.0,
+                  (unsigned long)timerS, (unsigned long)pausedS);
+        Serial.printf("[rec] ride saved: %.1f km, %lu s (+%lu s paused)\n",
+                      distanceM / 1000.0, (unsigned long)timerS,
+                      (unsigned long)pausedS);
+    }
+    fileWriteFailed = cardFull = false;
+    // Ride is over — clear the trip so the dashboard reads zero, ready for the
+    // next ride (the summary was already captured before stopping).
+    resetStats();
+    g_state.with([](RideState& st) {
+        st.recording = false;
+        st.ridePaused = false;
+        st.distanceM = 0;
+        st.elapsedS = 0;
+        st.movingS = 0;
+        st.climbedM = 0;
+        st.gradeValid = false;
+        st.cardFull = false;
+    });
+}
+
+bool isRecording() { return rideActive; }
+
+bool longAutoPaused() {
+    // Cross-task reads of the recorder's own counters; a tick of staleness is
+    // fine for a power-policy answer. 2 min: longer than any stoplight, short
+    // enough that a real stop starts saving within a coffee's first sips.
+    return rideActive && autoPaused && (pausedS - pauseEntryS) > 120;
+}
+
+void manualResume() {
+    // Called from the UI task (banner tap). The recorder task reads these
+    // flags at 1 Hz; plain aligned writes, same cross-task discipline as the
+    // rest of this file. The state update here (not deferred to the next
+    // recorder tick) is what makes the banner disappear on the tap's own
+    // repaint instead of up to a second later.
+    if (!rideActive || !autoPaused) return;
+    autoPaused = false;
+    stoppedS = 0;
+    manualResumeMs = millis() | 1;
+    diag::log("rec: manual resume (tap, paused %lus)",
+              (unsigned long)(pausedS - pauseEntryS));
+    g_state.with([](RideState& st) { st.ridePaused = false; });
+}
+
+const char* currentRideFile() {
+    if (!fit.isOpen()) return "";
+    const char* base = strrchr(ridePath, '/');
+    return base ? base + 1 : ridePath;
+}
+
+RideSummary summary() {
+    RideSummary r;
+    r.distanceM = distanceM;
+    r.movingS = movingS;
+    r.elapsedS = timerS;
+    r.avgSpeedKmh = movingS ? (float)(distanceM / 1000.0 / (movingS / 3600.0))
+                            : 0.0f;
+    r.avgPowerW = powerCount ? (uint16_t)(powerSum / powerCount) : 0;
+    r.normPowerW = npCount ? (uint16_t)pow(npSum4 / npCount, 0.25) : 0;
+    r.avgHrBpm = hrCount ? (uint8_t)(hrSum / hrCount) : 0;
+    r.climbedM = (float)climbedM;
+    r.startUtc = startUtc;
+    r.endUtc = endUtc ? endUtc : startUtc + timerS + pausedS;
+    r.tzMin = g_state.snapshot().tzMin;
+    r.useMiles = g_state.snapshot().useMiles;
+    r.cardFull = cardFull;
+    return r;
+}
+
+bool remount(const char* why) {
+    // Never mid-ride: SD.end() with the FIT file open leaves the card
+    // mid-transaction, which is the failure that makes it refuse CMD0 on every
+    // subsequent mount. Callers hold their request and retry once the ride ends.
+    if (rideActive) return sdOk;
+    sdLock();
+    SD.end();
+    sdOk = mountLocked(true);
+    if (sdOk && !SD.exists(RIDE_DIR)) SD.mkdir(RIDE_DIR);
+    sdUnlock();
+    diag::log("sd: remount (%s) -> %s", why, sdOk ? "ok" : "FAILED");
+    return sdOk;
+}
+
+void retryMountIfNeeded() {
+    // Nothing to do when it's mounted, and nothing we're allowed to do while a
+    // host computer owns the card over USB.
+    if (sdOk || rideActive || usb_storage::hostActive()) return;
+
+    static uint32_t lastTry = 0;
+    static uint16_t tries = 0;
+    uint32_t now = millis();
+    if (lastTry != 0 && now - lastTry < 30000) return;
+    lastTry = now;
+
+    sdLock();
+    bool ok = mountLocked(tries < 3);   // stop logging once it's clearly absent
+    if (ok && !SD.exists(RIDE_DIR)) SD.mkdir(RIDE_DIR);
+    sdUnlock();
+
+    if (ok) {
+        sdOk = true;
+        // Deliver crash evidence BEFORE flagging the late mount: the UI task
+        // reacts to that flag by exposing the card over USB. This runs on the
+        // main task (loop()), the only one that touches crash delivery.
+        crash_report::onSdMounted("late mount");
+        lateMount = true;   // boot ran without a card — see consumeLateMount()
+        diag::log("sd: card back after %u retr%s", (unsigned)tries + 1,
+                  tries ? "ies" : "y");
+        tries = 0;
+    } else {
+        if (tries == 3) diag::log("sd: still absent — retrying quietly from here");
+        if (tries < 0xFFFF) tries++;
+    }
+}
+
+// True once, on the first call after a card mounted later than boot. The caller
+// is expected to run the SD-dependent bring-up that setup() skipped. Consumed
+// (not just read) so the work happens exactly once per late mount.
+bool consumeLateMount() {
+    if (!lateMount) return false;
+    lateMount = false;
+    return true;
+}
+
+bool pendingRecovery(RideSummary* out) {
+    if (!havePendingRec) return false;
+    if (out) {
+        RideSummary r;
+        r.distanceM = pendingScan.distanceM;
+        r.movingS = pendingScan.movingS;
+        r.elapsedS = (uint32_t)pendingScan.records;   // 1 Hz => timer seconds
+        r.avgSpeedKmh = pendingScan.movingS
+                            ? (float)(pendingScan.distanceM / 1000.0 /
+                                      (pendingScan.movingS / 3600.0))
+                            : 0.0f;
+        r.avgPowerW = pendingScan.powerCount
+                          ? (uint16_t)(pendingScan.powerSum / pendingScan.powerCount)
+                          : 0;
+        r.normPowerW = 0;   // the 30 s rolling window died with the reset
+        r.avgHrBpm = pendingScan.hrCount
+                         ? (uint8_t)(pendingScan.hrSum / pendingScan.hrCount)
+                         : 0;
+        r.climbedM = (float)pendingScan.climbM;
+        r.startUtc = pendingScan.startUtc;
+        r.endUtc = pendingScan.endUtc;
+        RideState s = g_state.snapshot();
+        r.tzMin = s.tzMin;
+        r.useMiles = s.useMiles;
+        *out = r;
+    }
+    return true;
+}
+
+void resolveRecovery(RecoveryAction action) {
+    if (!havePendingRec) return;
+    havePendingRec = false;
+    if (!sdOk) return;
+
+    if (action == RECOVERY_CONTINUE && !rideActive && !usb_storage::hostActive()) {
+        sdLock();
+        FitWriter::RepairResult r;
+        bool ok = fit.resume(SD, pendingRecPath, &r);
+        sdUnlock();
+        if (ok) {
+            // Take the ride back over exactly where the record stream ends.
+            // NP restarts empty (its 30 s window is gone); everything else the
+            // stream testified to is restored, so the dashboard and the final
+            // summary carry on from the reset instead of from zero.
+            snprintf(ridePath, sizeof(ridePath), "%s", pendingRecPath);
+            resetStats();
+            startUtc = r.startUtc;
+            endUtc = 0;
+            distanceM = r.distanceM;
+            timerS = (uint32_t)r.records;
+            movingS = r.movingS;
+            powerSum = r.powerSum;
+            powerCount = r.powerCount;
+            hrSum = r.hrSum;
+            hrCount = r.hrCount;
+            climbedM = r.climbM;
+            rideActive = true;
+            loggedFileLost = false;
+            g_state.with([](RideState& st) {
+                st.recording = true;
+                st.ridePaused = false;
+                st.distanceM = distanceM;
+                st.elapsedS = timerS;
+                st.movingS = movingS;
+                st.climbedM = (float)climbedM;
+                st.gradeValid = false;
+            });
+            diag::log("ride continued after reset: %s (%.2f km, %lu s)",
+                      ridePath, distanceM / 1000.0, (unsigned long)timerS);
+            return;
+        }
+        diag::log("ride continue failed — saving instead: %s", pendingRecPath);
+        // fall through: finalize-and-save beats losing the ride
+    }
+
+    sdLock();
+    if (action == RECOVERY_DISCARD) {
+        SD.remove(pendingRecPath);
+        diag::log("interrupted ride discarded: %s", pendingRecPath);
+    } else {
+        FitWriter::RepairResult r = FitWriter::repair(SD, pendingRecPath);
+        diag::log("interrupted ride saved: %s (%s)", pendingRecPath,
+                  r.status == FitWriter::RepairResult::REPAIRED ? "ok"
+                                                                : "repair failed");
+    }
+    sdUnlock();
+}
+
+// Put interrupted rides back together. Called from the UI task, NOT from
+// setup() — see the note in begin(). Safe to call more than once; a ride that
+// is already finished is left alone.
+void recoverRides() {
+    if (!sdOk) return;
+    recoverInterruptedRides();
+}
+
+// SD is "unavailable" to the firmware while a host computer owns it over USB.
+bool sdMounted() { return sdOk && !usb_storage::hostActive(); }
+
+// A card lent to a USB host is still a card: only a failed mount counts here.
+uint8_t sdCardState() {
+    if (sdOk) return SD_CARD_OK;
+    return cardAnswered ? SD_CARD_UNREADABLE : SD_CARD_NONE;
+}
+
+// One readdir() pass over the directory, NOT File::openNextFile(): that wraps
+// every entry in a File, which stat()s and fopen()s it by path — and each of
+// those is a FatFs search from the top of /rides. Quadratic in the ride count:
+// with ~70 rides at the card's 4 MHz it was over a thousand sector reads, well
+// over a second under sdLock, and the Menu asked for it on every 1 Hz redraw,
+// so the screen was nearly always mid-scan when the rider tapped it.
+int rideCount() {
+    if (!sdOk) return 0;
+    sdLock();
+    int n = 0;
+    if (DIR* d = opendir("/sd" RIDE_DIR)) {   // SD.begin() mounts at /sd
+        while (struct dirent* e = readdir(d))
+            if (e->d_type == DT_REG) n++;
+        closedir(d);
+    }
+    sdUnlock();
+    return n;
+}
+
+namespace {
+
+// Add one directory entry to the history list if it is a ride worth showing.
+// Once the list is full a newer ride replaces the oldest kept one, so a card
+// with more rides than fit still lists the most recent.
+void keepRide(RideFile* out, int max, int& n, const char* name, uint32_t size,
+              const char* active) {
+    if (name[0] == '.' || size < RIDE_MIN_USEFUL_BYTES) return;  // ._x.fit, stubs
+    if (strlen(name) >= sizeof(out[0].name) || !strcmp(name, active)) return;
+    int slot = n;
+    if (n == max) {
+        slot = 0;
+        for (int i = 1; i < n; ++i)
+            if (strcmp(out[i].name, out[slot].name) < 0) slot = i;
+        if (strcmp(name, out[slot].name) <= 0) return;   // older than all kept
+    } else {
+        n++;
+    }
+    snprintf(out[slot].name, sizeof(out[slot].name), "%s", name);
+    out[slot].size = size;
+}
+
+}  // namespace
+
+// The sizes are the expensive part. readdir() gives names only, and a stat()
+// per name is a FatFs search of /rides from the top — the same quadratic walk
+// rideCount() above stopped doing. FatFs's own f_readdir() hands back each
+// entry's size with its name, so go to it directly: the SD library mounts the
+// card as a numbered FatFs drive ("<n>:"), and with nothing else registering
+// one, that is drive 0. Only if no drive has a /rides does this fall back to
+// readdir() + stat(), which is slow on a full card but still right.
+int listRides(RideFile* out, int max) {
+    if (!sdMounted() || !out || max <= 0) return 0;
+    char active[sizeof(out[0].name)];
+    snprintf(active, sizeof(active), "%s", currentRideFile());
+    int n = 0;
+    sdLock();
+    bool listed = false;
+    for (int drv = 0; drv < FF_VOLUMES && !listed; ++drv) {
+        // static: FILINFO carries a 256-byte long-name buffer, and this runs
+        // on the UI task's stack. Only the UI task calls it.
+        static FF_DIR dir;
+        static FILINFO fi;
+        char path[16];
+        snprintf(path, sizeof(path), "%d:" RIDE_DIR, drv);
+        if (f_opendir(&dir, path) != FR_OK) continue;
+        while (f_readdir(&dir, &fi) == FR_OK && fi.fname[0]) {
+            if (!(fi.fattrib & AM_DIR))
+                keepRide(out, max, n, fi.fname, (uint32_t)fi.fsize, active);
+        }
+        f_closedir(&dir);
+        listed = true;
+    }
+    if (!listed) {
+        if (DIR* d = opendir("/sd" RIDE_DIR)) {
+            while (struct dirent* e = readdir(d)) {
+                if (e->d_type != DT_REG) continue;
+                char path[64];
+                struct stat st;
+                snprintf(path, sizeof(path), "/sd" RIDE_DIR "/%s", e->d_name);
+                if (stat(path, &st) == 0)
+                    keepRide(out, max, n, e->d_name, (uint32_t)st.st_size,
+                             active);
+            }
+            closedir(d);
+        }
+    }
+    sdUnlock();
+    std::sort(out, out + n, [](const RideFile& a, const RideFile& b) {
+        return strcmp(a.name, b.name) > 0;
+    });
+    return n;
+}
+
+uint32_t sdFreeMB() {
+    if (!sdOk) return 0;
+    sdLock();
+    uint32_t mb = (uint32_t)((SD.totalBytes() - SD.usedBytes()) / (1024ULL * 1024ULL));
+    sdUnlock();
+    return mb;
+}
+
+void task(void*) {
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(RECORD_INTERVAL_MS));
+        // Never write while a host computer owns the SD over USB.
+        if (!rideActive || usb_storage::hostActive()) continue;
+
+        // The FIT handle went away underneath us (SD trouble — the card is
+        // shared with the map store, diag logging and USB storage). Keep the
+        // ride running: the timer, distance and summary stay live, auto-sleep
+        // stays blocked, and the rider stops the ride when they mean to. Say so
+        // in the log, once, so a short FIT is diagnosable after the fact.
+        if (!fit.isOpen() && !loggedFileLost) {
+            loggedFileLost = true;
+            diag::log("rec: FIT handle lost mid-ride (%s) — ride still timing, "
+                      "records not being written", ridePath);
+        }
+
+        RideState s = g_state.snapshot();
+
+        // Wheel-sensor travel since the last tick, measured on EVERY tick
+        // (paused ones too) so a pause never banks distance for later. A
+        // delta past 100 m in one tick is a gap in ticking (USB host), not
+        // riding; drop it rather than draw a jump.
+        double wheelDeltaM = 0;
+        if (haveWheelBase) {
+            wheelDeltaM = s.wheelDistM - lastWheelDistM;
+            if (wheelDeltaM < 0 || wheelDeltaM > 100.0) wheelDeltaM = 0;
+        }
+        lastWheelDistM = s.wheelDistM;
+        haveWheelBase = true;
+
+        // Auto-pause: freeze the timer once the bike has been demonstrably
+        // stopped for the configured run of seconds; resume the moment anything
+        // says it is moving again. Paused ticks write no records — the
+        // timestamp gap in the record stream is how a FIT reader sees the stop.
+        // Deliberately NOT a mid-file timer-stop/start event pair, which is
+        // what the FIT spec would prefer: repair() walks the record stream at a
+        // fixed byte stride and treats the first non-record byte as the torn
+        // end of the file, so an event written after a crash-recovered pause
+        // would silently amputate the rest of the ride.
+        const int pauseAfterS = settings::autoPauseSec();
+        if (pauseAfterS > 0) {
+            const Motion m = motionEvidence(s, /*resuming=*/autoPaused);
+            if (m == Motion::MOVING) lastMoveMs = millis() | 1;
+            // BLIND inherits the last positive answer for a grace window — a
+            // tunnel keeps its timer — but only while RUNNING. A paused ride
+            // needs positive movement to resume: losing the fix while parked
+            // at a cafe is not evidence of riding. Blind with no movement on
+            // record (a ride started indoors, before first fix) counts as
+            // stopped from the first tick.
+            const bool moving =
+                m == Motion::MOVING ||
+                (m == Motion::BLIND && !autoPaused && lastMoveMs &&
+                 millis() - lastMoveMs < BLIND_GRACE_MS);
+
+            // Phone-anchor upkeep for motionEvidence's fallback witness: while
+            // stopped, the anchor marks the stopping point; any movement drops
+            // it so the NEXT stop seats a fresh one where it actually happens.
+            if (moving) {
+                phoneAnchorValid = false;
+            } else if (!phoneAnchorValid && s.phoneFixValid &&
+                       millis() - s.phoneFixMs < 10000 &&
+                       s.phoneAccM > 0 && s.phoneAccM <= 50.0f) {
+                phoneAnchorLat = s.phoneLat;
+                phoneAnchorLon = s.phoneLon;
+                phoneAnchorAccM = s.phoneAccM;
+                phoneAnchorValid = true;
+            }
+            if (autoPaused) {
+                if (moving) {
+                    autoPaused = false;
+                    stoppedS = 0;
+                    diag::log("rec: auto-resume (paused %lus)",
+                              (unsigned long)(pausedS - pauseEntryS));
+                }
+            } else if (!moving) {
+                // A tapped resume gets 30 s before stillness counts again —
+                // the rider resumed to leave, and clipping in takes a moment.
+                if (manualResumeMs && millis() - manualResumeMs < 30000) {
+                    stoppedS = 0;
+                } else if ((int)++stoppedS >= pauseAfterS) {
+                    autoPaused = true;
+                    pauseEntryS = pausedS;
+                    diag::log("rec: auto-pause (%d s stopped) at %.2f km",
+                              pauseAfterS, distanceM / 1000.0);
+                    // A stop is a natural safe point — persist what we have, so
+                    // a mid-stop power loss costs nothing.
+                    sdLock();
+                    fit.checkpoint();
+                    sdUnlock();
+                }
+            } else {
+                stoppedS = 0;
+            }
+        } else if (autoPaused) {
+            autoPaused = false;   // setting switched off mid-pause
+        }
+
+        if (autoPaused) {
+            pausedS++;
+            g_state.with([](RideState& st) { st.ridePaused = true; });
+            continue;
+        }
+
+        timerS++;
+        accumulateStats(s);
+
+        // Position for this record. The device's own receiver first; the phone's
+        // location only while we have no fix of our own.
+        //
+        // The phone is a fallback, not a peer, and it is gated hard: its fix has
+        // to be recent, it has to have told us an accuracy good enough to be
+        // track data (a cell/wifi fix is hundreds of metres and would draw a
+        // ride through the middle of blocks), and each one is written ONCE. The
+        // app only sends every ~3 s, so writing the same coordinates on every 1 s
+        // tick would stamp a stationary rider into the file three times over and
+        // then jump.
+        //
+        // Without this the file simply had a hole: no fix meant no record and no
+        // distance, so the opening minutes of a ride — exactly when the receiver
+        // is coldest and the phone is right there in a pocket — went unrecorded.
+        constexpr uint32_t kPhoneFixMaxAgeMs = 10000;
+        constexpr float kPhoneFixMaxAccM = 50.0f;
+
+        const bool phoneUsable = s.phoneFixValid &&
+                                 millis() - s.phoneFixMs < kPhoneFixMaxAgeMs &&
+                                 s.phoneAccM > 0 && s.phoneAccM <= kPhoneFixMaxAccM;
+        // Which source the ride is running on — NOT whether this particular tick
+        // writes a point. Between the phone's ~1 s updates there is nothing new
+        // to write, and logging off that would flap the source line every tick.
+        const bool phoneMode = !s.gpsFix && phoneUsable;
+        const bool usePhone = phoneMode && s.phoneFixMs != lastPhoneFixMs;
+
+        // Distance policy. While the wheel sensor is the SPEED source (fresh
+        // and not contradicted by a moving fix — speed_source.h), it is also
+        // the DISTANCE source, GPS or not: revolutions x circumference does not
+        // cut corners on switchbacks, wander while stopped, or drop out under
+        // trees, which is why head units prefer a speed sensor when one is
+        // fitted. Its accuracy is the circumference setting's. Otherwise
+        // distance comes from positions, exactly as before. One source per
+        // tick, so the two never double-count.
+        const bool wheelDist = s.speedSource == speed_source::SENSOR;
+        if (wheelDist) distanceM += wheelDeltaM;
+
+        static bool wheelSourceLogged = false;
+        if (wheelDist != wheelSourceLogged) {
+            wheelSourceLogged = wheelDist;
+            diag::log("rec: distance source -> %s", wheelDist
+                          ? "WHEEL SENSOR" : "positions");
+        }
+
+        if (phoneMode != phoneSourceLogged) {
+            phoneSourceLogged = phoneMode;
+            diag::log("rec: position source -> %s", phoneMode
+                          ? "PHONE (own receiver has no fix)" : "device GPS");
+        }
+
+        // No position at all (trainer, indoors, before the first fix) but a
+        // wheel sensor: write positionless records, so the ride still has a
+        // distance and speed trace. Not in phone mode — there the record
+        // waits for the next phone fix, as before, rather than interleaving
+        // position-less points into the track.
+        const bool positionless = !s.gpsFix && !phoneMode && wheelDist;
+
+        float grade = NAN;
+        if (s.gpsFix || usePhone || positionless) {
+            double lat = NAN, lon = NAN;
+            float phoneSpeedMs = NAN;
+            if (!positionless) {
+                lat = s.gpsFix ? s.latitude : s.phoneLat;
+                lon = s.gpsFix ? s.longitude : s.phoneLon;
+                // Seconds since the last recorded point. The phone path needs the
+                // real gap: its updates are ~1 s while recording but 3 s otherwise,
+                // and iOS can deliver later still, so assuming the tick interval
+                // would put both the speed and the jitter window out.
+                const uint32_t nowMs = millis();
+                const float dtSec = havePrevFix && lastFixMs
+                                        ? (nowMs - lastFixMs) / 1000.0f
+                                        : (RECORD_INTERVAL_MS / 1000.0f);
+
+                if (havePrevFix) {
+                    double d = haversineM(lastLat, lastLon, lat, lon);
+                    if (wheelDist) {
+                        // The wheel already counted this tick: positions
+                        // only move the anchor (below), adding nothing.
+                    } else if (s.gpsFix) {
+                        // Reject jitter when stationary and jumps from bad fixes.
+                        if (d > 0.5 && d < 100.0) distanceM += d;
+                    } else if (d < 0.5) {
+                        // Below the jitter floor: the rider is stopped. Say zero —
+                        // leaving it unknown would let a reader interpolate a speed
+                        // across the stop.
+                        phoneSpeedMs = 0.0f;
+                    } else if (d < 40.0 * dtSec) {
+                        // Same jitter idea as the device path, scaled to the real
+                        // gap: 40 m/s is 144 km/h, so anything past it is a fix
+                        // jumping, not a rider. No distance and no speed claim.
+                        distanceM += d;
+                        if (dtSec > 0.1f) phoneSpeedMs = (float)(d / dtSec);
+                    }
+                }
+                lastLat = lat;
+                lastLon = lon;
+                lastFixMs = nowMs;
+                havePrevFix = true;
+                if (usePhone) lastPhoneFixMs = s.phoneFixMs;
+            }
+            if (s.baroValid) grade = updateGrade(s.baroAltM);
+            else if (s.mapElevationValid) grade = updateGrade(s.mapElevationM);
+
+            FitWriter::Record r;
+            // With no lock of our own, s.utc is whatever the last fix left
+            // behind. The phone sent its own clock with the position; prefer it.
+            // Positionless: neither — a stale phoneUtc would repeat a timestamp.
+            r.utc = s.gpsFix ? s.utc
+                  : (phoneMode && s.phoneUtc) ? s.phoneUtc
+                                              : (uint32_t)time(nullptr);
+            r.latitudeDeg = lat;
+            r.longitudeDeg = lon;
+            // Record the map DEM elevation so the ride profile is accurate.
+            // The raw GPS altitude is deliberately NOT used as a fallback: it's
+            // far too noisy (the summary's ascent ignores it for the same
+            // reason), and mixing it into the record stream with DEM values
+            // makes phone-side ascent totals disagree with the device. Mark the
+            // point's altitude invalid instead when the DEM has no value.
+            // A barometer beats the elevation grid for a ride profile: the DEM
+            // is quantised to its own grid and knows nothing about a bridge or
+            // an overpass, while pressure resolves a metre and follows the road
+            // the rider is actually on. The DEM stays the fallback, and stays
+            // the thing that CALIBRATES the barometer (aux_sensors).
+            r.altitudeM = s.baroValid ? s.baroAltM
+                        : s.mapElevationValid ? s.mapElevationM : NAN;
+            // Speed from the same source as the distance: the wheel when it
+            // is counting, else the receiver's own, else — on the phone path —
+            // derived from the ground actually covered between written points
+            // (matching the track, not the phone's latest instantaneous value).
+            r.speedMs = wheelDist ? s.speedKmh / 3.6f
+                      : s.gpsFix  ? s.gpsSpeedKmh / 3.6f
+                                  : phoneSpeedMs;
+            r.distanceM = distanceM;
+            r.powerW = s.powerW;
+            r.heartRate = s.heartRateBpm;
+            r.cadence = s.cadenceRpm;
+            sdLock();
+            fit.writeRecord(r);
+            sdUnlock();
+            noteWriteFailure();
+        }
+
+        g_state.with([&](RideState& st) {
+            st.ridePaused = false;
+            st.distanceM = distanceM;
+            st.elapsedS = timerS;
+            st.movingS = movingS;
+            st.climbedM = (float)climbedM;
+            if (!isnan(grade)) {
+                st.gradePercent = grade;
+                st.gradeValid = true;
+            }
+        });
+
+        if (timerS - lastFlushS >= FIT_FLUSH_EVERY_S) {
+            sdLock();
+            fit.checkpoint();
+            sdUnlock();
+            noteWriteFailure();
+            lastFlushS = timerS;
+        }
+    }
+}
+
+}  // namespace ride_recorder

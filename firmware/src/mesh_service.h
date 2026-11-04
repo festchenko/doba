@@ -1,0 +1,254 @@
+#pragma once
+
+// Meshtastic node: owns the SX1262, speaks the mesh, and keeps the messages and
+// neighbour names the phone reads over BLE.
+//
+// Scope is text chat. The device joins a channel, sends and receives
+// TEXT_MESSAGE_APP packets, acknowledges direct messages, and learns names from
+// NODEINFO_APP so a sender shows up as "Alex" rather than "!a4c1380c". It has a
+// Curve25519 key pair like any Meshtastic 2.5+ node, advertises the public half
+// in its NodeInfo, and sends and receives PKI-encrypted direct messages. It does
+// NOT rebroadcast other people's traffic (so it is a leaf on the mesh, not a
+// router) — see docs/meshtastic.md for what that means in practice.
+//
+// One task owns the radio. Everything a second task may touch (the message ring,
+// the node table, the outbox) is behind a mutex and copied out, never handed out
+// by pointer, so the BLE server can read state mid-transfer without racing.
+
+#include <cstddef>
+#include <cstdint>
+
+#include "config.h"
+#include "mesh_proto.h"
+
+namespace mesh_service {
+
+// Delivery state of something we sent. A broadcast never gets past SENT — there
+// is nobody in particular to acknowledge it.
+enum TxStatus : uint8_t {
+    TX_PENDING = 0,   // queued, waiting for a clear channel
+    TX_SENT    = 1,   // on the air
+    TX_ACKED   = 2,   // the addressee acknowledged it
+    TX_FAILED  = 3,
+};
+
+// Hops value for a packet whose sender did not stamp hop_start (Meshtastic
+// firmware before 2.3), so how far it travelled cannot be worked out. Sent to the
+// phone as is; the apps treat anything above 7 (the protocol's maximum) as unknown.
+constexpr uint8_t HOPS_UNKNOWN = 0xFF;
+
+struct Message {
+    uint32_t id = 0;
+    uint32_t from = 0;
+    uint32_t to = 0;
+    uint32_t utc = 0;        // 0 when the device has no wall clock yet
+    uint32_t ms = 0;         // millis() at the time, so age is always knowable
+    int8_t   rssi = 0;
+    int8_t   snr = 0;
+    bool     outgoing = false;
+    uint8_t  channel = 0;    // which channel it belongs to; 0 = primary
+    uint8_t  status = TX_PENDING;
+    uint8_t  hops = 0;       // hops taken to reach us (0 = heard directly,
+                             // HOPS_UNKNOWN = sender too old to say)
+    char     text[mesh::MAX_TEXT_LEN + 1] = {};
+};
+
+struct Node {
+    uint32_t num = 0;
+    char     longName[40] = {};
+    char     shortName[8] = {};
+    uint32_t lastHeardMs = 0;
+    uint32_t lastHeardUtc = 0;
+    int8_t   snr = 0;
+    int8_t   rssi = 0;
+    uint8_t  hops = 0;       // from its most recent packet; see HOPS_UNKNOWN
+
+    // Where the node last said it was. Nodes broadcast POSITION_APP on their own
+    // schedule, so plenty of neighbours are known without ever having one —
+    // hasPosition is the difference between "has not told us" and "is at 0,0".
+    bool     hasPosition = false;
+    double   latitude = 0;
+    double   longitude = 0;
+    int32_t  altitudeM = 0;
+    uint32_t positionMs = 0;    // millis() when it arrived, for staleness
+    uint8_t  positionChannel = 0;  // slot it came in on; 0 = the public channel
+    uint8_t  satsInView = 0;
+    uint8_t  precisionBits = 32;   // < 32 = the sender blurred it deliberately
+
+    // The node's Curve25519 public key from its NodeInfo. Without it a direct
+    // message to this node can only be channel-encrypted, which current
+    // Meshtastic firmware rejects ("legacy DM").
+    bool     hasPublicKey = false;
+    uint8_t  publicKey[32] = {};
+};
+
+struct Stats {
+    uint32_t rx = 0;              // frames that decoded on our channel
+    uint32_t rxDropped = 0;       // CRC failures and undecodable frames
+    uint32_t rxOtherChannel = 0;  // heard, but not our channel
+    uint32_t rxDuplicate = 0;     // already seen this (sender, id)
+    uint32_t tx = 0;
+    uint32_t txFailed = 0;
+    uint32_t acksRx = 0;
+    uint32_t pkiRx = 0;           // direct messages that arrived PKI-encrypted
+    uint32_t pkiFailed = 0;       // PKI packets for us that would not decrypt
+    uint32_t nodeInfoReplies = 0; // NodeInfo requests answered
+};
+
+// Sets up the node identity and message storage, and brings the radio up if mesh
+// messaging is enabled. Returns false only if the service cannot work at all (no
+// PSRAM for the message ring) — a radio that did not answer, or one deliberately
+// switched off, still returns true, because the phone can enable it later and the
+// task has to be there to service it. Ask radioOk() for the radio itself.
+bool begin();
+
+// FreeRTOS task: services the radio and the outbox.
+void task(void* arg);
+
+bool radioOk();
+bool enabled();
+void setEnabled(bool on);
+
+uint32_t nodeNum();
+
+// Our Curve25519 public key, as advertised in NodeInfo. False until the mesh
+// task has loaded or generated the key pair (within a moment of boot).
+bool publicKey(uint8_t out[32]);
+float frequencyMHz();
+const char* channelName();
+const char* longName();
+const char* shortName();
+
+// Renames this node and re-announces it to the mesh. Persisted.
+void setNames(const char* longName, const char* shortName);
+
+// setEnabled / setChannel / setPreset below only REQUEST the change: each one
+// restarts or retunes the radio, and lora_radio has no locking — one task owns
+// it, and a transmission spans several calls. Callers are the BLE server task and
+// the serial console, so the work is staged and applied by the mesh task within a
+// tick (~250 ms). The getters keep reporting the old value until then, which is
+// why the phone is sent a fresh state snapshot afterwards rather than assuming.
+
+// Moves to another channel. The name feeds both the channel hash AND the
+// frequency slot, so this retunes the radio and clears the messages and
+// neighbours learned on the old one; pskIndex picks one of Meshtastic's ten
+// well-known keys (1 = the default channel's).
+// An EMPTY name means "follow the modem preset", which is the interoperable
+// default and what channelName() then reports: a stock Meshtastic node leaves its
+// primary channel unnamed and derives both hashes from the preset's name, so a node
+// on MediumFast is on MediumFast's frequency slot. Pass a name only for a private
+// channel, which then stays put across preset changes.
+void setChannel(const char* name, uint8_t pskIndex);
+uint8_t channelPskIndex();
+// True when no explicit name is set, so channelName() is the preset's name.
+bool channelFollowsPreset();
+
+// Modem preset: an index into mesh::kPresets, deciding how fast we talk rather
+// than where. Because bandwidth is part of a preset, changing it can move the
+// frequency as well as the speed. Persisted.
+uint8_t presetIndex();
+const char* presetName();
+void setPreset(uint8_t index);
+
+// Radio configuration beyond the modem: which band (mesh::kRegions), how loud,
+// and — optionally — which slot in the band, pinned by number the way
+// Meshtastic's channel_num does instead of derived from the channel name. All
+// persisted; all applied by the mesh task, like the preset.
+uint8_t regionIndex();
+void setRegion(uint8_t index);
+int8_t txPowerDbm();                 // the value the radio is actually driven at
+int8_t txPowerLimitDbm();            // the most this region and radio allow
+void setTxPower(int8_t dbm);         // 0 = the maximum allowed
+uint8_t freqSlot();                  // the override, 0 = follow the channel name
+void setFreqSlot(uint8_t slot);      // 1-based; 0 clears the override
+uint32_t slotCount();                // how many slots this region/bandwidth has
+uint32_t activeSlot();               // the one in use, 1-based
+
+// Queues a text message and returns its packet id (0 if the outbox is full, the
+// text is empty, the channel is not one we hold, or the radio is down). Safe to
+// call from another task. `channel` 0 is the primary; 1.. are private channels.
+uint32_t queueText(uint32_t dest, const char* text, uint8_t channel = 0);
+
+// ---------------------------------------------------------------------------
+// Channels
+// ---------------------------------------------------------------------------
+//
+// Slot 0 is the primary — the one whose name sets the frequency, i.e. which mesh
+// this device is on. Slots 1.. are private channels sharing that frequency,
+// distinguished by their hash and key, which is how a private group works without
+// a second radio. Two people can only share one if their PRIMARIES agree.
+
+struct ChannelInfo {
+    uint8_t index = 0;
+    bool    used = false;
+    char    name[16] = {};
+    // The key AS SHARED: 0 bytes unencrypted, 1 byte a well-known index, 16 or 32
+    // a real key. This is what goes in a share URL, so the phone needs it.
+    uint8_t psk[mesh::MAX_PSK_LEN] = {};
+    uint8_t pskLen = 0;
+    uint8_t hash = 0;
+    bool    sharesLocation = false;
+};
+
+// Whether we broadcast our own position on a channel. Off everywhere by default:
+// this is the only thing the firmware says about the rider's location, and on a
+// public channel it says it to everyone within radio range.
+bool sharesLocation(uint8_t index);
+void setSharesLocation(uint8_t index, bool on);
+
+int channelCount();                                  // how many slots are in use
+bool channelAt(int index, ChannelInfo& out);         // by SLOT, not by position
+
+// Adds or replaces a private channel. Slot 0 is refused — the primary is set
+// through setChannel()/setPreset(), because it decides the frequency. Persisted.
+// Staged like the other radio-touching setters; applied by the mesh task.
+bool setPrivateChannel(uint8_t index, const char* name, const uint8_t* psk,
+                       size_t pskLen);
+
+// Forgets a private channel, and the messages that arrived on it.
+bool deletePrivateChannel(uint8_t index);
+
+// First unused private slot, or -1 when full.
+int firstFreeChannel();
+
+// Copy out state one entry at a time, index 0 = oldest. Deliberately not a
+// bulk snapshot: the whole message ring is ~11 KB, far more than the BLE server
+// task's stack, and it is only ever read to be streamed out one notification per
+// message anyway.
+//
+// A message arriving mid-stream rotates the ring, so a reader walking the indices
+// can see an entry twice or miss one. Consumers key on Message::id for that
+// reason; nothing here is a stable cursor.
+int messageCount();
+bool messageAt(int index, Message& out);
+int nodeCount();
+bool nodeAt(int index, Node& out);
+
+// Name for a node number, "" if we have never heard its NodeInfo.
+bool nodeName(uint32_t num, char* out, size_t cap);
+
+int unreadCount();
+void markAllRead();
+
+// The latest text to arrive on a private channel, for the on-device popup.
+// Only private channels: the public one is strangers within radio range, and
+// popping every one of their messages over the ride screens would bury them.
+// seq counts these from boot, so a reader notices a new one by the number
+// changing; false (and seq 0) until the first arrives.
+struct Notice {
+    uint32_t seq = 0;
+    uint32_t ms = 0;             // millis() when it arrived
+    uint8_t  channel = 0;
+    char     channelName[16] = {};
+    char     from[40] = {};      // long name, else short name, else !xxxxxxxx
+    char     text[mesh::MAX_TEXT_LEN + 1] = {};
+};
+bool latestNotice(Notice& out);
+
+// True once (and cleared) when a message has arrived or a send changed state, so
+// the BLE server can push it to the phone without polling the whole list.
+bool takeChanged();
+
+Stats stats();
+
+}  // namespace mesh_service

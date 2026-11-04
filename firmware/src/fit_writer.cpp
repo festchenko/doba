@@ -1,0 +1,662 @@
+#include "fit_writer.h"
+
+#include "config.h"   // FIRMWARE_VERSION, written into device_info
+
+namespace {
+
+constexpr uint32_t FIT_EPOCH_OFFSET = 631065600;  // 1989-12-31T00:00:00Z
+constexpr int32_t  INVALID_S32 = 0x7FFFFFFF;
+constexpr double   SEMICIRCLES_PER_DEG = 2147483648.0 / 180.0;
+
+// Base types
+constexpr uint8_t T_ENUM = 0x00;
+constexpr uint8_t T_U8   = 0x02;
+constexpr uint8_t T_STRING = 0x07;
+constexpr uint8_t T_S32  = 0x85;
+constexpr uint8_t T_U16  = 0x84;
+constexpr uint8_t T_U32  = 0x86;
+constexpr uint8_t T_U32Z = 0x8C;
+
+// Global message numbers
+constexpr uint16_t MSG_FILE_ID  = 0;
+constexpr uint16_t MSG_SESSION  = 18;
+constexpr uint16_t MSG_LAP      = 19;
+constexpr uint16_t MSG_RECORD   = 20;
+constexpr uint16_t MSG_EVENT    = 21;
+constexpr uint16_t MSG_DEVICE_INFO = 23;
+constexpr uint16_t MSG_ACTIVITY = 34;
+
+// Local message types (assigned once, definitions written up front)
+constexpr uint8_t L_FILE_ID  = 0;
+constexpr uint8_t L_RECORD   = 1;
+constexpr uint8_t L_EVENT    = 2;
+constexpr uint8_t L_LAP      = 3;
+constexpr uint8_t L_SESSION  = 4;
+constexpr uint8_t L_ACTIVITY = 5;
+constexpr uint8_t L_DEVICE_INFO = 6;
+constexpr uint8_t L_FILLER = 7;
+
+// Padding for a ride cut short on a full card (FitWriter::salvage): a
+// manufacturer-specific message (0xFF00, the first of that range) whose one
+// byte-array field is all invalid (0xFF), which readers skip as unknown.
+constexpr uint16_t MSG_FILLER = 0xFF00;
+constexpr uint8_t  T_BYTE = 0x0D;
+
+// {field number, size, base type}
+const uint8_t FIELDS_FILE_ID[][3] = {
+    {0, 1, T_ENUM},   // type = 4 (activity)
+    {1, 2, T_U16},    // manufacturer = 255 (development)
+    {2, 2, T_U16},    // product
+    {3, 4, T_U32Z},   // serial_number
+    {4, 4, T_U32},    // time_created
+};
+
+// Who recorded the ride. file_id can only say "development / product 1", which
+// Strava, intervals.icu and RideWithGPS render as no device at all; the
+// device_info message carries a product_name string for exactly that case, so
+// the activity reads "OpenTrailPaper" wherever the file lands.
+constexpr uint8_t PRODUCT_NAME_LEN = 16;   // "OpenTrailPaper" + NUL, padded
+const uint8_t FIELDS_DEVICE_INFO[][3] = {
+    {253, 4, T_U32},                // timestamp
+    {0, 1, T_U8},                   // device_index = 0 (creator)
+    {2, 2, T_U16},                  // manufacturer = 255 (development)
+    {4, 2, T_U16},                  // product
+    {5, 2, T_U16},                  // software_version (x100)
+    {27, PRODUCT_NAME_LEN, T_STRING}, // product_name
+};
+
+const uint8_t FIELDS_RECORD[][3] = {
+    {253, 4, T_U32},  // timestamp
+    {0, 4, T_S32},    // position_lat (semicircles)
+    {1, 4, T_S32},    // position_long
+    {2, 2, T_U16},    // altitude ((m + 500) * 5)
+    {5, 4, T_U32},    // distance (cm)
+    {6, 2, T_U16},    // speed (mm/s)
+    {7, 2, T_U16},    // power (W)
+    {3, 1, T_U8},     // heart_rate (bpm)
+    {4, 1, T_U8},     // cadence (rpm)
+};
+
+const uint8_t FIELDS_EVENT[][3] = {
+    {253, 4, T_U32},  // timestamp
+    {0, 1, T_ENUM},   // event = 0 (timer)
+    {1, 1, T_ENUM},   // event_type
+    {4, 1, T_U8},     // event_group
+};
+
+const uint8_t FIELDS_LAP[][3] = {
+    {253, 4, T_U32},  // timestamp
+    {2, 4, T_U32},    // start_time
+    {7, 4, T_U32},    // total_elapsed_time (ms)
+    {8, 4, T_U32},    // total_timer_time (ms)
+    {9, 4, T_U32},    // total_distance (cm)
+    {254, 2, T_U16},  // message_index
+    {0, 1, T_ENUM},   // event = 9 (lap)
+    {1, 1, T_ENUM},   // event_type = 1 (stop)
+};
+
+const uint8_t FIELDS_SESSION[][3] = {
+    {253, 4, T_U32},  // timestamp
+    {2, 4, T_U32},    // start_time
+    {7, 4, T_U32},    // total_elapsed_time (ms)
+    {8, 4, T_U32},    // total_timer_time (ms) — moving time
+    {9, 4, T_U32},    // total_distance (cm)
+    {14, 2, T_U16},   // avg_speed (mm/s)
+    {16, 1, T_U8},    // avg_heart_rate (bpm)
+    {20, 2, T_U16},   // avg_power (W)
+    {34, 2, T_U16},   // normalized_power (W)
+    {22, 2, T_U16},   // total_ascent (m) — from the map DEM
+    {25, 2, T_U16},   // first_lap_index
+    {26, 2, T_U16},   // num_laps
+    {0, 1, T_ENUM},   // event = 8 (session)
+    {1, 1, T_ENUM},   // event_type = 1 (stop)
+    {5, 1, T_ENUM},   // sport = 2 (cycling)
+    {6, 1, T_ENUM},   // sub_sport = 0
+};
+
+const uint8_t FIELDS_ACTIVITY[][3] = {
+    {253, 4, T_U32},  // timestamp
+    {0, 4, T_U32},    // total_timer_time (ms)
+    {5, 4, T_U32},    // local_timestamp
+    {1, 2, T_U16},    // num_sessions
+    {2, 1, T_ENUM},   // type = 0 (manual)
+    {3, 1, T_ENUM},   // event = 26 (activity)
+    {4, 1, T_ENUM},   // event_type = 1 (stop)
+};
+
+uint16_t crc16(uint16_t crc, uint8_t byte) {
+    static const uint16_t table[16] = {
+        0x0000, 0xCC01, 0xD801, 0x1400, 0xF001, 0x3C00, 0x2800, 0xE401,
+        0xA001, 0x6C00, 0x7800, 0xB401, 0x5000, 0x9C01, 0x8801, 0x4400,
+    };
+    uint16_t tmp = table[crc & 0xF];
+    crc = (crc >> 4) & 0x0FFF;
+    crc = crc ^ tmp ^ table[byte & 0xF];
+    tmp = table[crc & 0xF];
+    crc = (crc >> 4) & 0x0FFF;
+    crc = crc ^ tmp ^ table[(byte >> 4) & 0xF];
+    return crc;
+}
+
+uint32_t fitTime(time_t utc) { return (uint32_t)(utc - FIT_EPOCH_OFFSET); }
+time_t   utcFromFit(uint32_t fit) { return (time_t)fit + FIT_EPOCH_OFFSET; }
+
+void put16(uint8_t* p, uint16_t v) { p[0] = v & 0xFF; p[1] = v >> 8; }
+void put32(uint8_t* p, uint32_t v) {
+    p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF;
+    p[2] = (v >> 16) & 0xFF; p[3] = (v >> 24) & 0xFF;
+}
+// "v1.19" -> 119, the FIT software_version convention (x100). Anything that
+// does not parse becomes 0, which readers show as no version.
+uint16_t softwareVersion() {
+    const char* s = FIRMWARE_VERSION;
+    while (*s && (*s < '0' || *s > '9')) ++s;
+    unsigned major = 0, minor = 0;
+    while (*s >= '0' && *s <= '9') major = major * 10 + (unsigned)(*s++ - '0');
+    if (*s == '.') {
+        ++s;
+        int digits = 0;
+        while (*s >= '0' && *s <= '9' && digits < 2) { minor = minor * 10 + (unsigned)(*s++ - '0'); ++digits; }
+        if (digits == 1) minor *= 10;
+    }
+    unsigned v = major * 100 + minor;
+    return v > 0xFFFE ? 0 : (uint16_t)v;
+}
+
+uint32_t get32(const uint8_t* p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
+// begin() always emits the same prologue, so its length is fixed: the 12-byte
+// header, then the file_id definition + message, the timer-start event
+// definition + message, and the record definition. Records follow at a fixed
+// stride. repair() relies on both to find where the record stream starts and
+// how far it got. Keep in sync with begin() / writeRecord().
+constexpr uint32_t PROLOGUE_BYTES = 12 +          // header
+                                    (6 + 5 * 3) + // file_id definition
+                                    14 +          // file_id message
+                                    (6 + 6 * 3) + // device_info definition
+                                    (1 + 4 + 1 + 2 + 2 + 2 + PRODUCT_NAME_LEN) + // device_info message
+                                    (6 + 4 * 3) + // event definition
+                                    8 +           // timer-start event
+                                    (6 + 9 * 3);  // record definition
+constexpr uint32_t RECORD_BYTES = 25;
+
+// What finish() appends after the records: timer-stop event, lap definition +
+// message, session definition + message, activity definition + message. Keep
+// in sync with writeTail(). The CRC's 2 bytes come after it.
+constexpr uint32_t TAIL_BYTES = 8 + (6 + 8 * 3) + 25 + (6 + 16 * 3) + 38 +
+                                (6 + 7 * 3) + 18;
+// One filler: its definition (6 + one field) and a data message carrying 1 to
+// 255 bytes.
+constexpr uint32_t FILLER_MIN = (6 + 3) + 1 + 1;
+constexpr uint32_t FILLER_MAX = (6 + 3) + 1 + 255;
+
+// Byte offsets within a record message, mirroring writeRecord().
+constexpr uint32_t REC_OFF_TIMESTAMP = 1;
+constexpr uint32_t REC_OFF_DISTANCE  = 15;
+
+}  // namespace
+
+void FitWriter::writeBytes(const uint8_t* data, size_t len) {
+    if (failed_) return;
+    // A short write is a full card (or a card gone bad): stop here, counting
+    // nothing more, and let finish() cut the file back to what is whole.
+    if (file_.write(data, len) != len) {
+        failed_ = everFailed_ = true;
+        return;
+    }
+    dataSize_ += len;
+}
+
+void FitWriter::track(fs::FS& fs, const char* path) {
+    fs_ = &fs;
+    snprintf(path_, sizeof(path_), "%s", path);
+    failed_ = everFailed_ = cut_ = false;
+}
+
+// `len` bytes of filler messages (0 or at least FILLER_MIN).
+void FitWriter::writeFiller(uint32_t len) {
+    while (len) {
+        uint32_t n = len < FILLER_MAX ? len : FILLER_MAX;
+        if (len - n && len - n < FILLER_MIN) n = len - FILLER_MIN;
+        const uint8_t field[1][3] = {{0, (uint8_t)(n - FILLER_MIN + 1), T_BYTE}};
+        writeDefinition(L_FILLER, MSG_FILLER, field, 1);
+        uint8_t buf[1 + 255];
+        memset(buf, 0xFF, sizeof(buf));
+        buf[0] = L_FILLER;
+        writeBytes(buf, n - (6 + 3));
+        len -= n;
+    }
+}
+
+void FitWriter::writeDefinition(uint8_t localType, uint16_t globalNum,
+                                const uint8_t (*fields)[3], uint8_t fieldCount) {
+    uint8_t buf[6 + 32 * 3];
+    buf[0] = 0x40 | localType;  // definition message header
+    buf[1] = 0;                 // reserved
+    buf[2] = 0;                 // little endian
+    put16(&buf[3], globalNum);
+    buf[5] = fieldCount;
+    for (uint8_t i = 0; i < fieldCount; ++i) {
+        memcpy(&buf[6 + i * 3], fields[i], 3);
+    }
+    writeBytes(buf, 6 + fieldCount * 3);
+}
+
+bool FitWriter::begin(fs::FS& fs, const char* path, time_t startUtc) {
+    // "w+", not FILE_WRITE ("w"): finish() computes the trailing CRC by
+    // re-reading the file, and a write-only handle reads back zero bytes.
+    file_ = fs.open(path, "w+");
+    if (!file_) return false;
+    track(fs, path);
+    startUtc_ = startUtc;
+    dataSize_ = 0;
+    records_ = 0;
+
+    // Legacy 12-byte header; data_size patched in finish().
+    uint8_t hdr[12] = {12, 0x10, 0, 0, 0, 0, 0, 0, '.', 'F', 'I', 'T'};
+    put16(&hdr[2], 2132);  // profile version
+    if (file_.write(hdr, sizeof(hdr)) != sizeof(hdr)) failed_ = everFailed_ = true;
+
+    writeDefinition(L_FILE_ID, MSG_FILE_ID, FIELDS_FILE_ID, 5);
+    uint8_t fid[14];
+    fid[0] = L_FILE_ID;
+    fid[1] = 4;                       // type: activity
+    put16(&fid[2], 255);              // manufacturer: development
+    put16(&fid[4], 1);                // product
+    put32(&fid[6], 0x54355333);       // serial ("T5S3")
+    put32(&fid[10], fitTime(startUtc));
+    writeBytes(fid, sizeof(fid));
+
+    writeDefinition(L_DEVICE_INFO, MSG_DEVICE_INFO, FIELDS_DEVICE_INFO, 6);
+    uint8_t dev[1 + 4 + 1 + 2 + 2 + 2 + PRODUCT_NAME_LEN] = {};
+    dev[0] = L_DEVICE_INFO;
+    put32(&dev[1], fitTime(startUtc));
+    dev[5] = 0;                       // device_index: creator
+    put16(&dev[6], 255);              // manufacturer: development
+    put16(&dev[8], 1);                // product
+    put16(&dev[10], softwareVersion());
+    memcpy(&dev[12], "OpenTrailPaper", 15);   // includes the NUL; rest stays zero
+    writeBytes(dev, sizeof(dev));
+
+    writeDefinition(L_EVENT, MSG_EVENT, FIELDS_EVENT, 4);
+    uint8_t evt[8];
+    evt[0] = L_EVENT;
+    put32(&evt[1], fitTime(startUtc));
+    evt[5] = 0;  // event: timer
+    evt[6] = 0;  // event_type: start
+    evt[7] = 0;
+    writeBytes(evt, sizeof(evt));
+
+    writeDefinition(L_RECORD, MSG_RECORD, FIELDS_RECORD, 9);
+    return true;
+}
+
+void FitWriter::checkpoint() {
+    if (!file_ || failed_) return;
+    uint32_t pos = file_.position();     // current end of data
+    file_.seek(4);                       // header data_size field
+    uint8_t sz[4];
+    put32(sz, dataSize_);
+    if (file_.write(sz, 4) != 4) failed_ = everFailed_ = true;
+    file_.seek(pos);                     // resume appending records
+    file_.flush();
+}
+
+void FitWriter::writeRecord(const Record& r) {
+    if (!file_ || failed_) return;
+    uint8_t buf[25];
+    buf[0] = L_RECORD;
+    put32(&buf[1], fitTime(r.utc));
+    // NAN position = no position (a trainer ride on the wheel sensor alone):
+    // the FIT invalid marker, which every reader skips.
+    put32(&buf[5], isnan(r.latitudeDeg) ? 0x7FFFFFFFu
+                   : (uint32_t)(int32_t)llround(r.latitudeDeg * SEMICIRCLES_PER_DEG));
+    put32(&buf[9], isnan(r.longitudeDeg) ? 0x7FFFFFFFu
+                   : (uint32_t)(int32_t)llround(r.longitudeDeg * SEMICIRCLES_PER_DEG));
+    // 0xFFFF is the FIT invalid marker: emit it rather than encoding a bogus
+    // altitude, so a point with no elevation is skipped by readers instead of
+    // being taken as a real value (which would corrupt ascent totals).
+    put16(&buf[13], isnan(r.altitudeM)
+                        ? 0xFFFF
+                        : (uint16_t)lround((r.altitudeM + 500.0f) * 5.0f));
+    put32(&buf[15], (uint32_t)llround(r.distanceM * 100.0));
+    // Speed gets the same invalid marker as altitude, and for a stronger reason:
+    // lround(NAN) is undefined, so a point whose speed is genuinely unknown —
+    // the first position after the receiver loses its fix and the phone takes
+    // over — would otherwise encode as whatever the conversion happened to
+    // produce. 0xFFFF is skipped by readers; 0 would be a claim that the rider
+    // had stopped.
+    put16(&buf[19], isnan(r.speedMs)
+                        ? 0xFFFF
+                        : (uint16_t)lround(r.speedMs * 1000.0f));
+    put16(&buf[21], r.powerW);
+    buf[23] = r.heartRate;
+    buf[24] = r.cadence;
+    writeBytes(buf, sizeof(buf));
+    if (!failed_) ++records_;
+}
+
+// Open `path` with `mode`, validate the prologue, and replay the record
+// stream, filling `res` with everything the stream can testify to: distance,
+// end time, and the stats the live recorder would have accumulated (records
+// are 1 Hz while the timer runs, so `records` doubles as timer seconds; the
+// moving bar and climb hysteresis mirror ride_recorder's accumulateStats).
+// Returns true with the handle open and `res.status` still INVALID when the
+// file is an unfinished ride with records to keep; returns false — handle
+// closed, status terminal — for everything else. A salvage passes
+// `maxRecords`: it walks no further than that, and its header is no evidence
+// of a finished ride either way.
+static uint16_t get16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+static bool scanUnfinished(fs::FS& fs, const char* path, const char* mode,
+                           File& f, FitWriter::RepairResult& res,
+                           uint32_t maxRecords = UINT32_MAX) {
+    using RR = FitWriter::RepairResult;
+    f = fs.open(path, mode);
+    if (!f) return false;                    // INVALID
+    uint32_t fileSize = f.size();
+    if (fileSize < PROLOGUE_BYTES) { f.close(); return false; }
+
+    uint8_t prologue[PROLOGUE_BYTES];
+    if (f.read(prologue, PROLOGUE_BYTES) != (int)PROLOGUE_BYTES) {
+        f.close();
+        return false;
+    }
+    if (prologue[0] != 12 || memcmp(&prologue[8], ".FIT", 4) != 0) {
+        f.close();
+        return false;  // not one of ours
+    }
+
+    // A finished ride is exactly header + data_size + the 2-byte CRC. Anything
+    // else is a ride that was still being written when the device went down;
+    // its data_size only reflects the last checkpoint, so don't trust it.
+    uint32_t headerDataSize = get32(&prologue[4]);
+    if (maxRecords == UINT32_MAX && fileSize == 12 + headerDataSize + 2) {
+        f.close();
+        res.status = RR::ALREADY_FINISHED;
+        return false;
+    }
+
+    res.startUtc = utcFromFit(get32(&prologue[43]));  // file_id.time_created
+
+    // Walk the record stream. A reset can leave a torn final record, so only
+    // whole ones count; whatever follows the last whole record is overwritten
+    // by the caller (finish tail, or the first resumed record).
+    //
+    // NO seek() in this loop. The prologue read above already left the handle
+    // at PROLOGUE_BYTES and every record is consumed in order — per-record
+    // seeks once made recovery slow enough to blow the interrupt watchdog.
+    uint32_t records = (fileSize - PROLOGUE_BYTES) / RECORD_BYTES;
+    if (records > maxRecords) records = maxRecords;
+    time_t   endUtc = res.startUtc;
+    double   distanceM = 0;
+    uint32_t good = 0;
+    uint8_t  rec[RECORD_BYTES];
+    float climbBase = 0;
+    bool climbBaseValid = false;
+    for (uint32_t i = 0; i < records; ++i) {
+        if (f.read(rec, RECORD_BYTES) != (int)RECORD_BYTES) break;
+        if (rec[0] != L_RECORD) break;  // stream desynced — salvage what we have
+        endUtc = utcFromFit(get32(&rec[REC_OFF_TIMESTAMP]));
+        distanceM = get32(&rec[REC_OFF_DISTANCE]) / 100.0;
+        uint16_t pw = get16(&rec[21]);
+        if (pw != 0xFFFF) { res.powerSum += pw; res.powerCount++; }
+        if (rec[23] != 0xFF) { res.hrSum += rec[23]; res.hrCount++; }
+        uint16_t sp = get16(&rec[19]);              // mm/s
+        if (sp != 0xFFFF && sp >= 833) res.movingS++;   // 3 km/h, recorder's bar
+        uint16_t altRaw = get16(&rec[13]);
+        if (altRaw != 0xFFFF) {
+            float alt = altRaw / 5.0f - 500.0f;
+            if (!climbBaseValid) { climbBase = alt; climbBaseValid = true; }
+            else if (alt > climbBase + 3.0f) { res.climbM += alt - climbBase; climbBase = alt; }
+            else if (alt < climbBase - 3.0f) climbBase = alt;
+        }
+        good = i + 1;
+        // Let the scheduler breathe on a long file. Recovery can legitimately
+        // walk hundreds of thousands of records, and it must never be the
+        // reason a watchdog fires.
+        if ((i & 0x3FF) == 0x3FF) delay(0);
+    }
+
+    if (good == 0) {
+        f.close();
+        res.status = RR::EMPTY;
+        return false;
+    }
+
+    res.records = (int)good;
+    res.distanceM = distanceM;
+    res.endUtc = endUtc;
+    // The true timer count died with the reset; elapsed time is the honest
+    // stand-in, and matches what the record stream actually spans.
+    res.elapsedS = (uint32_t)(endUtc - res.startUtc);
+    return true;
+}
+
+FitWriter::RepairResult FitWriter::repair(fs::FS& fs, const char* path) {
+    RepairResult res;
+    File f;
+    if (!scanUnfinished(fs, path, "r+", f, res)) return res;
+
+    // Hand the open handle to a writer positioned just past the last whole
+    // record, so finish() appends the usual tail and fixes up size + CRC.
+    FitWriter w;
+    w.file_ = f;
+    f = File();   // one owner: finish() closes it, then reopens it to check
+    w.track(fs, path);
+    w.records_ = (uint32_t)res.records;
+    w.startUtc_ = res.startUtc;
+    w.dataSize_ = PROLOGUE_BYTES - 12 + (uint32_t)res.records * RECORD_BYTES;
+    if (!w.file_.seek(PROLOGUE_BYTES + (uint32_t)res.records * RECORD_BYTES)) {
+        w.file_.close();
+        return res;  // INVALID
+    }
+    if (!w.finish(res.endUtc, res.distanceM, res.elapsedS, {})) return res;  // no roll-up on repair
+
+    res.status = RepairResult::REPAIRED;
+    return res;
+}
+
+FitWriter::RepairResult FitWriter::analyze(fs::FS& fs, const char* path) {
+    RepairResult res;
+    File f;
+    if (!scanUnfinished(fs, path, "r", f, res)) return res;
+    f.close();
+    res.status = RepairResult::UNFINISHED;
+    return res;
+}
+
+bool FitWriter::resume(fs::FS& fs, const char* path, RepairResult* out) {
+    RepairResult res;
+    File f;
+    bool ok = scanUnfinished(fs, path, "r+", f, res);
+    if (ok) {
+        if (f.seek(PROLOGUE_BYTES + (uint32_t)res.records * RECORD_BYTES)) {
+            // Take over as if the reset never happened: the next writeRecord
+            // lands right after the last whole record, overwriting any torn
+            // bytes. If the resumed leg is shorter than the torn tail, stale
+            // bytes can survive past the new CRC; the next boot's scan then
+            // re-walks and re-finalizes the same records — idempotent.
+            file_ = f;
+            track(fs, path);
+            records_ = (uint32_t)res.records;
+            startUtc_ = res.startUtc;
+            dataSize_ = PROLOGUE_BYTES - 12 + (uint32_t)res.records * RECORD_BYTES;
+            res.status = RepairResult::UNFINISHED;
+        } else {
+            f.close();
+            ok = false;
+        }
+    }
+    if (out) *out = res;
+    return ok;
+}
+
+bool FitWriter::finish(time_t endUtc, double totalDistanceM, uint32_t timerS,
+                       const Summary& sum) {
+    if (!file_) return false;
+    cut_ = false;
+    if (!failed_) {
+        writeTail(endUtc, totalDistanceM, timerS, sum);
+        // The card's own word on the length: a write the buffers took but the
+        // card refused only shows here, after the close. (Longer than written
+        // is a resumed ride's stale tail, not a failure, but is cut the same.)
+        const uint32_t want = 12 + dataSize_ + 2, got = sizeOnCard();
+        if (!failed_ && got == want) return true;
+        if (got < want) everFailed_ = true;
+    } else {
+        file_.close();
+    }
+    return salvage();
+}
+
+uint32_t FitWriter::sizeOnCard() {
+    File f = fs_ ? fs_->open(path_, "r") : File();
+    uint32_t n = f ? f.size() : 0;
+    f.close();
+    return n;
+}
+
+// A ride whose writes ran out of card: keep the whole records that leave room
+// for the tail and CRC inside the bytes the file already has — a full card
+// has no other clusters to give — pad any gap left before the tail, and close
+// it as a valid ride with its totals replayed from what was kept.
+bool FitWriter::salvage() {
+    if (!fs_) return false;
+    const uint32_t size = sizeOnCard();
+    if (size < PROLOGUE_BYTES + TAIL_BYTES + 2) return false;
+    const uint32_t room = size - PROLOGUE_BYTES - TAIL_BYTES - 2;
+    uint32_t keep = room / RECORD_BYTES;
+    const uint32_t gap = room % RECORD_BYTES;
+    if (gap && gap < FILLER_MIN) {   // too small to pad: give up one more record
+        if (!keep) return false;
+        --keep;
+    }
+
+    RepairResult res;
+    File f;
+    if (!scanUnfinished(*fs_, path_, "r+", f, res, keep)) return false;
+    const uint32_t end = PROLOGUE_BYTES + (uint32_t)res.records * RECORD_BYTES;
+    if (!f.seek(end)) {
+        f.close();
+        return false;
+    }
+    file_ = f;
+    f = File();   // one owner, as in repair()
+    failed_ = false;
+    startUtc_ = res.startUtc;
+    dataSize_ = end - 12;
+    writeFiller(size - end - TAIL_BYTES - 2);
+
+    Summary sum = {};
+    sum.movingS = res.movingS;
+    sum.avgSpeedKmh = res.movingS ? (float)(res.distanceM / 1000.0 / (res.movingS / 3600.0)) : 0;
+    sum.avgPowerW = res.powerCount ? (uint16_t)(res.powerSum / res.powerCount) : 0;
+    sum.avgHrBpm = res.hrCount ? (uint8_t)(res.hrSum / res.hrCount) : 0;
+    sum.ascentM = (float)res.climbM;
+    // Records are 1 Hz while the timer runs: their count is the timer.
+    writeTail(res.endUtc, res.distanceM, (uint32_t)res.records, sum);
+    if (failed_ || sizeOnCard() != size) {
+        failed_ = everFailed_ = true;
+        return false;
+    }
+    cut_ = (uint32_t)res.records < records_;
+    return true;
+}
+
+void FitWriter::writeTail(time_t endUtc, double totalDistanceM, uint32_t timerS,
+                          const Summary& sum) {
+    uint32_t ts = fitTime(endUtc);
+    uint32_t start = fitTime(startUtc_);
+    uint32_t elapsedMs = (ts - start) * 1000;
+    uint32_t timerMs = timerS * 1000;
+    uint32_t distCm = (uint32_t)llround(totalDistanceM * 100.0);
+
+    uint8_t evt[8];
+    evt[0] = L_EVENT;
+    put32(&evt[1], ts);
+    evt[5] = 0;  // timer
+    evt[6] = 4;  // stop_all
+    evt[7] = 0;
+    writeBytes(evt, sizeof(evt));
+
+    writeDefinition(L_LAP, MSG_LAP, FIELDS_LAP, 8);
+    uint8_t lap[25];
+    lap[0] = L_LAP;
+    put32(&lap[1], ts);
+    put32(&lap[5], start);
+    put32(&lap[9], elapsedMs);
+    put32(&lap[13], timerMs);
+    put32(&lap[17], distCm);
+    put16(&lap[21], 0);  // message_index
+    lap[23] = 9;         // event: lap
+    lap[24] = 1;         // event_type: stop
+    writeBytes(lap, sizeof(lap));
+
+    writeDefinition(L_SESSION, MSG_SESSION, FIELDS_SESSION, 16);
+    uint8_t ses[38];
+    ses[0] = L_SESSION;
+    put32(&ses[1], ts);
+    put32(&ses[5], start);
+    put32(&ses[9], elapsedMs);
+    // total_timer_time = moving time (what the ride-complete screen shows);
+    // fall back to the recording timer for a repaired ride with no summary.
+    put32(&ses[13], sum.movingS ? sum.movingS * 1000 : timerMs);
+    put32(&ses[17], distCm);
+    put16(&ses[21], (uint16_t)llround(sum.avgSpeedKmh / 3.6 * 1000.0));  // mm/s
+    ses[23] = sum.avgHrBpm ? sum.avgHrBpm : INVALID_U8;
+    put16(&ses[24], sum.avgPowerW ? sum.avgPowerW : INVALID_U16);
+    put16(&ses[26], sum.normPowerW ? sum.normPowerW : INVALID_U16);
+    put16(&ses[28], (uint16_t)llround(sum.ascentM));
+    put16(&ses[30], 0);  // first_lap_index
+    put16(&ses[32], 1);  // num_laps
+    ses[34] = 8;         // event: session
+    ses[35] = 1;         // event_type: stop
+    ses[36] = 2;         // sport: cycling
+    ses[37] = 0;         // sub_sport: generic
+    writeBytes(ses, sizeof(ses));
+
+    writeDefinition(L_ACTIVITY, MSG_ACTIVITY, FIELDS_ACTIVITY, 7);
+    uint8_t act[16];
+    act[0] = L_ACTIVITY;
+    put32(&act[1], ts);
+    put32(&act[5], timerMs);
+    put32(&act[9], ts);  // local_timestamp (UTC; timezone handling later)
+    put16(&act[13], 1);  // num_sessions
+    // type=0 manual is what most head units emit here
+    // (activity.type distinguishes manual vs auto multisport)
+    act[15] = 0;
+    writeBytes(act, sizeof(act));
+    uint8_t tail[2] = {26, 1};  // event: activity, event_type: stop
+    writeBytes(tail, sizeof(tail));
+
+    // Patch data_size, then CRC the whole file (header + data) by re-reading.
+    file_.flush();
+    file_.seek(4);
+    uint8_t sz[4];
+    put32(sz, dataSize_);
+    if (file_.write(sz, 4) != 4) failed_ = everFailed_ = true;
+    file_.flush();
+
+    file_.seek(0);
+    uint16_t crc = 0;
+    uint8_t chunk[256];
+    // read() returns int and gives -1 on error; a size_t here would wrap to a
+    // huge value and spin forever (the boot-time recovery hit this and hung the
+    // whole device, so the SD never got mounted).
+    // Only up to the end of the data: a salvaged file already runs on past it,
+    // over the bytes the CRC is about to take.
+    int n;
+    uint32_t left = 12 + dataSize_;
+    while (left && (n = file_.read(chunk, left < sizeof(chunk) ? left : sizeof(chunk))) > 0) {
+        for (int i = 0; i < n; ++i) crc = crc16(crc, chunk[i]);
+        left -= (uint32_t)n;
+    }
+    file_.seek(12 + dataSize_);
+    uint8_t crcBuf[2];
+    put16(crcBuf, crc);
+    if (file_.write(crcBuf, 2) != 2) failed_ = everFailed_ = true;
+    file_.close();
+}

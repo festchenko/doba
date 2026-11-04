@@ -1,0 +1,1024 @@
+#include "map_store.h"
+
+#include <Arduino.h>
+#include <SD.h>
+#include <ff.h>
+#include <esp_heap_caps.h>
+#include <cmath>
+#include <cstring>
+
+#include "map_select.h"
+#include "map_tiles.h"
+#include "sd_bus.h"
+#include "tile_versions.h"
+#include "usb_storage.h"
+#include "diag.h"
+
+// No embedded fallback map — the device only shows maps that were explicitly
+// downloaded to the SD card. Where nothing covers the position the map screen
+// shows "NO MAP HERE".
+
+namespace {
+
+constexpr char MAP_DIR[] = "/maps";
+constexpr char TILE_DIR[] = "/maps/tiles";
+// The tile version log (tile_versions.h), and the compacted copy that replaces
+// it. In /maps, not the tile tree: few entries to search, and the tile walk
+// never sees it.
+constexpr char VER_PATH[] = "/maps/tiles.ver";
+constexpr char VER_TMP[] = "/maps/tiles.ver.tmp";
+
+// The tile index and the tile cache are shared by TWO tasks, and used to be
+// shared with no lock at all:
+//
+//   UI task     — renderInto / elevationAt / coversPosition / ensureForPosition
+//   BLE server  — saveTile / listTileIds / listMaps / saveAndActivate
+//
+// saveTile rebuilt the whole index, which starts by freeing every cached tile
+// blob. Do that while the UI task is holding a pointer into that cache — or,
+// worse, half way through its own eviction — and you get a use-after-free or a
+// double free in PSRAM, which lands as a panic and a reset some indeterminate
+// time later. It fires more often the more tiles are sent, because the rebuild
+// ran once PER TILE, so a large transfer was hundreds of chances to hit it.
+//
+// This guards the RAM structures (the tile cache, the presence cache, g_maps
+// active whole-map pointers). It is NOT the SD lock: it is always taken OUTSIDE
+// sdLock, never the other way round, so the two can never deadlock.
+// A function-local static, so the mutex exists before the first caller whoever
+// that is — begin() runs on the UI task and the BLE server is already up by
+// then, so there is no safe "create it in setup()" moment to rely on.
+SemaphoreHandle_t mapMutex() {
+    static SemaphoreHandle_t m = xSemaphoreCreateRecursiveMutex();
+    return m;
+}
+
+void mapLock() {
+    if (SemaphoreHandle_t m = mapMutex()) xSemaphoreTakeRecursive(m, portMAX_DELAY);
+}
+void mapUnlock() {
+    if (SemaphoreHandle_t m = mapMutex()) xSemaphoreGiveRecursive(m);
+}
+
+// Scope guard so an early return can't leak the lock.
+struct MapGuard {
+    MapGuard() { mapLock(); }
+    ~MapGuard() { mapUnlock(); }
+};
+
+uint8_t* activeBuf = nullptr;     // PSRAM copy of the active whole SD map (or null)
+size_t activeLen = 0;
+
+// The active whole-map blob rendered as a base where no per-position tiles
+// cover us (null when no whole map is loaded).
+const uint8_t* primaryBlob = nullptr;
+size_t primaryLen = 0;
+
+// Bounds of the currently loaded whole map, so we can tell when to switch.
+double loadedS = 0, loadedW = 0, loadedN = 0, loadedE = 0;
+bool haveBounds = false;
+
+// Index of the whole maps on the card (name + bbox), so "which whole map covers
+// this position?" is a RAM lookup rather than a scan of the card. Mirrors the
+// H3 tile index below. Whole maps only appear/disappear when one is downloaded
+// or a host computer edits the card, so this is rebuilt at those points instead
+// of being re-derived from SD on every position update.
+constexpr int MAX_MAPS = 32;
+struct MapMeta { char name[56]; double s, w, n, e; };
+MapMeta g_maps[MAX_MAPS];
+int g_mapCount = 0;
+
+// --- H3 tile layer -------------------------------------------------------
+// Each downloaded H3 cell is its own small .ebm under /maps/tiles, named by its
+// H3 id, and loaded on demand into a small PSRAM LRU cache.
+//
+// THERE IS NO INDEX. A tile's filename IS its H3 cell id, and an H3 id encodes
+// its own position on the globe — so "which tiles cover this viewport?" is
+// arithmetic (see map_select.h), and "where is that tile?" is string formatting.
+// Nothing has to be read off the card to find out.
+//
+// What that replaces: a boot-time scan that opened every .ebm on the card to
+// read its 36-byte header into a bbox index. That cost ~37 ms a tile — 4.8 s at
+// 129 tiles, growing with the card — held the SD lock throughout, blocked
+// setup(), and capped coverage at however many entries the index had room for.
+// It was also the longest stretch of a boot with no repaint, which is what made
+// the panel wedge and the device boot-loop once a rider's card grew past it.
+constexpr int TILE_PREFIX_LEN = 6;
+
+// "<TILE_DIR>/<prefix>" for this id. Ids shorter than the prefix (or odd input)
+// fall back to the flat directory rather than producing a stub folder.
+void tileDirFor(const char* id, char* out, size_t len) {
+    int n = 0;
+    while (n < TILE_PREFIX_LEN && id[n] && id[n] != '.') ++n;
+    if (n < TILE_PREFIX_LEN) { snprintf(out, len, "%s", TILE_DIR); return; }
+    snprintf(out, len, "%s/%.*s", TILE_DIR, TILE_PREFIX_LEN, id);
+}
+
+// On-disk path for a cell: /maps/tiles/<first 6 of id>/<rest>.ebm. Mirrors
+// saveTile(), the website generator and the phone app — all four have to agree
+// on this or the device looks for files nobody wrote.
+// `ext` is ".ebm" for the map tile or ".poi" for its cycling-POI companion
+// file, which lives next to it under the same name (docs/mapgen.js buildPoi).
+void tilePathForId(const char* bareId, char* out, size_t len, const char* ext = ".ebm") {
+    char dir[80];
+    tileDirFor(bareId, dir, sizeof(dir));
+    const char* leaf = (strlen(dir) > strlen(TILE_DIR)) ? bareId + TILE_PREFIX_LEN
+                                                        : bareId;
+    snprintf(out, len, "%s/%s%s", dir, leaf, ext);
+}
+
+void tilePathForCell(uint64_t cell, char* out, size_t len, const char* ext = ".ebm") {
+    char id[24];
+    h3_cell_id(cell, id, sizeof(id));
+    tilePathForId(id, out, len, ext);
+}
+
+// Does a tile exist for this cell? Answered from a small direct-mapped cache,
+// because the alternative is asking the card the same question every frame —
+// and the interesting answer is usually "no": a viewport at the edge of the
+// downloaded area asks about plenty of cells nobody ever downloaded.
+constexpr int PRESENCE_N = 256;
+struct CellPresence { uint64_t cell; bool present; };
+CellPresence g_presence[PRESENCE_N] = {};
+
+// Every change to what is on the card comes through one of these two, which makes this
+// the one place that can say anything drawn from the old tiles is out of date.
+volatile uint32_t g_generation = 0;
+
+void forgetPresence(uint64_t cell) {
+    CellPresence& e = g_presence[(size_t)(cell % PRESENCE_N)];
+    if (e.cell == cell) e = {};
+    g_generation = g_generation + 1;
+}
+void forgetAllPresence() {
+    for (int i = 0; i < PRESENCE_N; ++i) g_presence[i] = {};
+    g_generation = g_generation + 1;
+}
+
+bool tileExists(uint64_t cell) {
+    CellPresence& e = g_presence[(size_t)(cell % PRESENCE_N)];
+    if (e.cell == cell) return e.present;
+    char path[96];
+    tilePathForCell(cell, path, sizeof(path));
+    sdLock();
+    bool got = SD.exists(path);
+    sdUnlock();
+    e.cell = cell;
+    e.present = got;
+    return got;
+}
+
+
+
+// The tile LRU. One slot per tile the widest frame can ask for (MAP_TILE_BUDGET
+// — see map_select.h), so a working set that fits in the byte budget stays
+// entirely cached and repeated zoom in/out costs no SD reads at all.
+//
+// Bounded by BYTES as well as slots, because a slot is not a fixed cost: a
+// res-6 tile is ~50 KB of quiet suburb but over 200 KB of dense city, and 64
+// dense slots would be more PSRAM than this device has spare. Past the byte
+// budget the far tiles simply stream — the frame still draws every tile it
+// selected, it just re-reads some of them next time. Correctness never depends
+// on the cache, only speed: renderInto finishes with one tile's bytes before it
+// asks for the next.
+// One megabyte holds the working set of every zoom the rider actually spends
+// time at — 2 to 16 m/px needs 2 to 15 tiles, 100 to 750 KB — and lets the
+// widest track-up view (38 tiles, ~1.9 MB) stream the outer half from the card
+// instead of reserving PSRAM all day for a view that is glanced at.
+//
+// It is reserved against OTA: staging a firmware image wants ~1.9 MB of
+// CONTIGUOUS PSRAM in one allocation, and a full tile cache is exactly the kind
+// of long-lived block that fragments that away. releaseCache() exists for it.
+constexpr int CACHE_N = MAP_TILE_BUDGET;
+
+// How many bytes of tile blobs may stay resident.
+//
+// This has to hold the WHOLE working set of the widest view, and "it can just
+// stream the rest off the card" is not an option here — that was tried, and the
+// SD runs at 4 MHz, about 400 KB/s in practice. A 22-tile view is ~2.2 MB, so a
+// cache one megabyte short of it does not degrade gracefully: every tile is
+// evicted before the next frame wants it again, all 22 are re-read every frame,
+// and the projection goes from 129 ms to 5,650 ms. That is a frame the UI task
+// spends entirely inside SPI reads, which is why touch went unresponsive — the
+// same loop polls the touch controller — and it is uncomfortably close to the
+// 5 s task watchdog.
+//
+// Sized from what is actually free rather than a guess, and released wholesale
+// before an OTA (releaseCache), which is what keeps a large cache compatible
+// with staging a ~2 MB firmware image in one contiguous piece.
+size_t cacheBudget() {
+    static size_t budget = 0;
+    if (budget) return budget;
+    // Left free beside the cache. Not room for an OTA: both paths that stage one call
+    // releaseCache() first, and that is what gives it its contiguous block. This was
+    // 2.5 MB when PSRAM had little else in it. Now the panel scan and map layers need
+    // their share, and holding this much back left the cache at its floor, where every
+    // wide view streams from the card.
+    constexpr size_t kReserve = 1100u * 1024;
+    constexpr size_t kCeiling = 4096u * 1024;
+    constexpr size_t kFloor   = 512u * 1024;
+    const size_t freeNow = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    budget = freeNow > kReserve + kFloor ? freeNow - kReserve : kFloor;
+    if (budget > kCeiling) budget = kCeiling;
+    diag::log("map: tile cache %u KB (psram free %u KB)",
+              (unsigned)(budget / 1024), (unsigned)(freeNow / 1024));
+    return budget;
+}
+// A cached tile is the map blob plus, when the card has one, its .poi file.
+// They share one slot so the POIs live and die with the map they belong to: a
+// frame that has the map in RAM has its POIs too, at no extra SD access.
+struct CachedTile {
+    uint64_t cell;
+    uint8_t* buf;
+    size_t len;
+    uint32_t stamp;
+    uint8_t* poi;     // null: no .poi file for this tile (= no POIs)
+    size_t poiLen;
+};
+CachedTile g_cache[CACHE_N] = {};
+size_t g_cacheBytes = 0;
+uint32_t g_clock = 0;
+
+template <typename T>
+T rd(const uint8_t* p) { T v; memcpy(&v, p, sizeof(T)); return v; }
+
+// Free one cache slot (map blob and POI file) and give its bytes back.
+void freeCached(CachedTile& t) {
+    if (t.buf) heap_caps_free(t.buf);
+    if (t.poi) heap_caps_free(t.poi);
+    g_cacheBytes -= t.len + t.poiLen;
+    t = {};
+}
+
+// Read the EBM2 header (36 bytes) and fill s/w/n/e. Returns false if not EBM2.
+bool headerBounds(const uint8_t* h, double& s, double& w, double& n, double& e) {
+    if (memcmp(h, "EBM2", 4) != 0) return false;
+    double lat0 = rd<double>(h + 4);
+    double lon0 = rd<double>(h + 12);
+    double td = rd<double>(h + 20);
+    int32_t nx = rd<int32_t>(h + 28);
+    int32_t ny = rd<int32_t>(h + 32);
+    s = lat0; w = lon0;
+    n = lat0 + td * ny;
+    e = lon0 + td * nx;
+    return true;
+}
+
+bool boundsCover(double lat, double lon) {
+    return haveBounds && lat >= loadedS && lat <= loadedN &&
+           lon >= loadedW && lon <= loadedE;
+}
+
+// No whole map covers us (or none is downloaded): clear the primary base so
+// the renderer draws only tiles (if any) and the map screen reports no coverage.
+void clearPrimary() {
+    primaryBlob = nullptr;
+    primaryLen = 0;
+    haveBounds = false;
+}
+
+// Read a whole .ebm file into a fresh PSRAM buffer and make it the active map.
+bool loadFile(const char* path) {
+    sdLock();
+    File f = SD.open(path, FILE_READ);
+    if (!f) { sdUnlock(); return false; }
+    size_t len = f.size();
+    if (len < 36) { f.close(); sdUnlock(); return false; }
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    if (!buf) { f.close(); sdUnlock(); return false; }
+    size_t got = f.read(buf, len);
+    f.close();
+    sdUnlock();
+    if (got != len || !map_tiles::load(buf, len)) {
+        heap_caps_free(buf);
+        return false;
+    }
+    if (activeBuf) heap_caps_free(activeBuf);   // free the previous SD map
+    activeBuf = buf;
+    activeLen = len;
+    primaryBlob = buf;
+    primaryLen = len;
+    haveBounds = headerBounds(buf, loadedS, loadedW, loadedN, loadedE);
+    diag::log("map: loaded %s (%u KB)", path, (unsigned)(len / 1024));
+    return true;
+}
+
+// (Re)build the in-memory whole-map index from the /maps headers.
+void scanMaps() {
+    g_mapCount = 0;
+    sdLock();
+    if (!SD.exists(MAP_DIR)) SD.mkdir(MAP_DIR);
+    File dir = SD.open(MAP_DIR);
+    if (dir) {
+        for (File e = dir.openNextFile(); e && g_mapCount < MAX_MAPS;
+             e = dir.openNextFile()) {
+            if (!e.isDirectory()) {
+                const char* nm = e.name();
+                const char* base = strrchr(nm, '/');
+                base = base ? base + 1 : nm;
+                if (strstr(base, ".ebm")) {
+                    uint8_t h[36];
+                    double s, w, n, ee;
+                    if (e.read(h, 36) == 36 && headerBounds(h, s, w, n, ee)) {
+                        MapMeta& m = g_maps[g_mapCount++];
+                        strncpy(m.name, base, sizeof(m.name) - 1);
+                        m.name[sizeof(m.name) - 1] = 0;
+                        m.s = s; m.w = w; m.n = n; m.e = ee;
+                    }
+                }
+            }
+            e.close();
+        }
+        dir.close();
+    }
+    sdUnlock();
+    diag::log("map: %d whole maps indexed", g_mapCount);
+}
+
+// Find an indexed whole map whose bounds contain (lat, lon); load if found.
+// A RAM lookup — no SD work unless there's actually a map to load.
+bool loadCovering(double lat, double lon) {
+    for (int i = 0; i < g_mapCount; ++i) {
+        const MapMeta& m = g_maps[i];
+        if (lat < m.s || lat > m.n || lon < m.w || lon > m.e) continue;
+        char path[80];
+        snprintf(path, sizeof(path), "%s/%s", MAP_DIR, m.name);
+        return loadFile(path);
+    }
+    return false;
+}
+
+// Drop a cached blob for one cell (its file on the card just changed).
+void invalidateCached(uint64_t cell) {
+    for (int i = 0; i < CACHE_N; ++i) {
+        if (g_cache[i].buf && g_cache[i].cell == cell) freeCached(g_cache[i]);
+    }
+}
+
+// The blob for one H3 cell, read from the card into the LRU cache on demand.
+// Null when no tile covers that cell, when the read fails, or when the USB host
+// owns the card and the tile is not already cached.
+// `poiOut`/`poiLenOut`, when given, receive the tile's .poi blob (null/0 when
+// the card has none).
+const uint8_t* ensureTileLoaded(uint64_t cell, size_t& outLen, bool mayRead = true,
+                                const uint8_t** poiOut = nullptr,
+                                size_t* poiLenOut = nullptr) {
+    if (poiOut) *poiOut = nullptr;
+    if (poiLenOut) *poiLenOut = 0;
+    for (int i = 0; i < CACHE_N; ++i) {
+        if (g_cache[i].buf && g_cache[i].cell == cell) {
+            g_cache[i].stamp = ++g_clock;
+            outLen = g_cache[i].len;
+            if (poiOut) *poiOut = g_cache[i].poi;
+            if (poiLenOut) *poiLenOut = g_cache[i].poiLen;
+            return g_cache[i].buf;
+        }
+    }
+    if (!mayRead) { outLen = 0; return nullptr; }   // cached-only pass
+    if (usb_storage::hostActive()) { outLen = 0; return nullptr; }
+    if (!tileExists(cell)) { outLen = 0; return nullptr; }
+
+    char path[96];
+    tilePathForCell(cell, path, sizeof(path));
+    sdLock();
+    File f = SD.open(path, FILE_READ);
+    size_t len = f ? f.size() : 0;
+    if (!f || len < 36) {
+        if (f) f.close();
+        sdUnlock();
+        forgetPresence(cell);        // it went away, or never was
+        outLen = 0;
+        return nullptr;
+    }
+
+    // Make room BEFORE allocating, so the peak is the budget rather than the
+    // budget plus the tile being read. A tile bigger than the whole budget
+    // empties the cache and lives there alone rather than failing to load.
+    auto freeSlot = [&]() -> CachedTile* {
+        for (int i = 0; i < CACHE_N; ++i)
+            if (!g_cache[i].buf) return &g_cache[i];
+        return nullptr;
+    };
+    auto evictLru = [&]() -> bool {
+        CachedTile* lru = nullptr;
+        for (int i = 0; i < CACHE_N; ++i)
+            if (g_cache[i].buf && (!lru || g_cache[i].stamp < lru->stamp))
+                lru = &g_cache[i];
+        if (!lru) return false;
+        freeCached(*lru);
+        return true;
+    };
+    while ((!freeSlot() || g_cacheBytes + len > cacheBudget()) && evictLru()) {}
+    CachedTile* victim = freeSlot();
+
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    if (buf && f.read(buf, len) != len) { heap_caps_free(buf); buf = nullptr; }
+    f.close();
+    sdUnlock();
+    if (!buf) {
+        diag::log("map: tile %s (%u KB) would not fit in PSRAM (%u free)", path,
+                  (unsigned)(len / 1024),
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        outLen = 0;
+        return nullptr;
+    }
+    // Never null: the loop above stops only once a slot is free, or once the
+    // cache is empty — and an empty cache is CACHE_N free slots.
+    victim->buf = buf; victim->len = len; victim->cell = cell;
+    victim->stamp = ++g_clock;
+    g_cacheBytes += len;
+    outLen = len;
+
+    // The companion .poi file, read in the same visit so it shares the slot.
+    // A missing file is the normal case for tiles built before POIs (or by a
+    // builder that has none) and simply means no POIs. It is small — a few KB
+    // in a dense city — so it is counted against the byte budget but not
+    // evicted for: the next load makes room for both.
+    char ppath[96];
+    tilePathForCell(cell, ppath, sizeof(ppath), ".poi");
+    sdLock();
+    if (SD.exists(ppath)) {
+        File pf = SD.open(ppath, FILE_READ);
+        size_t plen = pf ? pf.size() : 0;
+        uint8_t* pbuf = (pf && plen >= map_tiles::POI_HEADER_LEN)
+                            ? (uint8_t*)heap_caps_malloc(plen, MALLOC_CAP_SPIRAM)
+                            : nullptr;
+        if (pbuf && (pf.read(pbuf, plen) != plen ||
+                     !map_tiles::poiFileValid(pbuf, plen))) {
+            heap_caps_free(pbuf);
+            pbuf = nullptr;
+        }
+        if (pf) pf.close();
+        if (pbuf) {
+            victim->poi = pbuf;
+            victim->poiLen = plen;
+            g_cacheBytes += plen;
+        }
+    }
+    sdUnlock();
+    if (poiOut) *poiOut = victim->poi;
+    if (poiLenOut) *poiLenOut = victim->poiLen;
+    return buf;
+}
+
+// Interpolate elevation from a blob's ELV1 grid (appended after the tile data).
+// Returns NAN if the blob has no elevation block covering (lat, lon).
+float elevFromBlob(const uint8_t* b, size_t len, double lat, double lon) {
+    // End of the tile data, read only from the parts of the index inside the
+    // blob (0: a header no reader can trust). This runs every few seconds on
+    // any screen with a fix, so a damaged tile under the rider must not crash.
+    const size_t maxEnd = map_tiles::tileDataEnd(b, len);
+    if (!maxEnd || len - maxEnd < 44 || memcmp(b + maxEnd, "ELV1", 4) != 0) return NAN;
+    const uint8_t* p = b + maxEnd + 4;
+    int32_t gw = rd<int32_t>(p), gh = rd<int32_t>(p + 4);
+    double s = rd<double>(p + 8), w = rd<double>(p + 16);
+    double n = rd<double>(p + 24), e = rd<double>(p + 32);
+    const uint8_t* grid = p + 40;
+    if (gw < 2 || gh < 2 || e <= w || n <= s) return NAN;
+    if ((uint64_t)gw * (uint64_t)gh * 2 > (uint64_t)(len - maxEnd - 44)) return NAN;
+
+    double fx = (lon - w) / (e - w) * (gw - 1);
+    double fy = (lat - s) / (n - s) * (gh - 1);
+    if (fx < 0) fx = 0; if (fx > gw - 1) fx = gw - 1;
+    if (fy < 0) fy = 0; if (fy > gh - 1) fy = gh - 1;
+    int x0 = (int)fx, y0 = (int)fy;
+    int x1 = x0 + 1 < gw ? x0 + 1 : x0;
+    int y1 = y0 + 1 < gh ? y0 + 1 : y0;
+    float tx = (float)(fx - x0), ty = (float)(fy - y0);
+    auto gv = [&](int xx, int yy) -> float {
+        return (float)rd<int16_t>(grid + ((size_t)yy * gw + xx) * 2);
+    };
+    float top = gv(x0, y0) + (gv(x1, y0) - gv(x0, y0)) * tx;
+    float bot = gv(x0, y1) + (gv(x1, y1) - gv(x0, y1)) * tx;
+    return top + (bot - top) * ty;
+}
+
+}  // namespace
+
+namespace map_store {
+
+void begin(double lat, double lon) {
+    MapGuard g;
+    sdLock();
+    if (!SD.exists(MAP_DIR)) SD.mkdir(MAP_DIR);
+    sdUnlock();
+    // No tile scan. Tiles are found by computing their H3 ids from the
+    // position, so boot only has to index the handful of whole maps.
+    scanMaps();
+    if (!loadCovering(lat, lon)) clearPrimary();   // no fallback map
+}
+
+// Hand the tile cache's PSRAM back. Costs the next few frames an SD re-read;
+// buys a large contiguous allocation elsewhere a chance of succeeding.
+void releaseCache() {
+    MapGuard g;
+    for (int i = 0; i < CACHE_N; ++i) {
+        if (!g_cache[i].buf) continue;
+        freeCached(g_cache[i]);
+    }
+    g_cacheBytes = 0;
+}
+
+void rescanCard() {
+    MapGuard g;
+    // A host computer may have added or removed tiles behind our back, so the
+    // "is there a tile for this cell?" answers have to go.
+    forgetAllPresence();
+    for (int i = 0; i < CACHE_N; ++i) {
+        if (!g_cache[i].buf) continue;
+        freeCached(g_cache[i]);
+    }
+    g_cacheBytes = 0;
+    scanMaps();
+}
+
+// Called once per rendered frame (~1 Hz), including the whole time the rider is
+// outside the downloaded area — so it must not touch the SD card unless there
+// is actually a map to load. The recorder appends to the FIT on the same SPI
+// bus under the same mutex once a second, and a ride must never be held up by
+// map bookkeeping. Hence the RAM-resident bounds index.
+void ensureForPosition(double lat, double lon) {
+    MapGuard g;
+    if (boundsCover(lat, lon)) return;      // current whole map already covers us
+    if (loadCovering(lat, lon)) return;     // switched to a better downloaded map
+    clearPrimary();                         // nothing whole-map covers us now
+}
+
+void renderInto(double lat, double lon, float metersPerPixel, int centerX,
+                int centerY, float rotateDeg, MapScreenData& out,
+                KeepRendering keepGoing, bool cachedOnly) {
+    // Held for the whole frame: the projector reads straight out of the tile
+    // cache, so nothing may rebuild the index or free a blob underneath it.
+    MapGuard g;
+    map_tiles::beginProject(out);
+
+    // Which tiles does this frame need? Computed from the viewport, not looked
+    // up: the H3 cells covering it ARE the filenames. No card access, and
+    // nothing had to be indexed for this to work (see map_select.h, which
+    // tools/map_test drives directly).
+    // Static, not stack: the UI task has 8 KB and this runs under the whole
+    // renderer. renderInto is UI-task-only, like elevationAt.
+    static uint64_t sel[MAP_TILE_BUDGET];
+    int wanted = 0;
+    int lim = mapSelectCells(lat, lon, metersPerPixel, rotateDeg,
+                             MAP_TILE_BUDGET, sel, &wanted);
+
+    // ONE TILE AT A TIME, yielding between them, and stopping early if the
+    // caller says something more urgent has come up.
+    //
+    // A frame is not a small amount of work: a cold wide view reads a couple of
+    // megabytes off a 4 MHz card, and it used to do that as one uninterruptible
+    // run inside the UI task — the same task that polls the touch controller.
+    // The touch interrupt would fire, set its flag, and then wait out the whole
+    // frame, which is what made the screen feel dead rather than slow. Tiles are
+    // ordered nearest-first, so a frame cut short still draws the ground the
+    // rider is standing on and the next one fills in the rest.
+    int drawn = 0;
+    for (int a = 0; a < lim; ++a) {
+        if (a && keepGoing && !keepGoing()) { out.partial = true; break; }
+        size_t len, poiLen;
+        const uint8_t* poi;
+        const uint8_t* b = ensureTileLoaded(sel[a], len, !cachedOnly, &poi, &poiLen);
+        if (!b) {
+            // On a cached-only pass this means "not in RAM yet", not "no tile":
+            // the frame is incomplete and the caller owes us a full one.
+            if (cachedOnly && tileExists(sel[a])) out.partial = true;
+            continue;
+        }
+        drawn++;
+        map_tiles::projectBlobInto(b, len, lat, lon, metersPerPixel,
+                                   centerX, centerY, rotateDeg);
+        if (poi)
+            map_tiles::projectPoisInto(poi, poiLen, lat, lon, metersPerPixel,
+                                       centerX, centerY, rotateDeg);
+        // Let the rest of the system run. Costs a tick per tile against reads
+        // measured in tens of milliseconds, and it keeps a slow frame from
+        // starving the idle task into a watchdog reset. Nothing to yield for on
+        // a cached-only pass — it does no I/O at all.
+        if (!cachedOnly) vTaskDelay(1);
+    }
+
+    int tilePolys = map_tiles::projectedPolyCount();   // split for diagnostics
+
+    // Always draw the whole-map / embedded blob as a BASE layer underneath the
+    // tiles. Tiles cover only the downloaded area; when zoomed out past them the
+    // rest of the viewport would otherwise be blank. The base fills those gaps
+    // where it has data (its viewport reject draws nothing outside its bounds).
+    // Tiles are projected first so they win the polygon budget; where both have
+    // the same roads they land on the same pixels (identical 3 m simplification),
+    // so the overlap is invisible.
+    if (primaryBlob) {
+        map_tiles::projectBlobInto(primaryBlob, primaryLen, lat, lon,
+                                   metersPerPixel, centerX, centerY, rotateDeg);
+    }
+    map_tiles::endProject(out);
+    out.projectedTiles = drawn;
+    out.wantedTiles = wanted;
+    out.tilePolys = tilePolys;
+    map_tiles::projectedClassCounts(out.clsCount);
+    if (wanted > lim) {
+        // Say so rather than just drawing less: a frame missing its outer tiles
+        // looks like ground nobody downloaded.
+        static uint32_t lastWarn = 0;
+        if (millis() - lastWarn > 10000) {
+            lastWarn = millis();
+            diag::log("map: viewport needs %d tiles, budget is %d — outer %d "
+                      "not drawn", wanted, MAP_TILE_BUDGET, wanted - lim);
+        }
+    }
+}
+
+// Write `len` bytes to `path`, replacing any existing file. Caller holds the
+// SD lock (diag::log is safe under it — that lock order is the established
+// one, see diag.cpp). A field log showed 11 consecutive save failures and
+// then a success in a single session, with reads working throughout and each
+// failure instant — and the old one-line log couldn't say whether open or
+// write failed, let alone why. So every attempt logs its phase, offset and
+// errno. Retries are cheap insurance against a transient card-level error:
+// the tile is already in PSRAM, so one retry costs ~0.2 s against the ~8 s
+// BLE re-send the phone otherwise performs.
+static bool writeAll(const char* what, const char* path,
+                     const uint8_t* data, size_t len) {
+    for (int attempt = 1; attempt <= 3; ++attempt) {
+        if (attempt > 1) vTaskDelay(pdMS_TO_TICKS(150));
+        SD.remove(path);
+        errno = 0;
+        File f = SD.open(path, FILE_WRITE);
+        if (!f) {
+            diag::log("%s save: open failed %s (errno %d) attempt %d",
+                      what, path, errno, attempt);
+            continue;
+        }
+        bool ok = true;
+        size_t wrote = 0;
+        while (ok && wrote < len) {
+            size_t chunk = len - wrote < 4096 ? len - wrote : 4096;
+            errno = 0;
+            if (f.write(data + wrote, chunk) != chunk) ok = false;
+            else wrote += chunk;
+            // Come up for air every 16 KB. This runs on the BLE server task,
+            // and a big tile is a lot of uninterrupted SD work: a 177 KB tile
+            // measured seconds of it, the idle task never ran, and the TASK
+            // WATCHDOG reset the device mid-transfer — inside
+            // spiTransferBytesNL, which busy-waits on the SPI peripheral and
+            // cannot be interrupted from our side. Worse, resetting mid-write
+            // is what leaves the card garbled for the next boot (see
+            // sdSpiForceIdle), so this failure fed itself.
+            if ((wrote & 0x3FFF) == 0) vTaskDelay(1);
+        }
+        int e = errno;
+        f.close();
+        if (ok) {
+            if (attempt > 1)
+                diag::log("%s save: succeeded on attempt %d", what, attempt);
+            return true;
+        }
+        SD.remove(path);
+        diag::log("%s save: write failed %s at %u/%u (errno %d) attempt %d",
+                  what, path, (unsigned)wrote, (unsigned)len, e, attempt);
+    }
+    return false;
+}
+
+bool saveAndActivate(const char* name, const uint8_t* data, size_t len) {
+    MapGuard g;
+    if (!map_tiles::tileValid(data, len)) {
+        diag::log("map save rejected: not a valid EBM2 (%u bytes)", (unsigned)len);
+        return false;
+    }
+    char path[80];
+    snprintf(path, sizeof(path), "%s/%.48s", MAP_DIR, name);
+    if (!strstr(path, ".ebm")) strncat(path, ".ebm", sizeof(path) - strlen(path) - 1);
+
+    sdLock();
+    if (!SD.exists(MAP_DIR)) SD.mkdir(MAP_DIR);
+    bool ok = writeAll("map", path, data, len);
+    sdUnlock();
+    if (!ok) return false;
+    diag::log("map saved: %s (%u KB)", path, (unsigned)(len / 1024));
+    scanMaps();   // index the new map so ensureForPosition can find it later
+    return loadFile(path);
+}
+
+// A compaction writes the copy, removes the log, renames the copy. Cut power
+// between the last two and only the copy is left: finish the rename. Both
+// present means the copy may be partial and the log is whole: drop the copy.
+// Once per boot, before the first append or read. Call under sdLock.
+static void verRecover() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    if (!SD.exists(VER_TMP)) return;
+    if (SD.exists(VER_PATH)) SD.remove(VER_TMP);
+    else SD.rename(VER_TMP, VER_PATH);
+}
+
+// Append the record for a file just saved. A sender with no version (an older
+// app) still appends one, CLEARED, so a record from an earlier save is not
+// taken for the new file — unless there is no log yet, so nothing to clear.
+// Call under sdLock.
+static void verAppend(uint64_t cell, bool poi, size_t len, const char* version) {
+    if (!cell) return;
+    tile_versions::Rec r{};
+    r.cell = cell;
+    r.kind = poi ? 'p' : 'e';
+    r.size = (uint32_t)len;
+    r.type = tile_versions::parse(version, r.value);
+    verRecover();
+    if (r.type == tile_versions::CLEARED && !SD.exists(VER_PATH)) return;
+    uint8_t b[tile_versions::REC_LEN];
+    tile_versions::encode(r, b);
+    File f = SD.open(VER_PATH, FILE_APPEND);
+    if (!f) { diag::log("tile version: open failed"); return; }
+    if (f.write(b, sizeof(b)) != sizeof(b)) diag::log("tile version: write failed");
+    f.close();
+}
+
+bool saveTile(const char* id, const uint8_t* data, size_t len, const char* version) {
+    MapGuard g;
+    // The same transfer carries a tile's .poi companion: told apart by its
+    // magic, so the phone needs no new BLE opcode to send POIs on their own.
+    const bool isPoi = map_tiles::poiFileValid(data, len);
+    // A tile is checked whole, not just its magic: a header whose grid
+    // overruns the file was once stored and then crashed the map every time
+    // it opened there. Refused, the phone hears PARSE_ERROR and the card keeps
+    // whatever it had.
+    if (!isPoi && !map_tiles::tileValid(data, len)) {
+        diag::log("tile save rejected: not a valid EBM2/EPOI (%u bytes)", (unsigned)len);
+        return false;
+    }
+    // Strip the ".ebm" the caller may have included, then split the id: the
+    // directory carries the first TILE_PREFIX_LEN characters and the filename
+    // carries the rest, so the prefix is not repeated in every name.
+    char bare[48];
+    snprintf(bare, sizeof(bare), "%.40s", id);
+    if (char* dot = strstr(bare, ".ebm")) *dot = 0;
+    if (char* dot = strstr(bare, ".poi")) *dot = 0;
+
+    char dir[80];
+    tileDirFor(bare, dir, sizeof(dir));
+    const char* leaf = (strlen(dir) > strlen(TILE_DIR)) ? bare + TILE_PREFIX_LEN
+                                                        : bare;
+    char path[96];
+    snprintf(path, sizeof(path), "%s/%s%s", dir, leaf, isPoi ? ".poi" : ".ebm");
+
+    sdLock();
+    if (!SD.exists(MAP_DIR)) SD.mkdir(MAP_DIR);
+    if (!SD.exists(TILE_DIR)) SD.mkdir(TILE_DIR);
+    // Remember the last directory we ensured exists. A bulk transfer is one
+    // geographic area, so this collapses to a SINGLE exists+mkdir for the whole
+    // batch instead of a pair of FAT metadata operations per tile — fewer writes
+    // to be interrupted, which is how the previous layout helped corrupt a card.
+    {
+        static char ensured[80] = "";
+        if (strcmp(ensured, dir) != 0) {
+            if (!SD.exists(dir)) SD.mkdir(dir);
+            snprintf(ensured, sizeof(ensured), "%s", dir);
+        }
+    }
+    bool ok = writeAll(isPoi ? "poi" : "tile", path, data, len);
+    // After the file, so a cut in between leaves the previous record, which
+    // the new file's size then disowns (unless the two sizes match exactly).
+    if (ok) verAppend(tile_versions::cellFromId(bare), isPoi, len, version);
+    sdUnlock();
+    if (!ok) return false;
+    diag::log("tile saved: %s (%u KB) %s", path, (unsigned)(len / 1024),
+              version ? version : "");
+    // Renders immediately: forget the cached "no tile here" and any stale blob
+    // for this cell, and the next frame that wants it reads the new file.
+    if (uint64_t cell = h3_from_id(bare)) {
+        forgetPresence(cell);
+        invalidateCached(cell);
+    }
+    return true;
+}
+
+bool hasTile(const char* id) {
+    MapGuard g;
+    char bare[32];
+    snprintf(bare, sizeof(bare), "%.24s", id);
+    if (char* dot = strstr(bare, ".ebm")) *dot = 0;
+    uint64_t cell = h3_from_id(bare);
+    return cell && tileExists(cell);
+}
+
+uint32_t generation() { return g_generation; }
+
+bool coversView(double lat, double lon, float metersPerPixel) {
+    MapGuard g;
+    static uint64_t sel[MAP_TILE_BUDGET];
+    int wanted = 0;
+    const int n = mapSelectCells(lat, lon, metersPerPixel, 0.0f, MAP_TILE_BUDGET, sel, &wanted);
+    if (wanted > n) return false;
+    for (int i = 0; i < n; ++i) {
+        if (!tileExists(sel[i])) return false;
+    }
+    return n > 0;
+}
+
+bool coversPosition(double lat, double lon) {
+    MapGuard g;
+    uint64_t cell = h3_cell_at(lat, lon);
+    if (cell && tileExists(cell)) return true;
+    return haveBounds && lat >= loadedS && lat <= loadedN &&
+           lon >= loadedW && lon <= loadedE;
+}
+
+float elevationAt(double lat, double lon) {
+    MapGuard g;                 // shares the tile cache with renderInto
+    uint64_t cell = h3_cell_at(lat, lon);
+    if (!cell) return NAN;
+    size_t len;
+    const uint8_t* b = ensureTileLoaded(cell, len);
+    if (!b) return NAN;
+    return elevFromBlob(b, len, lat, lon);
+}
+
+// The one call that still walks the card, because "what have you got?" cannot
+// be computed — the phone asks so it can skip re-sending tiles the device
+// already holds. It reads directory entries only and never opens a tile, since
+// the name is the id. On demand, from the phone link, never on the boot path.
+// `ext` ".poi" lists the tiles that have a cycling-POI file instead.
+//
+// FatFs's own f_readdir, not File::openNextFile: that wraps every entry in a
+// File, which stat()s and fopen()s it by path, and each of those is a FatFs
+// search of the directory from the top — quadratic in the directory's size. At
+// the card's 4 MHz every byte of that is busy-waited, so on a card with ~200
+// tiles the walk ran for seconds on core 0 and the task watchdog reset the
+// device (Memfault dumps, Oct 2026: link task in SPI transfers inside
+// sendTileList, every time an app connected). Same drive lookup as
+// ride_recorder's listRides. And not under MapGuard: nothing here touches the
+// tile cache.
+int listTileIds(char out[][24], int maxOut, const char* ext, uint32_t* sizes) {
+    int n = 0;
+    // Heap, not stack: FILINFO carries a 256-byte long-name buffer, and the
+    // link task's stack is not big. One for each directory level.
+    struct Walk { FF_DIR dir; FILINFO fi; };
+    Walk* w = (Walk*)heap_caps_malloc(2 * sizeof(Walk), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!w) w = (Walk*)malloc(2 * sizeof(Walk));
+    if (!w) return 0;
+    uint32_t since = millis();
+    sdLock();
+    // Never hold the card (and core 0) for long: the LoRa radio and the ride
+    // recorder share the bus, and core 0's idle task must run within 5 s.
+    auto breathe = [&]() {
+        if (millis() - since < 30) return;
+        sdUnlock();
+        vTaskDelay(pdMS_TO_TICKS(2));
+        sdLock();
+        since = millis();
+    };
+    auto take = [&](const char* prefix, const char* base, uint32_t size) {
+        if (n >= maxOut || !strstr(base, ext)) return;
+        snprintf(out[n], 24, "%s%s", prefix, base);
+        if (char* dot = strstr(out[n], ext)) *dot = 0;
+        if (sizes) sizes[n] = size;   // from the directory entry: no extra I/O
+        n++;
+    };
+    int drive = -1;
+    for (int drv = 0; drv < FF_VOLUMES && drive < 0; ++drv) {
+        char path[32];
+        snprintf(path, sizeof(path), "%d:%s", drv, TILE_DIR);
+        if (f_opendir(&w[0].dir, path) == FR_OK) drive = drv;
+    }
+    if (drive >= 0) {
+        // Flat tiles straight in TILE_DIR (legacy cards), and the prefix
+        // directories, each walked as it comes up.
+        while (n < maxOut && f_readdir(&w[0].dir, &w[0].fi) == FR_OK && w[0].fi.fname[0]) {
+            const char* name = w[0].fi.fname;
+            if (!(w[0].fi.fattrib & AM_DIR)) {
+                take("", name, (uint32_t)w[0].fi.fsize);
+                breathe();
+                continue;
+            }
+            char sub[16], path[64];
+            snprintf(sub, sizeof(sub), "%s", name);
+            snprintf(path, sizeof(path), "%d:%s/%s", drive, TILE_DIR, sub);
+            const char* prefix = strlen(sub) == TILE_PREFIX_LEN ? sub : "";
+            if (f_opendir(&w[1].dir, path) == FR_OK) {
+                while (n < maxOut && f_readdir(&w[1].dir, &w[1].fi) == FR_OK && w[1].fi.fname[0]) {
+                    if (!(w[1].fi.fattrib & AM_DIR))
+                        take(prefix, w[1].fi.fname, (uint32_t)w[1].fi.fsize);
+                    breathe();
+                }
+                f_closedir(&w[1].dir);
+            }
+            breathe();
+        }
+        f_closedir(&w[0].dir);
+    }
+    sdUnlock();
+    free(w);
+    return n;
+}
+
+void tileVersions(const char (*ids)[24], const uint32_t* sizes, int n, bool poi,
+                  char (*vers)[24]) {
+    for (int i = 0; i < n; ++i) vers[i][0] = 0;
+    if (n <= 0) return;
+    // The whole log into PSRAM, one chunk per sdLock so the recorder's 1 Hz FIT
+    // append never queues behind it. Bounded: at the 4096-tile list cap a
+    // compacted log is 8192 x 24 B = 192 KB; this allows several times that.
+    constexpr size_t LOG_MAX = 1024 * 1024;
+    uint8_t* log = nullptr;
+    size_t len = 0;
+    sdLock();
+    verRecover();
+    File f = SD.open(VER_PATH);
+    if (f) {
+        size_t size = f.size();
+        if (size > LOG_MAX) size = LOG_MAX;   // the rest is ignored until compacted
+        size -= size % tile_versions::REC_LEN;
+        log = size ? (uint8_t*)heap_caps_malloc(size, MALLOC_CAP_SPIRAM) : nullptr;
+        while (log && len < size) {
+            size_t want = size - len < 8192 ? size - len : 8192;
+            int got = f.read(log + len, want);
+            if (got <= 0) break;
+            len += (size_t)got;
+            if (len < size) { sdUnlock(); vTaskDelay(1); sdLock(); }
+        }
+        f.close();
+    }
+    sdUnlock();
+    if (!log) return;
+
+    const int slots = (int)(len / tile_versions::REC_LEN);
+    auto* recs = (tile_versions::Rec*)heap_caps_malloc(
+        (size_t)(slots ? slots : 1) * sizeof(tile_versions::Rec), MALLOC_CAP_SPIRAM);
+    if (!recs) { heap_caps_free(log); return; }
+    const int live = tile_versions::latest(recs, tile_versions::decodeAll(log, len, recs));
+    heap_caps_free(log);
+
+    int found = 0;
+    const uint8_t kind = poi ? 'p' : 'e';
+    for (int i = 0; i < n; ++i) {
+        const tile_versions::Rec* r =
+            tile_versions::find(recs, live, tile_versions::cellFromId(ids[i]), kind);
+        if (!r || (sizes && r->size != sizes[i])) continue;
+        tile_versions::format(r->type, r->value, vers[i], 24);
+        ++found;
+    }
+
+    // Mostly superseded (or torn) records: rewrite just the live ones. Write
+    // the copy, then swap it in (verRecover finishes a swap cut short).
+    if (tile_versions::wantsCompaction(slots, live)) {
+        uint32_t t0 = millis();
+        sdLock();
+        SD.remove(VER_TMP);
+        File out = SD.open(VER_TMP, FILE_WRITE);
+        bool ok = (bool)out;
+        uint8_t b[tile_versions::REC_LEN];
+        for (int i = 0; ok && i < live; ++i) {
+            tile_versions::encode(recs[i], b);
+            ok = out.write(b, sizeof(b)) == sizeof(b);
+        }
+        if (out) out.close();
+        ok = ok && SD.remove(VER_PATH) && SD.rename(VER_TMP, VER_PATH);
+        if (!ok && !SD.exists(VER_PATH)) SD.rename(VER_TMP, VER_PATH);
+        else if (!ok) SD.remove(VER_TMP);
+        sdUnlock();
+        diag::log("tile version log %s: %d -> %d records in %ums",
+                  ok ? "compacted" : "compaction FAILED", slots, live,
+                  (unsigned)(millis() - t0));
+    }
+    heap_caps_free(recs);
+    diag::log("%s versions: %d of %d known (%d records)", poi ? "poi" : "tile",
+              found, n, slots);
+}
+
+uint32_t sdFreeKB() {
+    sdLock();
+    uint32_t kb = (uint32_t)((SD.totalBytes() - SD.usedBytes()) / 1024);
+    sdUnlock();
+    return kb;
+}
+
+int listMaps(MapBounds* out, int maxOut) {
+    MapGuard g;
+    int n = 0;
+    sdLock();
+    File dir = SD.open(MAP_DIR);
+    if (dir) {
+        for (File f = dir.openNextFile(); f && n < maxOut; f = dir.openNextFile()) {
+            if (!f.isDirectory()) {
+                const char* nm = f.name();
+                const char* base = strrchr(nm, '/');
+                base = base ? base + 1 : nm;
+                if (strstr(base, ".ebm")) {
+                    uint8_t h[36];
+                    double s, w, nn, e;
+                    if (f.read(h, 36) == 36 && headerBounds(h, s, w, nn, e)) {
+                        out[n] = {s, w, nn, e, false};
+                        n++;
+                    }
+                }
+            }
+            f.close();
+            if ((n & 0x0F) == 0) vTaskDelay(1);   // same courtesy as listTileIds
+        }
+        dir.close();
+    }
+    sdUnlock();
+    return n;
+}
+
+}  // namespace map_store

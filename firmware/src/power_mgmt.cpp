@@ -1,0 +1,485 @@
+#include "soc/timer_group_struct.h"
+#include "power_mgmt.h"
+
+#include <Arduino.h>
+#include <esp_pm.h>
+#include <esp_sleep.h>
+#include <esp_timer.h>
+#include "config.h"
+#include <esp_err.h>
+#include <driver/uart.h>
+
+#include <esp_bt.h>
+
+#include <atomic>
+
+#include "ble_sensors.h"
+#include "ble_server.h"
+#include "diag.h"
+#include "ride_recorder.h"
+#include "usb_storage.h"
+#include "board_power.h"
+
+#ifdef PM_BLE_XTAL
+extern "C" bool board_ble_xtal_clock_ready();
+#endif
+
+namespace power_mgmt {
+
+static esp_pm_lock_handle_t s_usbLock = nullptr;
+static esp_pm_lock_handle_t s_busyLock = nullptr;
+static esp_pm_lock_handle_t s_lightLock = nullptr;
+static bool s_lightHeld = false;
+static bool s_usbHeld = false;
+static bool s_enabled = false;
+
+// Bookkeeping for stateStr(): outstanding busy acquires, when the count last
+// left zero, and the reasons tick() most recently held the usb lock for. The
+// count is exact (atomic); heldSince is best-effort — a race can smear it by a
+// call or two, which does not matter for "has this been held for 30 seconds".
+static std::atomic<int> s_busyCount{0};
+static volatile uint32_t s_busyHeldSinceMs = 0;   // 0 = not held
+static volatile bool s_grace = false, s_serial = false, s_vbus = false;
+static volatile bool s_phone = false, s_hunt = false;
+// Phone connected but NOT holding sleep off (relaxed-interval experiment
+// active). Not a holder — shown on the battery line as "prlx" so a sample
+// can't be misread as "app wasn't connected".
+static volatile bool s_phoneRelaxed = false;
+// Established sensor hold, plus informational sleep-eligible link state.
+static volatile bool s_sens = false, s_sensorRelaxed = false;
+
+// 80 MHz keeps APB at 80 MHz throughout DFS. Lower minima require a separate
+// audit of SPI, display, USB and UART clocks; do not silently enable them.
+#ifndef PM_MIN_CPU_MHZ
+#define PM_MIN_CPU_MHZ 240
+#endif
+static_assert(PM_MIN_CPU_MHZ == 80 || PM_MIN_CPU_MHZ == 240,
+              "Only 80 or 240 MHz idle CPU profiles have been audited");
+
+#ifndef PM_LIGHT_SLEEP
+#define PM_LIGHT_SLEEP 1
+#endif
+static bool s_prepared = false;
+static std::atomic<bool> s_sleepRequested{PM_LIGHT_SLEEP != 0};
+static std::atomic<bool> s_sleepConfigured{false};
+static portMUX_TYPE s_busyMux = portMUX_INITIALIZER_UNLOCKED;
+
+// Run before any peripheral starts a background task. Never enable sleep until
+// BOTH locks exist and the setup/USB guard is already acquired.
+bool prepare() {
+    if (s_prepared) return s_usbLock && s_busyLock;
+    s_prepared = true;
+    esp_pm_config_esp32s3_t awake = {};
+    awake.max_freq_mhz = awake.min_freq_mhz = 240;
+    esp_err_t err = esp_pm_configure(&awake);
+    if (err != ESP_OK) {
+        diag::log("pm: unavailable, configure awake -> %s (IDF %s)",
+                  esp_err_to_name(err), esp_get_idf_version());
+        return false;
+    }
+    err = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "usbcdc", &s_usbLock);
+    if (err == ESP_OK) {
+        err = esp_pm_lock_acquire(s_usbLock);
+        s_usbHeld = err == ESP_OK;
+        s_grace = s_usbHeld;
+    }
+    if (err == ESP_OK)
+        err = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "bus", &s_busyLock);
+    if (err != ESP_OK) {
+        // The awake configuration remains in effect. A missing guard must not
+        // silently turn all future sdLock() calls into unprotected transfers.
+        diag::log("pm: lock setup FAILED (%s); automatic sleep stays OFF",
+                  esp_err_to_name(err));
+        return false;
+    }
+    diag::log("pm: guards ready before peripherals; IDF %s, build %s %s",
+              esp_get_idf_version(), __DATE__, __TIME__);
+    // Ground truth for the interrupt-watchdog stretch (src/int_wdt_stretch.cpp):
+    // stage 0 as the hardware holds it, in MWDT1's 500 us ticks.
+    diag::log("pm: interrupt watchdog stage0=%u ticks (%u ms; framework default %d ms)",
+              (unsigned)TIMERG1.wdtconfig2.wdt_stg0_hold,
+              (unsigned)TIMERG1.wdtconfig2.wdt_stg0_hold / 2, CONFIG_ESP_INT_WDT_TIMEOUT_MS);
+    return true;
+}
+
+bool begin() {
+    if (!prepare() || !s_usbHeld) return false;
+    esp_pm_config_esp32s3_t cfg = {};
+    cfg.max_freq_mhz = 240;
+    cfg.min_freq_mhz = PM_MIN_CPU_MHZ;
+    cfg.light_sleep_enable = s_sleepRequested.load();
+    esp_err_t err = esp_pm_configure(&cfg);
+    s_enabled = err == ESP_OK;
+    s_sleepConfigured = s_enabled && cfg.light_sleep_enable;
+    diag::log("pm: configure CPU min=%d max=%dMHz APB=80MHz light_sleep=%d -> %s; setup guard held",
+              cfg.min_freq_mhz, cfg.max_freq_mhz, cfg.light_sleep_enable, esp_err_to_name(err));
+#if PM_SLEEP_CAP_MS > 0
+    if (s_sleepConfigured) {
+        // A periodic esp_timer is a wake source vApplicationSleep honours
+        // (pm_impl.c: sleep_time = min(idle time, next esp_timer alarm)), so no
+        // single sleep call — and no stall of the other core — can outlast it.
+        static esp_timer_handle_t capTimer = nullptr;
+        esp_timer_create_args_t args = {};
+        args.callback = [](void*) {};
+        args.name = "sleepcap";
+        args.dispatch_method = ESP_TIMER_TASK;
+        args.skip_unhandled_events = false;
+        esp_err_t te = esp_timer_create(&args, &capTimer);
+        if (te == ESP_OK) te = esp_timer_start_periodic(capTimer, (uint64_t)PM_SLEEP_CAP_MS * 1000ULL);
+        diag::log("pm: light-sleep call cap %d ms (interrupt watchdog %d ms) -> %s",
+                  PM_SLEEP_CAP_MS, INT_WDT_TIMEOUT_MS, esp_err_to_name(te));
+    }
+#endif
+#ifdef PM_BLE_XTAL
+    diag::log("pm: BLE clock MAIN_XTAL retained in light sleep; controller_ready=%d",
+              board_ble_xtal_clock_ready());
+#endif
+
+#ifdef PM_GPS_UART_WAKEUP
+    // Optional wake source, not a lossless RX guarantee: the triggering bytes
+    // are lost. GPS currently uses UART2, which cannot wake this S3. Its pins
+    // are retained in gps_service::begin(); validate RX checksums during sleep.
+    uart_set_wakeup_threshold((uart_port_t)PM_GPS_UART_WAKEUP, 3);
+    esp_sleep_enable_uart_wakeup(PM_GPS_UART_WAKEUP);
+#endif
+    return s_enabled;
+}
+
+// While the companion app is connected AT A FAST INTERVAL, light sleep is held
+// off.
+//
+// WHY: the BT controller sleeps between connection events and wakes on the RTC
+// slow clock, which on this board is the internal 150 kHz RC — it drifts ~5%
+// (sdkconfig.defaults.pm says so, and calls it "slightly widens BLE wake
+// windows"). At a 30 ms connection interval that is ~1.5 ms of error per event,
+// enough to miss the master's anchor point, drop packets, and hit supervision
+// timeout. Measured 2026-08-02: 1231 phone disconnects, ALL of them with light
+// sleep on, none with it off — every one HCI 0x08, supervision timeout — which
+// made map transfers over BLE practically impossible.
+//
+// 2026-08-17: the conn-param governor (ble_server) parks an idle riding link
+// at 150-300 ms, where the same 5% drift is a 10x smaller fraction of the
+// window, and a 44-minute drive there recorded zero drops (with sleep held).
+// So the hold was released while ble_server MEASURED the interval long.
+//
+// 2026-08-19: tried on the road and FALSIFIED — first light sleep killed the
+// link in 4 s, three supervision timeouts in 41 s, latch tripped. The RC
+// clock misses the controller's wake regardless of interval, so the interval
+// was never the lever. relaxedSleepAllowed() is now false by default and the
+// hold is effectively unconditional again; the machinery stays so `sleepexp
+// on` can re-run the measurement in minutes after a real controller-clock fix
+// (external 32 kHz crystal — lib-builder rebuild, schematic check first).
+
+// Grace window after boot during which light sleep is held off unconditionally.
+//
+// LOAD-BEARING — without it there is no console and no OTG flashing, ever.
+// (bool)Serial is only true once a host has OPENED the CDC port, but light
+// sleep gates the USB-OTG PHY and drops the link before a host gets the chance:
+// the CPU sleeps ~1 s after boot, USB dies, the port becomes unopenable, so
+// `connected` can never become true and the lock is never taken. The condition
+// this guard depends on is destroyed by the thing it is guarding against.
+//
+// Observed on the first PM-enabled build (2026-07-31): the device booted fine
+// and enumerated its CDC port, then went permanently silent within a second.
+// 30 s is enough to attach a monitor or start an upload after a reset; the cost
+// is that the device cannot sleep for the first 30 s of each boot.
+static constexpr uint32_t USB_GRACE_MS = 30000;
+
+void tick() {
+    if (!s_enabled) return;
+    if (s_sleepRequested.load() != s_sleepConfigured.load()) {
+        esp_pm_config_esp32s3_t cfg = {};
+        cfg.max_freq_mhz = 240;
+        cfg.min_freq_mhz = PM_MIN_CPU_MHZ;
+        cfg.light_sleep_enable = s_sleepRequested.load();
+        esp_err_t err = esp_pm_configure(&cfg);
+        if (err == ESP_OK) s_sleepConfigured = cfg.light_sleep_enable;
+        else s_sleepRequested = s_sleepConfigured.load();
+        diag::log("pm: requested light_sleep=%d -> %s", cfg.light_sleep_enable,
+                  esp_err_to_name(err));
+    }
+    // Held during the boot grace window, while a serial host is attached, and
+    // for as long as the phone is connected (see the note above).
+    // Ask ble_server DIRECTLY, not via g_state. The shared state's copy is
+    // written by the UI task at 1 Hz and read here at 1 Hz, so it lagged the
+    // actual connection by up to two seconds — long enough for the link to time
+    // out before sleep was ever suppressed.
+    bool phoneUp = ble_server::isPhoneConnected();
+    // THE EXPERIMENT (2026-08-17): with the connection interval measured long
+    // (>= 100 ms, governor-relaxed while riding) the controller's sleep-clock
+    // drift budget is 10x what it was at the 30 ms interval that produced the
+    // 2026-08-02 supervision-timeout storm — so let the CPU sleep through a
+    // connected-but-idle link and find out. Three timeouts in a boot flips
+    // relaxedSleepAllowed() off and this degrades to the old always-hold.
+    bool phoneSleepReady = ble_server::linkRelaxed();
+#ifdef PM_BLE_XTAL
+    phoneSleepReady = board_ble_xtal_clock_ready();
+#endif
+    // The stable main crystal supports connection timing at fast intervals
+    // too. Retain the existing experiment switch and timeout fallback.
+    // A link still proving itself (encrypting, or pairing with the rider
+    // typing the code) counts as the phone too. phoneUp is only true once the
+    // link is ADMITTED, so this window used to run with the CPU free to sleep
+    // and the controller in modem sleep on the drifting RC clock — the
+    // conditions that killed fresh sensor links at supervision timeout
+    // (2026-08-22). Nothing else held the radio unless a sensor link did — no
+    // sensors, a long auto-pause, or the MAIN_XTAL build relaxing them — so a
+    // reconnect (mid-ride or parked) could die before it ever encrypted.
+    // Seconds at most: the server drops an unproven link at 20 s (90 s while
+    // pairing).
+    bool linkPending = ble_server::linkPending();
+    bool phone = linkPending || (phoneUp && !(phoneSleepReady &&
+                                              ble_server::relaxedSleepAllowed()));
+    s_phoneRelaxed = phoneUp && !phone;
+    // The SAME suppression the phone gets, for the same reason, extended to the
+    // sensor hunt.
+    //
+    // Sleep does not just cost packets on an established link — it costs
+    // DISCOVERY. Scanning only hears an advertisement if the controller is awake
+    // in its scan window, and with BT modem sleep waking on that ~5%-drift
+    // 150 kHz RC the windows land off-target, so a sensor that dropped out mid
+    // ride (a power meter that slept through a coffee stop, a strap that lost
+    // contact) advertised into a radio that was not listening and never came
+    // back. Symptom from the road, 2026-08-08: sensors would not reconnect after
+    // a break UNLESS the phone app was connected — because a connected phone is
+    // exactly what used to hold this off.
+    //
+    // Costs nothing in the steady state: radioBusy() is only true while a PAIRED
+    // sensor is missing and the device is actually looking for it. Once
+    // everything is connected the hunt stops and the CPU sleeps again.
+    bool hunting = ble_sensors::radioBusy();
+    // Historical RTC-slow-clock behavior below. The MAIN_XTAL candidate can
+    // now release this established-link hold; discovery stays protected.
+    // 2026-08-21, learned on the road: an ESTABLISHED sensor link dies under
+    // light sleep exactly like the phone's does. A ride ran 1h45m rock-solid
+    // while the connected phone held sleep off — then the phone left, sleep
+    // engaged, and the power meter dropped 40 s later, after which every
+    // reconnect lived only the few seconds the hunt's own hold bought it and
+    // died at supervision timeout, all the way home (connect/520 every ~30 s).
+    // So the CPU only sleeps when the BLE radio is COMPLETELY quiet: no phone,
+    // no sensor links, no hunt. Parked/idle — the state that actually drains
+    // the battery for hours — has none of those, and keeps the full win.
+    //
+    // Exception, by design: a ride parked in a LONG auto-pause (2 min — see
+    // ride_recorder::longAutoPaused) releases the sensor hold. The meter is
+    // sleeping itself at a stop like that and the links are going away either
+    // way; what matters is that the hold and the hunt come back the moment
+    // the ride resumes, which they do — this flag flips false on the resume
+    // tick, before the sensors have woken enough to reconnect.
+    bool sensorLinks = ble_sensors::anyConnected();
+    bool sensorReady = false;
+#ifdef PM_BLE_XTAL
+    sensorReady = board_ble_xtal_clock_ready() && ble_sensors::sleepAllowed();
+#endif
+    // Established links only: hunt/connect remains an unconditional hold.
+    // Preserve the old long-auto-pause behavior outside the new experiment.
+    bool sensors = sensorLinks && !ride_recorder::longAutoPaused() && !sensorReady;
+    s_sensorRelaxed = sensorLinks && sensorReady;
+    bool grace = millis() < USB_GRACE_MS;
+    bool cdc = (bool)Serial;
+    // VBUS is independent of DTR/RTS: an unopened console and a suspended
+    // host still need the PHY. Keep the guard on a failed charger read.
+    bool vbus = true;
+    bool vbusKnown = board_usb_power_present(vbus);
+    // Native USB's cached DTR state can survive physical unplug. A known
+    // absent VBUS overrides it; unknown charger state still fails closed.
+    bool serial = cdc && (!vbusKnown || vbus);
+    static int lastUsbState = -1;
+    int usbState = (vbusKnown ? 4 : 0) | (vbus ? 2 : 0) | (cdc ? 1 : 0);
+    if (usbState != lastUsbState) {
+        diag::log("pm USB: vbus=%d known=%d cdc=%d serial_hold=%d", vbus, vbusKnown, cdc, serial);
+        lastUsbState = usbState;
+    }
+    static bool lastVbusKnown = true;
+    if (vbusKnown != lastVbusKnown) {
+        diag::log("pm: charger VBUS read %s", vbusKnown ? "recovered" : "FAILED; sleep held off");
+        lastVbusKnown = vbusKnown;
+    }
+    s_vbus = vbus;
+    bool usb = grace || serial || vbus || usb_storage::hostActive() ||
+               phone || hunting || sensors;
+    s_grace = grace; s_serial = serial; s_phone = phone; s_hunt = hunting;
+    s_sens = sensors;
+    static uint32_t lastReportMs = 0, lastOk = 0, lastRejected = 0;
+    static uint64_t lastSleepUs = 0;
+    uint32_t now = millis();
+    if (now - lastReportMs >= 60000) {
+        uint32_t ok, rejected; uint64_t us;
+        sleepStats(ok, rejected, us);
+        char state[64]; stateStr(state, sizeof(state));
+        uint32_t maxMs, longCalls; sleepStatsMax(maxMs, longCalls);
+        diag::log("pm window: %lums calls=%lu rejected=%lu sleep_call_ms=%llu max_call_ms=%lu long_calls=%lu holders=%s sd=%d host=%d",
+                  (unsigned long)(now - lastReportMs), (unsigned long)(ok - lastOk),
+                  (unsigned long)(rejected - lastRejected), (us - lastSleepUs) / 1000,
+                  (unsigned long)maxMs, (unsigned long)longCalls,
+                  state, ride_recorder::sdMounted(), usb_storage::hostActive());
+        lastReportMs = now; lastOk = ok; lastRejected = rejected; lastSleepUs = us;
+    }
+
+    // A busy (bus) lock held for half a minute straight is not a transaction,
+    // it is a leak — or a host copying files over MSC, which the log line lets
+    // you tell apart. Either way light sleep is off and the battery line will
+    // read ~60 mA high, so say so once rather than leaving a silent -175 mA
+    // mystery in the logs.
+    {
+        uint32_t heldSince = s_busyHeldSinceMs;
+        static uint32_t lastWarnMs = 0;
+        // Signed compare: busyAcquire() stamps millis()|1, which can sit 1 ms in
+        // the FUTURE of a read made in the same tick — unsigned that is ~2^32 ms
+        // "held" and logged as "bus lock held 4294967s" (seen 2026-08-22).
+        if (heldSince && (int32_t)(millis() - heldSince) > 30000 &&
+            millis() - lastWarnMs > 300000) {
+            lastWarnMs = millis();
+            diag::log("pm: bus lock held %lus straight (count %d) — light sleep "
+                      "suppressed", (unsigned long)((millis() - heldSince) / 1000),
+                      s_busyCount.load());
+        }
+    }
+
+    // Suppressing CPU light sleep is NOT enough on its own. The BT controller
+    // has its own modem sleep, and with CONFIG_BT_CTRL_LPCLK_SEL_RTC_SLOW it
+    // wakes for each connection event on the internal 150 kHz RC — the ~5%-drift
+    // clock. It widens its receive window by the sleep-clock accuracy it
+    // advertised, and that RC cannot hold to it, so events are missed and the
+    // link dies of supervision timeout no matter what the CPU is doing.
+    // Stop the controller sleeping while the phone is attached OR any sensor
+    // link is up; let it sleep again when the radio is quiet.
+    //
+    // The sensor term is what makes a resume-from-auto-pause STICK. The
+    // 2026-08-22 ride log shows the failure without it: the CPU hold ("sens")
+    // engaged on every reconnect, but the hunt ended, modem sleep re-armed,
+    // and the fresh link died of supervision timeout (reason 520) ~5 s after
+    // EVERY connect — HR and power flapping from the first phoneless
+    // auto-pause to the end of the ride. `sensors` already goes false in a
+    // long auto-pause, so a parked ride still lets the controller sleep.
+    static int btSleep = -1;                 // -1 unknown, 0 disabled, 1 enabled
+    int wantBtSleep = (phone || hunting || sensors) ? 0 : 1;
+    if (btSleep != wantBtSleep) {
+        esp_err_t e = wantBtSleep ? esp_bt_sleep_enable() : esp_bt_sleep_disable();
+        if (e == ESP_OK || e == ESP_ERR_INVALID_STATE) btSleep = wantBtSleep;
+        // At most one transition logged per minute: a duty-cycled sensor hunt
+        // flips this every few seconds, and logging each flip was tens of KB an
+        // hour out of the diag ring. The steady state is on every battery line
+        // now ("pm hunt"), so the per-flip record buys nothing.
+        static uint32_t lastLogMs = 0;
+        if (e == ESP_OK && (lastLogMs == 0 || millis() - lastLogMs > 60000)) {
+            lastLogMs = millis();
+            diag::log("pm: BT modem sleep %s (phone %s, sensor hunt %s, links %s)",
+                      wantBtSleep ? "on" : "OFF",
+                      s_phoneRelaxed ? "relaxed" : phoneUp ? "connected" : "gone",
+                      hunting ? "ON" : "off", s_sensorRelaxed ? "sleep eligible" : sensorLinks ? "up" : "none");
+        }
+    }
+    if (usb && !s_usbHeld) {
+        esp_pm_lock_acquire(s_usbLock);
+        s_usbHeld = true;
+    } else if (!usb && s_usbHeld) {
+        esp_pm_lock_release(s_usbLock);
+        s_usbHeld = false;
+    }
+}
+
+bool busyReady() { return s_busyLock != nullptr; }
+
+void frontlightHold(bool on) {
+    // Called from the UI task only (boot, button, settings, phone write).
+    if (on == s_lightHeld) return;
+    if (!s_lightLock) {
+        // Lazily created: needs prepare() to have configured PM first. On a
+        // stock framework this fails NOT_SUPPORTED and the hold is a no-op.
+        if (esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "frontlight",
+                               &s_lightLock) != ESP_OK) {
+            s_lightLock = nullptr;
+            return;
+        }
+    }
+    esp_err_t e = on ? esp_pm_lock_acquire(s_lightLock)
+                     : esp_pm_lock_release(s_lightLock);
+    if (e == ESP_OK) s_lightHeld = on;
+    diag::log("pm: frontlight hold %s -> %s", on ? "on" : "off", esp_err_to_name(e));
+}
+
+void busyAcquire() {
+    // PM lock operations on the same handle require external serialization.
+    // Bus, panel and shutdown callers can run on different cores.
+    portENTER_CRITICAL(&s_busyMux);
+    if (s_busyLock) ESP_ERROR_CHECK(esp_pm_lock_acquire(s_busyLock));
+    if (s_busyCount.fetch_add(1) == 0) s_busyHeldSinceMs = millis() | 1;
+    portEXIT_CRITICAL(&s_busyMux);
+}
+void busyRelease() {
+    portENTER_CRITICAL(&s_busyMux);
+    const int count = s_busyCount.load();
+    if (count > 0) {
+        if (s_busyCount.fetch_sub(1) == 1) s_busyHeldSinceMs = 0;
+        if (s_busyLock) ESP_ERROR_CHECK(esp_pm_lock_release(s_busyLock));
+    }
+    portEXIT_CRITICAL(&s_busyMux);
+    if (count <= 0) diag::log("pm: ERROR unbalanced busyRelease");
+}
+
+void requestSleep(bool enabled) { s_sleepRequested = enabled; }
+
+void report() {
+    char state[64];
+    stateStr(state, sizeof(state));
+    diag::log("pm: available=%d sleep_configured=%d requested=%d holders=%s "
+              "busy=%d; clear means eligible, not measured sleep",
+              s_enabled, s_sleepConfigured.load(), s_sleepRequested.load(),
+              state, s_busyCount.load());
+    diag::log("pm CPU policy: min=%d max=240MHz APB=80MHz (frequency scaling; not a sleep counter)",
+              PM_MIN_CPU_MHZ);
+    uint32_t ok, rejected; uint64_t us;
+    sleepStats(ok, rejected, us);
+    diag::log("pm sleep: successful_calls=%lu rejected=%lu time_in_calls_ms=%llu (includes overhead)",
+              (unsigned long)ok, (unsigned long)rejected, us / 1000);
+    // IDF includes its driver locks, which stateStr() cannot see. No SD lock:
+    // acquiring one here would contaminate the report with our own bus hold.
+    char* buffer = (char*)malloc(4096);
+    if (!buffer) return;
+    FILE* stream = fmemopen(buffer, 4096, "w+");
+    if (stream) {
+        esp_err_t err = esp_pm_dump_locks(stream);
+        long size = ftell(stream);
+        fclose(stream);
+        if (size >= 0 && size < 4096) {
+            buffer[size] = 0;
+            char* save = nullptr;
+            for (char* line = strtok_r(buffer, "\n", &save); line;
+                 line = strtok_r(nullptr, "\n", &save))
+                diag::log("pm locks: %s", line);
+        }
+        if (err != ESP_OK) diag::log("pm: lock dump -> %s", esp_err_to_name(err));
+    }
+    free(buffer);
+}
+
+void stateStr(char* out, size_t n) {
+    if (n == 0) return;
+    if (!s_enabled) { snprintf(out, n, "off"); return; }
+    size_t p = 0;
+    out[0] = 0;
+    auto add = [&](const char* tok) {
+        if (p < n) p += snprintf(out + p, n - p, "%s%s", p ? "+" : "", tok);
+    };
+    if (!s_sleepConfigured.load()) add("disabled");
+    if (s_vbus) add("vbus");
+    if (s_grace) add("grace");
+    if (s_serial) add("serial");
+    if (s_phone) add("phone");
+    if (s_hunt) add("hunt");
+    if (s_sens) add("sens");
+    if (s_lightHeld) add("light");
+    // Info, not a holder: phone attached on the relaxed link, CPU sleeping.
+    if (s_phoneRelaxed) add("prlx");
+    if (s_sensorRelaxed) add("srlx"); // information, not a sleep hold
+    const int busy = s_busyCount.load();
+    if (busy > 0) {
+        char b[8];
+        snprintf(b, sizeof(b), "b%d", busy);
+        add(b);
+    }
+    if (!p) snprintf(out, n, "clear");
+}
+
+}  // namespace power_mgmt

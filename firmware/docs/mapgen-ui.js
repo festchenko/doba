@@ -1,0 +1,399 @@
+// DOM wiring for the in-browser offline-map generator. The encoding lives in
+// mapgen.js (a pure, testable library); this file is just the map picker + form.
+import { buildEbm, buildPoi, fetchOverpass } from "./mapgen.js";
+import { latLngToCell, gridDisk, cellToBoundary }
+  from "https://cdn.jsdelivr.net/npm/h3-js@4.1.0/+esm";
+
+// H3 res-6 tiling, mirroring the app's companion-ios/Sources/H3/h3shim.c so the
+// website builds the exact same per-hex tiles
+// (/maps/tiles/<first 6 of h3id>/<rest>.ebm).
+const H3_RES = 6;
+function cellBbox(cell) {
+  const verts = cellToBoundary(cell);         // [[lat, lng], ...]
+  let s = 90, w = 180, n = -90, e = -180;
+  for (const [la, lo] of verts) {
+    if (la < s) s = la;
+    if (la > n) n = la;
+    if (lo < w) w = lo;
+    if (lo > e) e = lo;
+  }
+  return { s, w, n, e };
+}
+function coveringCells(bb) {
+  const clat = (bb.s + bb.n) / 2, clon = (bb.w + bb.e) / 2;
+  const center = latLngToCell(clat, clon, H3_RES);
+  const dLatKm = (bb.n - bb.s) / 2 * 110.54;
+  const dLonKm = (bb.e - bb.w) / 2 * 111.32 * Math.cos(clat * Math.PI / 180);
+  let k = Math.ceil(Math.hypot(dLatKm, dLonKm) / 5.0) + 1;
+  k = Math.max(1, Math.min(200, k));
+  const out = [];
+  for (const cell of gridDisk(center, k)) {
+    const c = cellBbox(cell);
+    if (c.e < bb.w || c.w > bb.e || c.n < bb.s || c.s > bb.n) continue;  // no overlap
+    out.push({ id: cell, ...c });
+  }
+  return out;
+}
+// Keep a tile if it holds ANYTHING — roads, water, sea fill or parks.
+//
+// This used to test roads alone, which threw away every hex that is pure water:
+// buildEbm() appends WTR2/PRK2 sections after the road index, so an ocean hex
+// has real content and an empty road index. Dropping it meant a bay rendered as
+// blank paper. (The phone app had the identical bug — see MapBuilder.isEmpty.)
+function ebmHasContent(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const nx = dv.getInt32(28, true), ny = dv.getInt32(32, true);
+  for (let k = 0; k < nx * ny; k++) {
+    if (dv.getUint32(36 + k * 8, true) !== 0) return true;   // a road tile
+  }
+  // No roads: anything past the header + index is a water/park/sea section.
+  return bytes.length > 36 + nx * ny * 8;
+}
+
+// Where a tile lives on the card: /maps/tiles/<first 6 of id>/<rest>.ebm.
+// Must match tileDirFor() in src/map_store.cpp — an H3 id's leading characters
+// are a geographic key, so one area lands in one directory.
+// `ext` ".poi" gives the tile's cycling-POI companion, which sits next to it.
+function tilePath(id, ext = ".ebm") {
+  return id.length > 6
+    ? `maps/tiles/${id.slice(0, 6)}/${id.slice(6)}${ext}`
+    : `maps/tiles/${id}${ext}`;
+}
+
+// Pre-built tiles (docs/prebuilt-tiles.md): the same .ebm/.poi the phone
+// apps download, built server-side for the whole planet — with elevation and
+// sea fill, which this page cannot make. Tried first; any hex the CDN does not
+// have is built here from Overpass as before. `?tiles=<base url>` overrides
+// the base (e.g. http://localhost:8000/v1/ for a local build), `?tiles=off`
+// skips it.
+const TILE_CDN = (() => {
+  const q = new URLSearchParams(location.search).get("tiles");
+  if (q === "off") return "";
+  return q || "https://tiles.opentrailpaper.com/v1/";
+})();
+
+// { id -> {ebm, poi} } for the cells the CDN serves; the rest are left out.
+async function fetchPrebuilt(cells, log) {
+  const got = new Map();
+  if (!TILE_CDN) return got;
+  const get = async (url, ms) => {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), ms);
+    try {
+      const r = await fetch(url, { signal: ctl.signal });
+      return r.ok ? new Uint8Array(await r.arrayBuffer()) : null;
+    } finally { clearTimeout(timer); }
+  };
+  const magic = (b, m) => b && b.length >= 4 && String.fromCharCode(b[0], b[1], b[2], b[3]) === m;
+  // One index.json per res-3 group (the first 6 characters of the id).
+  const groups = [...new Set(cells.map((c) => c.id.slice(0, 6)))];
+  const index = new Map();
+  try {
+    await Promise.all(groups.map(async (g) => {
+      const b = await get(`${TILE_CDN}${g}/index.json`, 8000);
+      if (b) index.set(g, JSON.parse(new TextDecoder().decode(b)).cells || {});
+    }));
+  } catch (e) {
+    log(`Pre-built tiles unavailable (${e.message || e}) — building everything here.`);
+    return got;
+  }
+  const todo = cells.filter((c) => index.get(c.id.slice(0, 6))?.[c.id]);
+  let next = 0;
+  const worker = async () => {
+    while (next < todo.length) {
+      const c = todo[next++];
+      const [ebmSize, ebmHash, poiSize, poiHash] = index.get(c.id.slice(0, 6))[c.id];
+      try {
+        const base = `${TILE_CDN}${c.id.slice(0, 6)}/${c.id}`;
+        const ebm = ebmSize ? await get(`${base}.ebm?v=${ebmHash}`, 20000) : null;
+        if (ebmSize && !(ebm && ebm.length === ebmSize && magic(ebm, "EBM2"))) continue;
+        let poi = null;
+        if (poiSize) {
+          poi = await get(`${base}.poi?v=${poiHash}`, 20000);
+          if (!(poi && poi.length === poiSize && magic(poi, "EPOI"))) continue;
+        }
+        got.set(c.id, { ebm, poi });
+      } catch { /* this hex falls back to Overpass */ }
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+  return got;
+}
+
+const $ = (id) => document.getElementById(id);
+const infoEl = $("bb-info");
+const genBtn = $("gen-btn"), genStatus = $("gen-status"), genLog = $("gen-log");
+const genDownload = $("gen-download");
+const barWrap = document.querySelector("#maps .progress");
+const drawBtn = $("drawbox"), useViewBtn = $("useview");
+
+// The generator section is optional on the page; bail cleanly if it's absent.
+if (genBtn) init();
+
+function init() {
+  let map = null, rect = null, drawing = false, downloadUrl = null;
+  let curBbox = null;   // { s, w, n, e } from the drawn box / current view
+
+  // --- Leaflet map: the area is chosen entirely by drawing a box or using the
+  //     current view — there are no manual lat/lon fields. -------------------
+  if (typeof L !== "undefined" && typeof maplibregl !== "undefined" && typeof L.maplibreGL === "function") {
+    map = L.map("pickmap", {
+      zoomControl: true,
+      minZoom: 2,
+      maxBounds: [[-85, -180], [85, 180]],
+      maxBoundsViscosity: 1,
+    }).setView([37.7625, -122.44], 12);
+    // OpenFreeMap's keyless Positron style intentionally omits POIs, transit
+    // stops and mountain peaks. It leaves roads and place names visible, which
+    // is enough context for choosing a download area without covering the map
+    // in labels. Generated .ebm files still come from Overpass data below.
+    L.maplibreGL({
+      style: "https://tiles.openfreemap.org/styles/positron",
+    }).addTo(map);
+    // Recompute size once laid out (in case the section was display:none-ish).
+    setTimeout(() => map.invalidateSize(), 200);
+
+    useViewBtn.addEventListener("click", () => {
+      const b = map.getBounds();
+      setBbox(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), false);
+    });
+
+    // Drag-to-draw a rectangle. Toggling the mode disables map panning so the
+    // drag paints a box instead of moving the map.
+    drawBtn.addEventListener("click", () => setDrawing(!drawing));
+
+    let dragStart = null;
+    map.on("mousedown", (e) => {
+      if (!drawing) return;
+      dragStart = e.latlng;
+      L.DomEvent.preventDefault(e.originalEvent);
+    });
+    map.on("mousemove", (e) => {
+      if (!drawing || !dragStart) return;
+      drawRect(L.latLngBounds(dragStart, e.latlng));
+    });
+    map.on("mouseup", (e) => {
+      if (!drawing || !dragStart) return;
+      const b = L.latLngBounds(dragStart, e.latlng);
+      dragStart = null;
+      setDrawing(false);
+      setBbox(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), false);
+    });
+  } else {
+    // No map libraries (offline / blocked CDN): the box is the only way to pick
+    // an area, so without the map there's nothing to do here.
+    const pm = $("pickmap");
+    if (pm) pm.style.display = "none";
+    drawBtn.style.display = "none";
+    useViewBtn.style.display = "none";
+    infoEl.textContent = "The map picker couldn't load — check your connection and reload.";
+  }
+
+  function setDrawing(on) {
+    drawing = on;
+    drawBtn.classList.toggle("active", on);
+    if (!map) return;
+    const el = map.getContainer();
+    el.style.cursor = on ? "crosshair" : "";
+    if (on) map.dragging.disable();
+    else map.dragging.enable();
+  }
+
+  function drawRect(bounds) {
+    if (!map) return;
+    if (!rect) rect = L.rectangle(bounds, { color: "#c65a1e", weight: 2, fillOpacity: 0.08 }).addTo(map);
+    else rect.setBounds(bounds);
+  }
+
+  // --- bbox state ----------------------------------------------------------
+  function setBbox(s, w, n, e, fit) {
+    curBbox = { s, w, n, e };
+    onBboxChanged(fit);
+  }
+
+  function onBboxChanged(fit) {
+    const bb = curBbox;
+    if (!bb) {
+      genBtn.disabled = true;
+      infoEl.textContent = "Draw a box on the map to choose your area.";
+      infoEl.className = "bbox-info";
+      return;
+    }
+    if (map) {
+      drawRect(L.latLngBounds([bb.s, bb.w], [bb.n, bb.e]));
+      if (fit) map.fitBounds(rect.getBounds(), { padding: [20, 20] });
+    }
+    // Rough footprint so people don't ask for an entire country.
+    const midLat = (bb.s + bb.n) / 2;
+    const kmW = (bb.e - bb.w) * 111.32 * Math.cos((midLat * Math.PI) / 180);
+    const kmH = (bb.n - bb.s) * 110.57;
+    const areaKm2 = Math.round(kmW * kmH);
+    let msg = `Selected ≈ ${kmW.toFixed(0)} × ${kmH.toFixed(0)} km (${areaKm2.toLocaleString()} km²).`;
+    if (areaKm2 > 40000) {
+      genBtn.disabled = true;
+      infoEl.textContent = msg + " Too large — draw a smaller area (Overpass will refuse it).";
+      infoEl.className = "bbox-info warn";
+      return;
+    }
+    genBtn.disabled = false;
+    infoEl.className = "bbox-info";
+    infoEl.textContent = areaKm2 > 6000
+      ? msg + " Large — the download may take a minute or two."
+      : msg;
+  }
+
+  // --- generate -------------------------------------------------------------
+  function log(msg) { genLog.textContent += msg + "\n"; genLog.scrollTop = genLog.scrollHeight; }
+  function setStatus(text, kind) { genStatus.textContent = text; genStatus.className = "status" + (kind ? " " + kind : ""); }
+
+  // --- minimal store-only ZIP (so the download drops straight onto the SD) ---
+  const _crcT = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32(buf) {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < buf.length; i++) c = _crcT[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+  function zipStore(files) {
+    const enc = new TextEncoder();
+    const u16 = (v) => new Uint8Array([v & 255, (v >> 8) & 255]);
+    const u32 = (v) => new Uint8Array([v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255]);
+    const parts = [], central = [];
+    let offset = 0;
+    for (const f of files) {
+      const nb = enc.encode(f.name), crc = crc32(f.data), sz = f.data.length;
+      const lfh = [u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0),
+                   u32(crc), u32(sz), u32(sz), u16(nb.length), u16(0), nb];
+      lfh.forEach((p) => parts.push(p));
+      parts.push(f.data);
+      central.push([u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0),
+                    u32(crc), u32(sz), u32(sz), u16(nb.length), u16(0), u16(0), u16(0),
+                    u16(0), u32(0), u32(offset), nb]);
+      offset += 30 + nb.length + sz;
+    }
+    const cStart = offset;
+    let cSize = 0;
+    central.forEach((e) => e.forEach((p) => { parts.push(p); cSize += p.length; }));
+    [u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
+     u32(cSize), u32(cStart), u16(0)].forEach((p) => parts.push(p));
+    let total = 0;
+    parts.forEach((p) => (total += p.length));
+    const out = new Uint8Array(total);
+    let o = 0;
+    parts.forEach((p) => { out.set(p, o); o += p.length; });
+    return out;
+  }
+
+  genBtn.addEventListener("click", async () => {
+    const bb = curBbox;
+    if (!bb) return;
+    // Auto-named from the box centre so several regions never collide in /maps.
+    const latC = ((bb.s + bb.n) / 2).toFixed(3), lonC = ((bb.w + bb.e) / 2).toFixed(3);
+    const name = `map_${latC}_${lonC}`.replace(/[^A-Za-z0-9._-]/g, "_");
+
+    genBtn.disabled = true;
+    genDownload.hidden = true;
+    if (downloadUrl) { URL.revokeObjectURL(downloadUrl); downloadUrl = null; }
+    genLog.textContent = "";
+    barWrap.hidden = false;
+    barWrap.classList.add("indet");
+    setStatus("Downloading map data…");
+    log(`Bounding box  S ${bb.s}  W ${bb.w}  N ${bb.n}  E ${bb.e}`);
+
+    try {
+      // Split the box into H3 res-6 tiles (the same ones the app builds).
+      const cells = coveringCells(bb);
+      log(`${cells.length} H3 tiles cover the area.`);
+      const files = [];
+      let tileCount = 0, poiCount = 0;
+      const addPoi = (id, poi) => {
+        files.push({ name: tilePath(id, ".poi"), data: poi });
+        poiCount += (poi[6] | (poi[7] << 8));
+      };
+
+      // Ready-made tiles first.
+      setStatus("Fetching pre-built tiles…");
+      const t0 = performance.now();
+      const pre = await fetchPrebuilt(cells, log);
+      for (const c of cells) {
+        const p = pre.get(c.id);
+        if (!p || !p.ebm) continue;   // not pre-built, or built and empty
+        files.push({ name: tilePath(c.id), data: p.ebm });
+        tileCount++;
+        // No .poi on the CDN means the hex has no POIs: write the empty file.
+        addPoi(c.id, p.poi || buildPoi({ elements: [] }, { s: c.s, w: c.w, n: c.n, e: c.e, cell: c.id, contains: () => true }));
+      }
+      const rest = cells.filter((c) => !pre.has(c.id));
+      if (pre.size) log(`${pre.size} tiles from the pre-built set in ${((performance.now() - t0) / 1000).toFixed(1)} s (with elevation and sea fill).`);
+
+      if (rest.length) {
+        // The rest from Overpass, over just the cells still missing.
+        const rb = { s: 90, w: 180, n: -90, e: -180 };
+        for (const c of rest) { rb.s = Math.min(rb.s, c.s); rb.w = Math.min(rb.w, c.w); rb.n = Math.max(rb.n, c.n); rb.e = Math.max(rb.e, c.e); }
+        const q = { s: Math.max(bb.s, rb.s), w: Math.max(bb.w, rb.w), n: Math.min(bb.n, rb.n), e: Math.min(bb.e, rb.e) };
+        setStatus("Downloading map data…");
+        const json = await fetchOverpass(q, (s) => { setStatus("Downloading map data…"); log(s); });
+        log(`Got ${json.elements.length.toLocaleString()} OSM elements. Building ${rest.length} tiles…`);
+        setStatus("Building map…");
+        // Yield so the status paints before the (synchronous) encode.
+        await new Promise((r) => setTimeout(r, 0));
+        for (let ci = 0; ci < rest.length; ci++) {
+          const c = rest[ci];
+          const ebm = buildEbm(json, { s: c.s, w: c.w, n: c.n, e: c.e });
+          if (ebmHasContent(ebm)) {
+            files.push({ name: tilePath(c.id), data: ebm });
+            tileCount++;
+            // Cycling POIs (water, toilets, repair stands, bike shops) go in a
+            // separate <h3>.poi beside the map tile. Each POI is stored only in
+            // the hex that contains it, so neighbouring tiles never repeat one.
+            addPoi(c.id, buildPoi(json, {
+              s: c.s, w: c.w, n: c.n, e: c.e, cell: c.id,
+              contains: (lat, lon) => latLngToCell(lat, lon, H3_RES) === c.id,
+            }));
+          }
+          setStatus(`Building tiles… ${ci + 1}/${rest.length}`);
+          if (ci % 6 === 5) await new Promise((r) => setTimeout(r, 0));  // keep UI live
+        }
+      }
+      if (tileCount === 0) {
+        throw new Error("Nothing found in that area — try a different or larger box.");
+      }
+
+      // Package as a ZIP laid out for the SD card: unzip onto the card root and
+      // the tiles land at /maps/tiles/<first 6 of h3id>/<rest>.ebm — exactly where
+      // the app and firmware put them.
+      const zip = zipStore(files);
+      const bytes = files.reduce((a, f) => a + f.data.length, 0);
+      const blob = new Blob([zip], { type: "application/zip" });
+      downloadUrl = URL.createObjectURL(blob);
+      genDownload.href = downloadUrl;
+      genDownload.download = `bikegps-tiles-${name}.zip`;
+      genDownload.textContent = `⬇ Download ${tileCount} tiles (${fmtBytes(zip.length)})`;
+      genDownload.hidden = false;
+      log(`Done: ${tileCount} tiles + ${poiCount} cycling POIs (water, toilets, repair stands, bike shops in .poi files), ${fmtBytes(bytes)}. Unzip onto the SD card root → /maps/tiles/<area>/. These are the same H3 tiles the app builds.`);
+      setStatus("Tiles ready — download the ZIP below.", "ok");
+    } catch (err) {
+      log("Error: " + (err && err.message ? err.message : String(err)));
+      setStatus(err && err.message ? err.message : "Failed.", "err");
+    } finally {
+      barWrap.hidden = true;
+      barWrap.classList.remove("indet");
+      genBtn.disabled = false;
+    }
+  });
+
+  onBboxChanged(false);
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / (1024 * 1024)).toFixed(2) + " MB";
+}
