@@ -23,6 +23,7 @@
 #include <driver/rtc_io.h>
 #include "ui_render.h"
 #include "map_view.h"
+#include "topo_layer.h"   // DOBA
 #include "map_tiles.h"
 #include "map_store.h"
 #include "media.h"
@@ -93,6 +94,10 @@ RideSummary pendingSummary;
 bool recoveryPrompt = false;
 
 float mapMpp = 2.0f;  // map zoom: 1/2/4/8/16/32 m per px (wide levels show tiles)
+// DOBA: the last map frame was a topo one. Topo packs carry zooms 9-16, so the
+// map may zoom out further than the vector maps' 32 m/px (z9 is ~190 m/px here).
+bool mapTopoActive = false;
+inline float mapMaxMpp() { return mapTopoActive ? 200.0f : 32.0f; }
 // Whether the next map frame may read tiles off the card. See renderMapScreen:
 // the first pass after any change is drawn from RAM alone so it lands at once.
 bool mapFullPass = false;
@@ -1088,7 +1093,7 @@ void handleTap(int x, int y) {
                     break;
                 }
                 if (y >= kMapZoom.zoomOutY && y < kMapZoom.zoomOutY + kMapZoom.size) {
-                    if (mapMpp < 32.0f) mapMpp *= 2.0f;
+                    if (mapMpp < mapMaxMpp()) mapMpp *= 2.0f;
                     ackZoomTap(false);
                     break;
                 }
@@ -1561,6 +1566,20 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
     }
     map.centerLat = lat;
     map.centerLon = lon;
+    // DOBA: a topo pack under the rider takes over the base layer. Its tiles
+    // are drawn 1:1, so the zoom snaps to the tile zoom nearest the one asked
+    // for (the zoom buttons still halve/double; the snap keeps them on tile
+    // zooms), and the map is north-up: a raster is not rotated.
+    map.topo = topo::covers(lat, lon);
+    mapTopoActive = map.topo;
+    if (map.topo) {
+        mapMpp = topo::nativeMpp(topo::zoomFor(lat, mapMpp), lat);
+        map.metersPerPixel = mapMpp;
+        rot = 0.0f;
+        map.northDeg = 0.0f;
+        map.trackUp = false;
+        map.headingDeg = heading;
+    }
     // The farewell frame is the one frame with no "next one".
     //
     // Every rule below exists because another frame is coming: draw only what
@@ -1580,7 +1599,7 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
     // 12 s, not the 4 it was: the widest view is about 2 MB, and the card manages about
     // 400 KB/s, so a cold one takes 5 s and 4 s left only the tiles around the rider.
     frameDeadline = millis() + 12000;
-    map.hasMap = map_store::coversPosition(lat, lon);
+    map.hasMap = map.topo || map_store::coversPosition(lat, lon);
 
     // With this view's base layer already finished, the tiles have nothing left to
     // give: skip them. Reading them here would be worse than wasted, because the
@@ -1602,6 +1621,12 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
         map.parkCount = facts->parks;
         map.waterCount = facts->waters;
         memcpy(map.clsCount, facts->classes, sizeof(facts->classes));
+    } else if (map.topo) {
+        // DOBA: no vector features under a topo base layer.
+        map.features = nullptr; map.featureCount = 0;
+        map.water = nullptr; map.waterCount = 0;
+        map.parks = nullptr; map.parkCount = 0;
+        map.pois = nullptr; map.poiCount = 0;
     } else {
         map_store::renderInto(lat, lon, mapMpp, map.riderX, map.riderY, rot, map,
                               finalFrame
@@ -3255,8 +3280,14 @@ static void runConsoleLine(char* line) {
         noteActivity();
     } else if (!strcasecmp(cmd, "zoom")) {
         if (arg && !strcasecmp(arg, "in") && mapMpp > 1.0f) mapMpp /= 2.0f;
-        else if (arg && !strcasecmp(arg, "out") && mapMpp < 32.0f) mapMpp *= 2.0f;
+        else if (arg && !strcasecmp(arg, "out") && mapMpp < mapMaxMpp()) mapMpp *= 2.0f;
         screen = SCREEN_MAP; noteActivity();
+    } else if (!strcasecmp(cmd, "topo")) {   // DOBA: topo layer diagnostics
+        const topo::Stats t = topo::stats();
+        Serial.printf("[topo] active=%d mpp=%.2f decoded=%lu hits=%lu missing=%lu packs=%lu\n",
+                      (int)mapTopoActive, mapMpp, (unsigned long)t.decoded,
+                      (unsigned long)t.hits, (unsigned long)t.missing,
+                      (unsigned long)t.packsOpened);
     } else if (!strcasecmp(cmd, "back")) {
         goBack(); noteActivity();
     } else {

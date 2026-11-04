@@ -155,6 +155,10 @@ struct MapScreenData {
     // shows a "no map here — download it in the app" prompt.
     bool hasMap = true;
 
+    // DOBA: a topo tile pack covers the position; the base layer is the
+    // pre-rendered grey tiles (topo_layer.h) instead of the vector roads.
+    bool topo = false;
+
     // How many SD tiles were projected this frame (diagnostics/timing), and how
     // many the viewport actually overlapped. wantedTiles > projectedTiles means
     // the frame ran out of tile budget and the outer ones are simply absent.

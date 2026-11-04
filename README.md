@@ -6,9 +6,29 @@
 
 ```
 maps/       конвейер карт: OSM + рельеф → тайлы 4 бита для e-ink
+firmware/   прошивка: форк OpenTrailPaper (Apache 2.0) + слой топокарты
+release/    готовые образы прошивки
+tools/      прошивка и подготовка SD-карты с Mac
 library/    библиотека: ZIM → лёгкий формат для ESP32 (дальше)
-firmware/   прошивка T5 S3 Pro (дальше)
 ```
+
+## День прошивки (когда приедет устройство)
+
+1. **Прошить.** Подключить по USB-C и выполнить:
+   ```bash
+   tools/flash-mac.sh
+   ```
+   Скрипт сначала сохраняет заводскую прошивку в `backup/` (≈4 мин), потом стирает флеш и пишет `release/doba-full.bin`. Если порт не находится: зажать BOOT, нажать и отпустить RST, отпустить BOOT.
+2. **Карта.** Отформатировать microSD в FAT32 и скопировать тайлы:
+   ```bash
+   tools/prepare-sd-mac.sh list
+   tools/prepare-sd-mac.sh format disk4        # номер диска из list!
+   DOBA_BUILD=/Volumes/SSD/doba maps/make-region.sh groenlo
+   tools/prepare-sd-mac.sh copy /Volumes/SSD/doba/tiles/groenlo
+   ```
+3. **Проверить.** Вставить карту, включить, выйти на улицу за GPS, кнопка Home → карта. Проверить GPS, сон, LoRa (Meshtastic) — это работает из OpenTrailPaper без изменений.
+
+Что делает прошивка сейчас — в `firmware/DOBA.md`.
 
 ## Карты: как это работает
 

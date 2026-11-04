@@ -1,4 +1,5 @@
 #include "map_view.h"
+#include "topo_layer.h"   // DOBA
 
 #include <cmath>
 #include <cstdio>
@@ -791,6 +792,12 @@ uint16_t ui_map_layer_bit(int row) {
 const uint8_t* ui_map_dither_mask() { return s_ditherMask; }
 
 bool ui_render_map_base(const MapScreenData& map, uint8_t* fb, bool (*keepGoing)()) {
+    // DOBA: topo tiles are the whole base layer when a pack covers the view.
+    if (map.topo) {
+        ditherMaskReset();
+        topo::drawBase(map, fb);
+        return true;
+    }
     // Checked every few items: a single road is far too quick to be worth asking
     // about, and a full frame of them is seconds with a finger waiting.
     const auto cancelled = [keepGoing](int i) {

@@ -1,0 +1,68 @@
+name: Firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (ESP32-S3)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firmware
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+      - name: Clone LilyGO board support
+        run: git clone --depth 1 https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO vendor/T5S3-4.7-e-paper-PRO
+      - name: Framework with power management
+        run: |
+          pio pkg install -e t5s3-painter
+          tools/apply-pm-framework.sh
+      - name: Build
+        run: pio run -e t5s3-painter
+      - name: Merged image
+        run: |
+          B=.pio/build/t5s3-painter
+          FW=~/.platformio/packages/framework-arduinoespressif32
+          python3 ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 merge_bin \
+            -o doba-full.bin --flash_mode keep --flash_freq keep --flash_size keep \
+            0x0 $B/bootloader.bin 0x8000 $B/partitions.bin \
+            0xe000 $FW/tools/partitions/boot_app0.bin 0x10000 $B/firmware.bin
+          cp $B/firmware.bin doba-app.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doba-firmware
+          path: |
+            firmware/doba-full.bin
+            firmware/doba-app.bin
+
+  sim:
+    name: Simulator tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firmware
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q clang protobuf-compiler zlib1g-dev
+          pip install numpy pillow
+      - name: Clone LilyGO board support
+        run: git clone --depth 1 https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO vendor/T5S3-4.7-e-paper-PRO
+      - name: Doba + map tests
+        env:
+          OTP_SIM_TIME_SCALE: "3"
+        run: sim/test.sh -q test_topo.py test_maps.py test_boot.py

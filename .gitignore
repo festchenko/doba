@@ -10,3 +10,5 @@ firmware/vendor/
 firmware/.pio/
 firmware/sim/build/
 firmware/sim/.venv/
+.venv-flash/
+backup/
