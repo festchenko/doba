@@ -14,6 +14,19 @@ Every change is marked `// DOBA:` in the sources.
   tiles read; zoom-out goes to ~200 m/px instead of 32; console command `topo`
   prints the layer's state and counters.
 
+## Military-style map
+- `src/milgeo.{h,cpp}` — UTM (WGS84, Norway/Svalbard zones), MGRS at 1 m,
+  mils (6000 as `05-33`, or NATO 6400). Checked against the `mgrs` and
+  `pyproj` libraries by `tools/milgeo_test/run.py` (509 points, 0 mismatches).
+- `src/milspec.{h,cpp}` — on the topo map: UTM kilometre grid (1 km up to
+  ~20 m/px, then 10 km), lines labelled with two-digit kilometres at the top and
+  left edges, every 10th line heavier; the bottom strip is a monospace readout:
+  MGRS, latitude/longitude, GPS altitude, satellites, course in mils + degrees.
+  Console `mils 6000|6400` switches the system (kept in NVS).
+- `src/fonts/doba_mono_{s,m,l}.h` — DejaVu Sans Mono Bold, epdiy format.
+- `src/gps_service.cpp` — course over ground from 2 km/h (walking) instead of 5.
+- `src/map_view.cpp` — no bike-layers button on topo; scale bar rungs to 20 km.
+
 ## Simulator
 - `sim/` builds and runs on Linux as well as macOS (`sim/linux/linux_compat.h`,
   `fopencookie`, `/proc/self/exe`, ELF section for RTC memory).

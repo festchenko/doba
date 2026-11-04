@@ -80,9 +80,9 @@ def test_topo_tiles_are_drawn_level_for_level(device, tmp_path):
     band = img[MAP_TOP:MAP_BOTTOM, 0:440]          # left of the zoom buttons
     levels = set(np.unique(band // 17).tolist())
     # Only the two pack greys, plus the black/white of the rider marker and
-    # the scale bar drawn over them.
+    # the scale bar, and the dark grey (2) of the kilometre grid over them.
     assert {3, 12} <= levels, levels
-    assert levels <= {0, 3, 12, 15}, levels
+    assert levels <= {0, 2, 3, 12, 15}, levels
 
 
 def test_topo_is_north_up_and_centred(device, tmp_path):
@@ -126,3 +126,20 @@ def test_topo_reports_active_and_decodes(device, tmp_path):
     assert "active=1" in out, out
     decoded = int(out.split("decoded=")[1].split()[0])
     assert decoded >= 6, out
+
+
+def test_position_readout_shows_mgrs(device, tmp_path):
+    """The strip under the topo map is the MGRS readout, not the bike cells:
+    it must be there and ink-heavy where the bike strip had its cell frames."""
+    fx, fy = tile_xy(LAT, LON, Z)
+    tx, ty = int(fx), int(fy)
+    tiles = {(Z, tx + dx, ty + dy): np.full((256, 256), 12, np.uint8)
+             for dy in range(-3, 4) for dx in range(-2, 3)}
+    write_packs(device.sd, tiles)
+    device.reboot()
+    show_map(device)
+    img = glass(device, tmp_path)
+    strip = img[815:960, :]
+    assert (strip < 128).mean() > 0.03          # three rows of text
+    out = "\n".join(device.console("mils 6400"))
+    assert "[mils] 6400" in out, out

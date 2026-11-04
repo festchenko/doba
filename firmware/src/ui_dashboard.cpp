@@ -24,6 +24,7 @@
 #include "ui_render.h"
 #include "map_view.h"
 #include "topo_layer.h"   // DOBA
+#include "milspec.h"      // DOBA
 #include "map_tiles.h"
 #include "map_store.h"
 #include "media.h"
@@ -3281,6 +3282,10 @@ static void runConsoleLine(char* line) {
     } else if (!strcasecmp(cmd, "zoom")) {
         if (arg && !strcasecmp(arg, "in") && mapMpp > 1.0f) mapMpp /= 2.0f;
         else if (arg && !strcasecmp(arg, "out") && mapMpp < mapMaxMpp()) mapMpp *= 2.0f;
+        screen = SCREEN_MAP; noteActivity();
+    } else if (!strcasecmp(cmd, "mils")) {   // DOBA: mils 6000 | mils 6400
+        if (arg) milspec::setMilsSystem(atoi(arg));
+        Serial.printf("[mils] %d\n", milspec::milsSystem());
         screen = SCREEN_MAP; noteActivity();
     } else if (!strcasecmp(cmd, "topo")) {   // DOBA: topo layer diagnostics
         const topo::Stats t = topo::stats();

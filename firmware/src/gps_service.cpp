@@ -799,7 +799,9 @@ void task(void*) {
                 // more trustworthy sample, so the blend weight scales with
                 // speed. Only updated while moving; stopped, the map holds
                 // the last heading instead of spinning on GPS jitter.
-                if (gps.course.isValid() && s.gpsSpeedKmh > 5.0f) {
+                // DOBA: from walking pace (2 km/h), not cycling pace; the
+                // smoothing below already damps the jitter of a slow fix.
+                if (gps.course.isValid() && s.gpsSpeedKmh > 2.0f) {
                     float rad = gps.course.deg() * (float)M_PI / 180.0f;
                     float nx = cosf(rad), ny = sinf(rad);
                     if (!headingPrimed) {

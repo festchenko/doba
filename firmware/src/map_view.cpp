@@ -1,5 +1,6 @@
 #include "map_view.h"
 #include "topo_layer.h"   // DOBA
+#include "milspec.h"      // DOBA
 
 #include <cmath>
 #include <cstdio>
@@ -637,7 +638,8 @@ void drawScaleBar(float metersPerPixel, bool miles, uint8_t* fb) {
         barM = pick->m;
         snprintf(buf, sizeof(buf), "%s", pick->lbl);
     } else {
-        const int targets[] = {50, 100, 200, 500, 1000, 2000};
+        // DOBA: topo zooms out to ~200 m/px, so the rungs go on to 20 km.
+        const int targets[] = {50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000};
         int meters = targets[0];
         for (int t : targets) if (t / metersPerPixel <= 160) meters = t;
         barM = meters;
@@ -933,6 +935,7 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
         ui_render_map_base(map, fb);
         if (onBase) onBase(fb);
     }
+    if (map.topo) milspec::drawGrid(map, fb);   // DOBA: km grid under route + rider
     renderMapTop(map, fb);
     drawScaleBar(map.metersPerPixel, s.useMiles, fb);
     // The turn banner occupies the top of the map, exactly where the compass
@@ -980,12 +983,18 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
 
     // Zoom buttons (design 1f, right edge)
     ui_map_draw_zoom_button(true, false, fb);
-    drawLayersButton(fb);
+    if (!map.topo) drawLayersButton(fb);   // DOBA: bike layers mean nothing on topo
     ui_map_draw_zoom_button(false, false, fb);
 
     // Status bar drawn after the map (epdiy has no clipping)
     epd_fill_rect({0, 0, W, ui::STATUS_H - 3}, 0xFF, fb);
     ui::statusBar(s, fb);
+
+    // DOBA: on the topo map the footer is the position readout instead.
+    if (map.topo) {
+        milspec::drawStrip(map, s, fb);
+        return;
+    }
 
     // Footer: three cells drawn with the SAME primitive as the dashboard, so a
     // rider glancing down sees the same object in both places — caption top-left

@@ -12,3 +12,4 @@ firmware/sim/build/
 firmware/sim/.venv/
 .venv-flash/
 backup/
+tools/milgeo_test/milgeo_test

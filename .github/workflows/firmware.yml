@@ -62,6 +62,8 @@ jobs:
           pip install numpy pillow
       - name: Clone LilyGO board support
         run: git clone --depth 1 https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO vendor/T5S3-4.7-e-paper-PRO
+      - name: MGRS/UTM maths
+        run: pip install mgrs pyproj && python3 tools/milgeo_test/run.py
       - name: Doba + map tests
         env:
           OTP_SIM_TIME_SCALE: "3"
