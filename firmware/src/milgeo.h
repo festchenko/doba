@@ -31,6 +31,15 @@ void fromUtm(int zone, bool north, double easting, double northing,
 // Empty string outside -80..84 latitude (UPS is not supported).
 void mgrs(double lat, double lon, char* out, size_t n);
 
+// MGRS text back to latitude/longitude (the centre of the square the digits
+// name). Accepts "32ULC1234567890", "32U LC 12345 67890", "32ulc 123 678",
+// 0-5 digit pairs. False if it doesn't parse.
+bool parseMgrs(const char* text, double& lat, double& lon);
+
+// Initial great-circle bearing (deg, 0 = north, clockwise) and distance (m).
+void bearingDistance(double lat1, double lon1, double lat2, double lon2,
+                     double& bearingDeg, double& distM);
+
 // Degrees to mils. system = 6000 ("05-33", the Soviet/Ukrainian 60-00 dial)
 // or 6400 ("0533", NATO). `out` needs 8 bytes.
 void mils(float deg, int system, char* out, size_t n);

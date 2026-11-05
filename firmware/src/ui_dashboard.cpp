@@ -26,6 +26,8 @@
 #include "topo_layer.h"   // DOBA
 #include "doba_ui.h"      // DOBA
 #include "milspec.h"      // DOBA
+#include "doba_points.h" // DOBA
+#include "doba_library.h" // DOBA
 #include "map_tiles.h"
 #include "map_store.h"
 #include "media.h"
@@ -71,7 +73,8 @@ enum Screen { SCREEN_DASH, SCREEN_MAP, SCREEN_SUMMARY, SCREEN_MENU,
               SCREEN_MAPLAYERS,
               // DOBA: the launcher, comms and library (doba_ui.h).
               SCREEN_HOME, SCREEN_COMMS, SCREEN_COMPOSE, SCREEN_LIBRARY,
-              SCREEN_ARTICLE };
+              SCREEN_ARTICLE, SCREEN_SETUP, SCREEN_SETUP_NAME, SCREEN_POINTS,
+              SCREEN_POINT, SCREEN_POINT_NEW };
 #ifdef OTP_SIM
 // DOBA: the inherited OTP sim suites were written for a dashboard boot; they set
 // DOBA_START=dash (sim/tests/conftest.py). The device always boots to HOME.
@@ -778,6 +781,11 @@ doba_ui::Page dobaPage() {
         case SCREEN_COMPOSE: return doba_ui::COMPOSE;
         case SCREEN_LIBRARY: return doba_ui::LIBRARY;
         case SCREEN_ARTICLE: return doba_ui::ARTICLE;
+        case SCREEN_SETUP:   return doba_ui::SETUP;
+        case SCREEN_SETUP_NAME: return doba_ui::SETUP_NAME;
+        case SCREEN_POINTS:  return doba_ui::POINTS;
+        case SCREEN_POINT:   return doba_ui::POINT;
+        case SCREEN_POINT_NEW: return doba_ui::POINT_NEW;
         default:             return doba_ui::HOME;
     }
 }
@@ -797,6 +805,11 @@ void dobaGo(doba_ui::Go g) {
         case doba_ui::TO_ROUTES:   enterPagedList(SCREEN_ROUTES); break;
         case doba_ui::TO_SETTINGS: screen = SCREEN_SETTINGS; break;
         case doba_ui::TO_RECORD:   startOrStopTrack(); break;
+        case doba_ui::TO_SETUP:    screen = SCREEN_SETUP; break;
+        case doba_ui::TO_SETUP_NAME: screen = SCREEN_SETUP_NAME; break;
+        case doba_ui::TO_POINTS:   screen = SCREEN_POINTS; break;
+        case doba_ui::TO_POINT:    screen = SCREEN_POINT; break;
+        case doba_ui::TO_POINT_NEW: screen = SCREEN_POINT_NEW; break;
     }
 }
 
@@ -814,13 +827,15 @@ void goBack() {
         case SCREEN_GPSDEBUG: screen = SCREEN_SETTINGS; break;
         case SCREEN_MAPLAYERS: screen = SCREEN_MAP; break;
         case SCREEN_DIRECTIONS: screen = directionsFrom; break;
-        case SCREEN_SETTINGS:
+        case SCREEN_SETTINGS: screen = SCREEN_SETUP; break;  // DOBA: OTP's settings are "MORE"
         case SCREEN_ROUTES:
         case SCREEN_HISTORY:  screen = SCREEN_HOME; break;   // DOBA: was the menu
         case SCREEN_HOME:
         case SCREEN_COMMS:
         case SCREEN_COMPOSE:
         case SCREEN_LIBRARY:
+        case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
+        case SCREEN_POINT: case SCREEN_POINT_NEW:
         case SCREEN_ARTICLE:  dobaGo(doba_ui::back(dobaPage())); break;
         case SCREEN_SENSORS:  leaveList(); break;  // also stops the BLE scan
         case SCREEN_MENU:     screen = SCREEN_DASH; break;
@@ -1266,9 +1281,14 @@ void handleTap(int x, int y) {
         case SCREEN_COMMS:
         case SCREEN_COMPOSE:
         case SCREEN_LIBRARY:
-        case SCREEN_ARTICLE:   // DOBA
+        case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
+        case SCREEN_POINT: case SCREEN_POINT_NEW:
+        case SCREEN_ARTICLE: {  // DOBA
+            const int bl = settings::backlight();
             dobaGo(doba_ui::tap(dobaPage(), x, y, g_state.snapshot()));
+            if (settings::backlight() != bl) applyBacklight(settings::backlight());
             break;
+        }
         case SCREEN_SETTINGS: {
             int row = (y - kMenuRowTop) / kSettingsRowH;
             bool inRows = y >= kMenuRowTop && row >= 0 && row < kSettingsRowCount;
@@ -3345,6 +3365,8 @@ static void runConsoleLine(char* line) {
         else if (!strcasecmp(arg, "comms"))    screen = SCREEN_COMMS;     // DOBA
         else if (!strcasecmp(arg, "compose"))  screen = SCREEN_COMPOSE;   // DOBA
         else if (!strcasecmp(arg, "library"))  screen = SCREEN_LIBRARY;   // DOBA
+        else if (!strcasecmp(arg, "setup"))    screen = SCREEN_SETUP;     // DOBA
+        else if (!strcasecmp(arg, "points"))   screen = SCREEN_POINTS;    // DOBA
         else { Serial.printf("[cmd] unknown screen '%s'\n", arg); return; }
         noteActivity();
     } else if (!strcasecmp(cmd, "zoom")) {
@@ -3431,7 +3453,7 @@ void task(void*) {
         bool host = usb_storage::hostActive();
         if (lastHostActive && !host) {
             applySdUpdate();
-            map_store::rescanCard();   // it may have added/removed maps too
+            map_store::rescanCard(); doba_lib::rescan(); doba_points::rescan();  // DOBA   // it may have added/removed maps too
         }
         lastHostActive = host;
 
@@ -3453,7 +3475,7 @@ void task(void*) {
             }
             routes::begin();
             segments::begin();
-            map_store::rescanCard();
+            map_store::rescanCard(); doba_lib::rescan(); doba_points::rescan();  // DOBA
             applySdUpdate();      // a firmware.bin may have been on the card
             usb_storage::begin(); // no-op if it already came up
         }
@@ -4182,12 +4204,11 @@ void task(void*) {
                 case SCREEN_COMMS:
                 case SCREEN_COMPOSE:
                 case SCREEN_LIBRARY:
+                case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
+                case SCREEN_POINT: case SCREEN_POINT_NEW:
                 case SCREEN_ARTICLE: {   // DOBA
                     doba_ui::render(dobaPage(), s, fb);
-                    const char* t = screen == SCREEN_COMMS ? "COMMS"
-                                  : screen == SCREEN_COMPOSE ? "WRITE"
-                                  : screen == SCREEN_HOME ? nullptr : "LIBRARY";
-                    ui::statusBar(s, fb, t);
+                    ui::statusBar(s, fb, doba_ui::title(dobaPage()));
                     break;
                 }
                 case SCREEN_SETTINGS: {

@@ -17,7 +17,9 @@ m = M.MGRS()
 bad = 0
 worst_rt = 0
 for (lat, lon), line in zip(pts, out):
-    ours, zone, e, n, la, lo = line.split("|")
+    ours, zone, e, n, la, lo, pok, pdist = line.split("|")
+    if pok != "1" or float(pdist) > 1.5:
+        bad += 1; print("parse round trip", lat, lon, ours, pok, pdist)
     ref = m.toMGRS(lat, lon, MGRSPrecision=5)
     ref_fmt = f"{ref[:-15]} {ref[-15:-13]} {ref[-10:-5]} {ref[-5:]}" if False else None
     # reference "32ULC1234567890" -> compare without spaces, allow 1 m rounding

@@ -1,3 +1,5 @@
+#include <cctype>
+#include <cstring>
 // DOBA: see milgeo.h. Transverse Mercator after Snyder, "Map Projections — A
 // Working Manual" (USGS PP 1395), eqs. 8-9..8-25; sub-millimetre within a zone.
 #include "milgeo.h"
@@ -117,6 +119,65 @@ void mgrs(double lat, double lon, char* out, size_t n) {
     const long nn = (long)floor(fmod(u.northing, 100000.0));
     snprintf(out, n, "%d%c %c%c %05ld %05ld", u.zone, u.band, colSets[set][col],
              rows[row], e, nn);
+}
+
+bool parseMgrs(const char* text, double& lat, double& lon) {
+    char c[40];
+    size_t k = 0;
+    for (const char* p = text; *p && k < sizeof(c) - 1; ++p)
+        if (*p != ' ' && *p != '-') c[k++] = (char)toupper((unsigned char)*p);
+    c[k] = 0;
+    size_t i = 0;
+    int zone = 0;
+    while (i < k && isdigit((unsigned char)c[i]) && i < 2) zone = zone * 10 + (c[i++] - '0');
+    if (zone < 1 || zone > 60 || i + 3 > k) return false;
+    const char band = c[i++];
+    static const char bands[] = "CDEFGHJKLMNPQRSTUVWX";
+    const char* bp = strchr(bands, band);
+    if (!bp) return false;
+    const char colL = c[i++], rowL = c[i++];
+    static const char* colSets[3] = {"ABCDEFGH", "JKLMNPQR", "STUVWXYZ"};
+    static const char rows[] = "ABCDEFGHJKLMNPQRSTUV";
+    const char* cp = strchr(colSets[(zone - 1) % 3], colL);
+    const char* rp = strchr(rows, rowL);
+    if (!cp || !rp || !colL || !rowL) return false;
+    const size_t nd = k - i;
+    if (nd % 2 || nd > 10) return false;
+    for (size_t j = i; j < k; ++j) if (!isdigit((unsigned char)c[j])) return false;
+    const int half = (int)nd / 2;
+    double e = 0, n = 0, unit = 100000;
+    for (int j = 0; j < half; ++j) {
+        unit /= 10;
+        e += (c[i + j] - '0') * unit;
+        n += (c[i + half + j] - '0') * unit;
+    }
+    e += unit / 2;   // centre of the named square
+    n += unit / 2;
+    const double easting = ((cp - colSets[(zone - 1) % 3]) + 1) * 100000.0 + e;
+    int row = (int)(rp - rows);
+    if (zone % 2 == 0) row = (row + 15) % 20;    // even zones start at F
+    double northing = row * 100000.0 + n;
+    // The band fixes which 2000 km cycle: the latitude band's southern edge.
+    const int bi = (int)(bp - bands);
+    const double bandLat = -80.0 + bi * 8.0;
+    const bool north = bandLat >= 0;
+    const Utm edge = toUtmInZone(bandLat, zone * 6.0 - 183.0, zone);
+    double edgeN = edge.northing;
+    while (northing < edgeN - 100000.0) northing += 2000000.0;
+    fromUtm(zone, north, easting, northing, lat, lon);
+    return true;
+}
+
+void bearingDistance(double lat1, double lon1, double lat2, double lon2,
+                     double& bearingDeg, double& distM) {
+    const double d2r = M_PI / 180.0;
+    const double p1 = lat1 * d2r, p2 = lat2 * d2r, dl = (lon2 - lon1) * d2r;
+    const double y = sin(dl) * cos(p2);
+    const double x = cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dl);
+    bearingDeg = fmod(atan2(y, x) / d2r + 360.0, 360.0);
+    const double a = sin((p2 - p1) / 2) * sin((p2 - p1) / 2) +
+                     cos(p1) * cos(p2) * sin(dl / 2) * sin(dl / 2);
+    distM = 2 * 6371008.8 * asin(sqrt(a < 1 ? a : 1));
 }
 
 void mils(float deg, int system, char* out, size_t n) {

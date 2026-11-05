@@ -10,7 +10,11 @@ int main() {
         milgeo::Utm u = milgeo::toUtm(lat, lon);
         double la, lo;
         milgeo::fromUtm(u.zone, u.north, u.easting, u.northing, la, lo);
-        printf("%s|%d|%.3f|%.3f|%.9f|%.9f\n", m, u.zone, u.easting, u.northing, la, lo);
+        double pa = 0, po = 0;
+        const bool ok = milgeo::parseMgrs(m, pa, po);
+        double brg, dist;
+        milgeo::bearingDistance(lat, lon, pa, po, brg, dist);
+        printf("%s|%d|%.3f|%.3f|%.9f|%.9f|%d|%.3f\n", m, u.zone, u.easting, u.northing, la, lo, ok, dist);
     }
     char b[8];
     for (float d : {0.f, 30.f, 90.f, 180.f, 359.99f, -10.f}) {

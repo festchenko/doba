@@ -1,5 +1,6 @@
 // DOBA: military-style overlay for the topo map — see milspec.h.
 #include "milspec.h"
+#include "doba_points.h"
 
 #include <Preferences.h>
 #include <cmath>
@@ -162,6 +163,63 @@ void drawGrid(const MapScreenData& map, uint8_t* fb) {
     for (int i = 0; i < nl; ++i) labelBox(labels[i].x, labels[i].y, labels[i].t, fb);
 }
 
+void drawTarget(const MapScreenData& map, const RideState& s, uint8_t* fb) {
+    const int t = doba_points::target();
+    const doba_points::Point* p = doba_points::at(t);
+    if (!p || map.metersPerPixel <= 0) return;
+    const bool have = s.gpsFix || s.everHadFix;
+    const double lat = have ? s.latitude : map.centerLat;
+    const double lon = have ? s.longitude : map.centerLon;
+    double b, d;
+    milgeo::bearingDistance(lat, lon, p->lat, p->lon, b, d);
+    const double a = (b + map.northDeg) * M_PI / 180.0;
+    const double px = d / map.metersPerPixel;
+    const double tx = map.riderX + sin(a) * px, ty = map.riderY - cos(a) * px;
+    const int top = ui::STATUS_H, bottom = ui::MAP_STRIP_TOP, W = SCREEN_W;
+    // Dashed, 3 px, stopping short of the rider and of the mark; clipped to the map.
+    const double len = px, ux = sin(a), uy = -cos(a);
+    for (double k = 18; k < len - 20; k += 1.0) {
+        if (fmod(k, 22.0) > 13.0) continue;
+        const int x = map.riderX + (int)lround(ux * k), y = map.riderY + (int)lround(uy * k);
+        if (y < top + 2 || y > bottom - 3 || x < 1 || x > W - 2) {
+            if (k > 40) break;
+            continue;
+        }
+        epd_fill_rect({x - 1, y - 1, 3, 3}, 0x00, fb);
+    }
+    const bool on = tx > 20 && tx < W - 20 && ty > top + 20 && ty < bottom - 20;
+    if (!on) {
+        // Off the map: a tag where the line leaves it — name and distance.
+        double k = 0;
+        for (double kk = 18; kk < len; kk += 2) {
+            const double x = map.riderX + ux * kk, y = map.riderY + uy * kk;
+            if (x < 30 || x > W - 30 || y < top + 30 || y > bottom - 30) break;
+            k = kk;
+        }
+        char tag[40], ds[16];
+        doba_points::formatDistance(d, ds, sizeof ds);
+        snprintf(tag, sizeof tag, "%.10s %s", p->name, ds);
+        const int tw = ui::textWidth(&Mono_M, tag) + 16;
+        int x = map.riderX + (int)lround(ux * k) - tw / 2, y = map.riderY + (int)lround(uy * k) - 16;
+        if (x < 4) x = 4;
+        if (x + tw > W - 80) x = W - 80 - tw;   // clear of the zoom buttons
+        if (y < top + 4) y = top + 4;
+        if (y > bottom - 36) y = bottom - 36;
+        epd_fill_rect({x, y, tw, 32}, 0x00, fb);
+        ui::text(&Mono_M, x + 8, y + 24, tag, fb, EPD_DRAW_ALIGN_LEFT, 0xFF);
+    }
+    if (on) {
+        const int cx = (int)tx, cy = (int)ty;
+        epd_fill_circle(cx, cy, 15, 0xFF, fb);
+        for (int r = 0; r < 3; ++r) epd_draw_circle(cx, cy, 14 - r, 0x00, fb);
+        epd_fill_rect({cx - 22, cy - 1, 44, 3}, 0x00, fb);
+        epd_fill_rect({cx - 1, cy - 22, 3, 44}, 0x00, fb);
+        const int w = ui::textWidth(&Mono_M, p->name) + 12;
+        epd_fill_rect({cx + 20, cy - 44, w, 28}, 0xFF, fb);
+        ui::text(&Mono_M, cx + 26, cy - 22, p->name, fb, EPD_DRAW_ALIGN_LEFT, 0x00);
+    }
+}
+
 void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     const int W = SCREEN_W, H = 960, top = ui::MAP_STRIP_TOP;
     epd_fill_rect({0, top, W, H - top}, 0xFF, fb);
@@ -177,10 +235,23 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     milgeo::mgrs(lat, lon, m, sizeof m);
     ui::text(&Mono_L, x0, top + 46, m[0] ? m : "MGRS --", fb, EPD_DRAW_ALIGN_LEFT, ink);
 
-    char ll[48];
-    snprintf(ll, sizeof ll, "%c%08.5f  %c%09.5f", lat >= 0 ? 'N' : 'S', fabs(lat),
-             lon >= 0 ? 'E' : 'W', fabs(lon));
-    ui::text(&Mono_M, x0, top + 84, ll, fb, EPD_DRAW_ALIGN_LEFT, ink);
+    char ll[64];
+    const doba_points::Point* tp = doba_points::at(doba_points::target());
+    if (tp && (fix || s.everHadFix)) {
+        // DOBA: guiding to a waypoint — its azimuth and distance replace lat/lon.
+        double b, d;
+        milgeo::bearingDistance(lat, lon, tp->lat, tp->lon, b, d);
+        char mil[8], ds[16];
+        milgeo::mils((float)b, milsSystem(), mil, sizeof mil);
+        doba_points::formatDistance(d, ds, sizeof ds);
+        snprintf(ll, sizeof ll, "> %.10s  AZ %s  %s", tp->name, mil, ds);
+        epd_fill_rect({0, top + 58, W, 36}, 0x00, fb);
+        ui::text(&Mono_M, x0, top + 84, ll, fb, EPD_DRAW_ALIGN_LEFT, 0xFF);
+    } else {
+        snprintf(ll, sizeof ll, "%c%08.5f  %c%09.5f", lat >= 0 ? 'N' : 'S', fabs(lat),
+                 lon >= 0 ? 'E' : 'W', fabs(lon));
+        ui::text(&Mono_M, x0, top + 84, ll, fb, EPD_DRAW_ALIGN_LEFT, ink);
+    }
 
     char az[24];
     // Course over ground means nothing standing still: show it from walking pace.

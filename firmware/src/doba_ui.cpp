@@ -14,6 +14,8 @@
 #include "mesh_proto.h"
 #include "mesh_service.h"
 #include "milgeo.h"
+#include "milspec.h"
+#include "doba_points.h"
 #include "ride_state.h"
 #include "settings.h"
 #include "ui_render.h"
@@ -94,10 +96,10 @@ EpdRect tileRect(int col, int row) {
 }
 
 const Tile kTiles[8] = {
-    {tileRect(0, 0), "MAP", TO_MAP},         {tileRect(1, 0), "POSITION", TO_POSITION},
+    {tileRect(0, 0), "MAP", TO_MAP},         {tileRect(1, 0), "POSITION", TO_POINTS},
     {tileRect(0, 1), "LIBRARY", TO_LIBRARY}, {tileRect(1, 1), "COMMS", TO_COMMS},
     {tileRect(0, 2), "TRACKS", TO_TRACKS},   {tileRect(1, 2), "ROUTES", TO_ROUTES},
-    {tileRect(0, 3), "SETTINGS", TO_SETTINGS}, {tileRect(1, 3), "", TO_RECORD},
+    {tileRect(0, 3), "SETTINGS", TO_SETUP}, {tileRect(1, 3), "", TO_RECORD},
 };
 
 void renderHome(const RideState& s, uint8_t* fb) {
@@ -114,8 +116,15 @@ void renderHome(const RideState& s, uint8_t* fb) {
         sub[0] = 0;
         switch (t.go) {
             case TO_MAP: snprintf(sub, sizeof sub, "topo + MGRS grid"); break;
-            case TO_POSITION:
-                if (s.gpsFix || s.everHadFix) milgeo::mgrs(s.latitude, s.longitude, sub, sizeof sub);
+            case TO_POINTS:
+                if (doba_points::target() >= 0 && (s.gpsFix || s.everHadFix)) {
+                    double b, d;
+                    doba_points::fromHere(doba_points::target(), s.latitude, s.longitude, b, d);
+                    char az[8], ds[16];
+                    milgeo::mils((float)b, milspec::milsSystem(), az, sizeof az);
+                    doba_points::formatDistance(d, ds, sizeof ds);
+                    snprintf(sub, sizeof sub, "> %.8s %s %s", doba_points::at(doba_points::target())->name, az, ds);
+                } else if (s.gpsFix || s.everHadFix) milgeo::mgrs(s.latitude, s.longitude, sub, sizeof sub);
                 else snprintf(sub, sizeof sub, "no fix yet");
                 break;
             case TO_LIBRARY: snprintf(sub, sizeof sub, "%d book%s on card", doba_lib::count(), doba_lib::count() == 1 ? "" : "s"); break;
@@ -132,7 +141,8 @@ void renderHome(const RideState& s, uint8_t* fb) {
                 break;
             case TO_TRACKS: snprintf(sub, sizeof sub, "saved .fit tracks"); break;
             case TO_ROUTES: snprintf(sub, sizeof sub, "follow a .gpx"); break;
-            case TO_SETTINGS: snprintf(sub, sizeof sub, "mils · radio · light"); break;
+            case TO_SETUP: snprintf(sub, sizeof sub, "%s · %s", mesh::region(mesh_service::regionIndex()).name,
+                                    milspec::milsSystem() == 6400 ? "6400" : "60-00"); break;
             default: break;
         }
         // Subtitle may be long (MGRS): shrink to fit the tile.
@@ -274,6 +284,426 @@ Go tapCompose(int x, int y) {
     return STAY;
 }
 
+// --- shared bits for the pages below -------------------------------------------
+
+const char* onOff(bool b) { return b ? "ON" : "OFF"; }
+
+// A page row: caption on the left, value on the right, ruled underneath.
+void row(int y, int h, const char* caption, const char* value, uint8_t* fb, bool hint = true) {
+    ui::text(ui::font(ui::F_LABEL), 18, y + h / 2 + 10, caption, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char v[48];
+    snprintf(v, sizeof v, hint ? "%s  >" : "%s", value);
+    // The value takes what the caption leaves; a long one steps down a size.
+    const int room = W - 36 - ui::textWidth(ui::font(ui::F_LABEL), caption) - 24;
+    const EpdFont* f = ui::font(ui::F_KEY);
+    if (ui::textWidth(f, v) > room) f = ui::font(ui::F_LABEL);
+    if (ui::textWidth(f, v) > room) f = ui::font(ui::F_SMALL);
+    ui::text(f, W - 18, y + h / 2 + 12, v, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+    epd_fill_rect({10, y + h - 2, W - 20, 2}, INK, fb);
+}
+
+// The current position, if there is one worth using.
+bool here(const RideState& s, double& lat, double& lon) {
+    if (!s.gpsFix && !s.everHadFix) return false;
+    lat = s.latitude;
+    lon = s.longitude;
+    return true;
+}
+
+// "12-34" / "1234" and degrees.
+void azText(double deg, char* out, size_t n) {
+    char m[8];
+    milgeo::mils((float)deg, milspec::milsSystem(), m, sizeof m);
+    snprintf(out, n, "%s", m);
+}
+
+// A UTF-8 short name: the first four non-space characters, upper-cased ASCII.
+void shortName(const char* lng, char* out, size_t n) {
+    size_t o = 0;
+    int glyphs = 0;
+    for (const unsigned char* p = (const unsigned char*)lng; *p && glyphs < 4;) {
+        int len = *p < 0x80 ? 1 : (*p >> 5) == 6 ? 2 : (*p >> 4) == 14 ? 3 : 4;
+        if (*p == ' ') { ++p; continue; }
+        if (o + len >= n) break;
+        for (int i = 0; i < len && p[i]; ++i) out[o++] = (char)(i == 0 && len == 1 ? toupper(p[0]) : p[i]);
+        p += len;
+        ++glyphs;
+    }
+    out[o] = 0;
+}
+
+// --- SETUP: settings without the phone -------------------------------------------
+
+constexpr int SROW_TOP = TOP + 8, SROW_H = 86;
+enum SetupRow { R_RADIO, R_REGION, R_PRESET, R_NAME, R_MILS, R_LIGHT, R_TZ, R_MORE, R_COUNT };
+// The bands that make sense for a device carried in Europe and Ukraine, then
+// the rest of the world for the odd trip. Cycled in this order.
+const char* const kRegionCycle[] = {"EU_868", "UA_868", "EU_433", "UA_433", "US", "RU"};
+kbd::Keyboard g_nameKbd;
+
+void renderSetup(const RideState& s, uint8_t* fb) {
+    (void)s;
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    char v[48];
+    for (int r = 0; r < R_COUNT; ++r) {
+        const int y = SROW_TOP + r * SROW_H;
+        switch (r) {
+            case R_RADIO: row(y, SROW_H, "RADIO", onOff(mesh_service::enabled()), fb); break;
+            case R_REGION: {
+                const mesh::Region& rg = mesh::region(mesh_service::regionIndex());
+                snprintf(v, sizeof v, "%s", rg.name);
+                row(y, SROW_H, "BAND", v, fb);
+                break;
+            }
+            case R_PRESET: row(y, SROW_H, "MODE", mesh_service::presetName(), fb); break;
+            case R_NAME: {
+                snprintf(v, sizeof v, "%.18s", mesh_service::longName());
+                row(y, SROW_H, "CALLSIGN", v[0] ? v : "--", fb);
+                break;
+            }
+            case R_MILS:
+                row(y, SROW_H, "ANGLES", milspec::milsSystem() == 6400 ? "6400 mils" : "60-00 mils", fb);
+                break;
+            case R_LIGHT: {
+                static const char* kL[] = {"OFF", "LOW", "MID", "HIGH"};
+                const int b = settings::backlight();
+                row(y, SROW_H, "LIGHT", kL[b < 0 ? 0 : b > 3 ? 3 : b], fb);
+                break;
+            }
+            case R_TZ: {
+                const int m = settings::tzMinutes();
+                if (m % 60) snprintf(v, sizeof v, "-  UTC%+d:%02d  +", m / 60, abs(m % 60));
+                else snprintf(v, sizeof v, "-  UTC%+d  +", m / 60);
+                row(y, SROW_H, "TIME", v, fb, false);
+                break;
+            }
+            case R_MORE: row(y, SROW_H, "MORE", "GPS, sensors", fb); break;
+        }
+    }
+    char f[64];
+    snprintf(f, sizeof f, "%.3f MHz · %d nodes heard", mesh_service::frequencyMHz(), mesh_service::nodeCount());
+    ui::text(ui::font(ui::F_TINY), W / 2, H - 24, f, fb, EPD_DRAW_ALIGN_CENTER, INK);
+}
+
+Go tapSetup(int x, int y) {
+    const int r = (y - SROW_TOP) / SROW_H;
+    if (y < SROW_TOP || r < 0 || r >= R_COUNT) return STAY;
+    switch (r) {
+        case R_RADIO: mesh_service::setEnabled(!mesh_service::enabled()); break;
+        case R_REGION: {
+            const char* cur = mesh::region(mesh_service::regionIndex()).name;
+            const int n = sizeof(kRegionCycle) / sizeof(kRegionCycle[0]);
+            int at = -1;
+            for (int i = 0; i < n; ++i) if (!strcmp(cur, kRegionCycle[i])) at = i;
+            for (int k = 1; k <= n; ++k) {
+                const int ri = mesh::regionIndexByName(kRegionCycle[(at + k + n) % n]);
+                if (ri >= 0) { mesh_service::setRegion((uint8_t)ri); break; }
+            }
+            break;
+        }
+        case R_PRESET: mesh_service::setPreset((uint8_t)((mesh_service::presetIndex() + 1) % mesh::PRESET_COUNT)); break;
+        case R_NAME:
+            g_nameKbd.clear();
+            snprintf(g_nameKbd.text, sizeof g_nameKbd.text, "%s", mesh_service::longName());
+            return TO_SETUP_NAME;
+        case R_MILS: milspec::setMilsSystem(milspec::milsSystem() == 6400 ? 6000 : 6400); break;
+        case R_LIGHT: settings::setBacklight((settings::backlight() + 1) % 4); break;
+        case R_TZ: {
+            int m = settings::tzMinutes() + (x < W / 2 ? -60 : 60);
+            if (m < -12 * 60) m = 14 * 60;
+            if (m > 14 * 60) m = -12 * 60;
+            settings::setTzMinutes(m);
+            break;
+        }
+        case R_MORE: return TO_SETTINGS;
+    }
+    return STAY;
+}
+
+// A single text field over the keyboard (the callsign).
+void renderField(const char* caption, const char* note, kbd::Keyboard& k, const char* enter, uint8_t* fb) {
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    k.top = H - k.height();
+    k.enterLabel = enter;
+    ui::text(ui::font(ui::F_SMALL), 14, TOP + 40, caption, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    const EpdRect box = {10, TOP + 60, W - 20, 90};
+    frame(box, 3, fb);
+    char shown[300];
+    snprintf(shown, sizeof shown, "%s_", k.text);
+    ui::text(ui::font(ui::F_KEY), box.x + 16, box.y + 58, shown, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (note) ui::text(ui::font(ui::F_TINY), 14, box.y + box.height + 34, note, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    k.render(fb);
+}
+
+Go tapSetupName(int x, int y) {
+    const kbd::Action a = g_nameKbd.tap(x, y);
+    while (strlen(g_nameKbd.text) > 36) kbd::popUtf8(g_nameKbd.text);
+    if (a == kbd::ENTER && g_nameKbd.text[0]) {
+        char sh[20];
+        shortName(g_nameKbd.text, sh, sizeof sh);
+        mesh_service::setNames(g_nameKbd.text, sh);
+        return TO_SETUP;
+    }
+    return STAY;
+}
+
+// --- POINTS ----------------------------------------------------------------------
+
+int g_pointsScroll = 0;
+int g_pointSel = -1;
+bool g_deleteArmed = false;
+const char* g_pointsNote = nullptr;     // a one-off line ("no fix yet")
+constexpr int PROW_TOP = TOP + 262, PROW_H = 88, PROW_N = 6;
+const EpdRect kMark = {12, TOP + 158, 250, 88};
+const EpdRect kAdd = {278, TOP + 158, 250, 88};
+const EpdRect kUp = {12, H - 92, 250, 80};
+const EpdRect kDown = {278, H - 92, 250, 80};
+
+void renderPoints(const RideState& s, uint8_t* fb) {
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    double lat, lon;
+    const bool have = here(s, lat, lon);
+    ui::text(ui::font(ui::F_TINY), 14, TOP + 30, s.gpsFix ? "MY POSITION" : have ? "LAST POSITION (NO FIX)" : "MY POSITION",
+             fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char m[32] = "--";
+    if (have) milgeo::mgrs(lat, lon, m, sizeof m);
+    ui::text(ui::font(ui::F_BODY_H), 14, TOP + 76, have ? m : "NO FIX YET", fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char ll[64];
+    if (have) snprintf(ll, sizeof ll, "%c%.5f %c%.5f  ALT %dm  SAT %d", lat >= 0 ? 'N' : 'S', fabs(lat),
+                       lon >= 0 ? 'E' : 'W', fabs(lon), (int)lroundf(s.altitudeM), s.satellites);
+    else snprintf(ll, sizeof ll, "waiting for satellites · SAT %d", s.satellites);
+    ui::text(ui::font(ui::F_SMALL), 14, TOP + 116, ll, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (g_pointsNote) {
+        ui::text(ui::font(ui::F_TINY), W - 14, TOP + 30, g_pointsNote, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        g_pointsNote = nullptr;
+    }
+    button(kMark, "MARK HERE", true, fb);
+    button(kAdd, "ADD GRID", false, fb);
+
+    const int n = doba_points::count();
+    if (g_pointsScroll > n - 1) g_pointsScroll = n > 0 ? ((n - 1) / PROW_N) * PROW_N : 0;
+    if (n == 0)
+        ui::text(ui::font(ui::F_SMALL), W / 2, PROW_TOP + 120, "no points yet", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    for (int k = 0; k < PROW_N && g_pointsScroll + k < n; ++k) {
+        const int i = g_pointsScroll + k;
+        const doba_points::Point* p = doba_points::at(i);
+        const int y = PROW_TOP + k * PROW_H;
+        const bool tgt = doba_points::target() == i;
+        if (tgt) epd_fill_rect({10, y + 4, W - 20, PROW_H - 8}, INK, fb);
+        const uint8_t fg = tgt ? PAPER : INK;
+        char nm[40];
+        snprintf(nm, sizeof nm, tgt ? "> %s" : "%s", p->name);
+        ui::text(ui::font(ui::F_LABEL), 22, y + 38, nm, fb, EPD_DRAW_ALIGN_LEFT, fg);
+        char pm[32];
+        milgeo::mgrs(p->lat, p->lon, pm, sizeof pm);
+        ui::text(ui::font(ui::F_TINY), 22, y + 70, pm, fb, EPD_DRAW_ALIGN_LEFT, fg);
+        if (have) {
+            double b, d;
+            doba_points::fromHere(i, lat, lon, b, d);
+            char az[16], ds[24];
+            azText(b, az, sizeof az);
+            doba_points::formatDistance(d, ds, sizeof ds);
+            ui::text(ui::font(ui::F_KEY), W - 22, y + 40, az, fb, EPD_DRAW_ALIGN_RIGHT, fg);
+            ui::text(ui::font(ui::F_SMALL), W - 22, y + 72, ds, fb, EPD_DRAW_ALIGN_RIGHT, fg);
+        }
+        if (!tgt) epd_fill_rect({10, y + PROW_H - 2, W - 20, 1}, INK, fb);
+    }
+    if (n > PROW_N) {
+        button(kUp, "UP", false, fb);
+        button(kDown, "DOWN", false, fb);
+    }
+}
+
+kbd::Keyboard g_newGrid, g_newName;
+bool g_newFocusName = false;
+const char* g_newError = nullptr;
+
+Go tapPoints(int x, int y, const RideState& s) {
+    double lat, lon;
+    if (hit(kMark, x, y)) {
+        if (!here(s, lat, lon)) { g_pointsNote = "no fix yet"; return STAY; }
+        const int i = doba_points::add(nullptr, lat, lon);
+        g_pointsNote = i < 0 ? "list full" : "marked";
+        if (i >= 0) g_pointsScroll = (i / PROW_N) * PROW_N;
+        return STAY;
+    }
+    if (hit(kAdd, x, y)) {
+        g_newGrid.clear();
+        g_newName.clear();
+        g_newFocusName = false;
+        g_newError = nullptr;
+        // Start from this square: most points are typed in near where you are.
+        if (here(s, lat, lon)) {
+            char m[32];
+            milgeo::mgrs(lat, lon, m, sizeof m);
+            if (strlen(m) > 7) { memcpy(g_newGrid.text, m, 7); g_newGrid.text[7] = 0; }
+        }
+        g_newGrid.layout = kbd::SYM;   // digits first
+        return TO_POINT_NEW;
+    }
+    const int n = doba_points::count();
+    if (n > PROW_N && hit(kUp, x, y)) { g_pointsScroll = g_pointsScroll >= PROW_N ? g_pointsScroll - PROW_N : 0; return STAY; }
+    if (n > PROW_N && hit(kDown, x, y)) { if (g_pointsScroll + PROW_N < n) g_pointsScroll += PROW_N; return STAY; }
+    if (y >= PROW_TOP && y < PROW_TOP + PROW_N * PROW_H) {
+        const int i = g_pointsScroll + (y - PROW_TOP) / PROW_H;
+        if (i < n) { g_pointSel = i; g_deleteArmed = false; return TO_POINT; }
+    }
+    return STAY;
+}
+
+// --- POINT: one waypoint -----------------------------------------------------------
+
+const EpdRect kGoto = {12, H - 196, 516, 92};
+const EpdRect kDel = {12, H - 92, 250, 80};
+const EpdRect kToMap = {278, H - 92, 250, 80};
+
+void arrow(int cx, int cy, int r, float deg, uint8_t c, uint8_t* fb) {
+    const float a = deg * (float)M_PI / 180.0f;
+    const float sx = sinf(a), sy = -cosf(a);
+    const int tx = cx + (int)(sx * r), ty = cy + (int)(sy * r);
+    const int bx = cx - (int)(sx * r * 0.35f), by = cy - (int)(sy * r * 0.35f);
+    const int px = (int)(-sy * r * 0.28f), py = (int)(sx * r * 0.28f);
+    epd_fill_triangle(tx, ty, bx + px, by + py, cx, cy, c, fb);
+    epd_fill_triangle(tx, ty, bx - px, by - py, cx, cy, c, fb);
+}
+
+void renderPoint(const RideState& s, uint8_t* fb) {
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    const doba_points::Point* p = doba_points::at(g_pointSel);
+    if (!p) return;
+    ui::text(ui::font(ui::F_TITLE), 14, TOP + 60, p->name, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char pm[32];
+    milgeo::mgrs(p->lat, p->lon, pm, sizeof pm);
+    ui::text(ui::font(ui::F_BODY_H), 14, TOP + 108, pm, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char ll[48];
+    snprintf(ll, sizeof ll, "%c%.5f  %c%.5f", p->lat >= 0 ? 'N' : 'S', fabs(p->lat), p->lon >= 0 ? 'E' : 'W', fabs(p->lon));
+    ui::text(ui::font(ui::F_SMALL), 14, TOP + 144, ll, fb, EPD_DRAW_ALIGN_LEFT, INK);
+
+    double lat, lon;
+    const int dialY = TOP + 340, dialR = 150, dialX = 175;
+    if (here(s, lat, lon)) {
+        double b, d;
+        doba_points::fromHere(g_pointSel, lat, lon, b, d);
+        // North-up dial: ticks every 10-00 (60°), N marked, the arrow to the point.
+        for (int t = 0; t < 3; ++t) epd_draw_circle(dialX, dialY, dialR - t, INK, fb);
+        for (int k = 0; k < 12; ++k) {
+            const float a = k * 30.0f * (float)M_PI / 180.0f;
+            const int r0 = k % 3 ? dialR - 14 : dialR - 26;
+            epd_draw_line(dialX + (int)(sinf(a) * r0), dialY - (int)(cosf(a) * r0),
+                          dialX + (int)(sinf(a) * dialR), dialY - (int)(cosf(a) * dialR), INK, fb);
+        }
+        ui::text(ui::font(ui::F_LABEL), dialX, dialY - dialR + 52, "N", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        arrow(dialX, dialY, dialR - 34, (float)b, INK, fb);
+        epd_fill_circle(dialX, dialY, 6, PAPER, fb);
+        epd_draw_circle(dialX, dialY, 6, INK, fb);
+        if (s.gpsFix && s.gpsSpeedKmh >= 2.0f) {   // where you are heading, as a ring tick
+            const float a = s.courseDeg * (float)M_PI / 180.0f;
+            epd_fill_circle(dialX + (int)(sinf(a) * (dialR + 12)), dialY - (int)(cosf(a) * (dialR + 12)), 8, INK, fb);
+        }
+        char az[16], deg[16], ds[24];
+        azText(b, az, sizeof az);
+        snprintf(deg, sizeof deg, "%03d\xC2\xB0", (int)lround(b) % 360);
+        doba_points::formatDistance(d, ds, sizeof ds);
+        const int tx = 346;
+        ui::text(ui::font(ui::F_TINY), tx, dialY - 92, "AZIMUTH", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_TITLE), tx, dialY - 46, az, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_SMALL), tx, dialY - 12, deg, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_TINY), tx, dialY + 42, "DISTANCE", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_TITLE), tx, dialY + 88, ds, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        if (!s.gpsFix)
+            ui::text(ui::font(ui::F_TINY), W / 2, dialY + dialR + 40, "from the last fix", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    } else {
+        ui::text(ui::font(ui::F_SMALL), W / 2, dialY, "no fix: azimuth when GPS has one", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    }
+    const bool tgt = doba_points::target() == g_pointSel;
+    button(kGoto, tgt ? "STOP GUIDING" : "GO TO  (show on map)", !tgt, fb);
+    button(kDel, g_deleteArmed ? "SURE? TAP" : "DELETE", g_deleteArmed, fb);
+    button(kToMap, "MAP", false, fb);
+}
+
+Go tapPoint(int x, int y) {
+    if (!doba_points::at(g_pointSel)) return TO_POINTS;
+    if (hit(kGoto, x, y)) {
+        if (doba_points::target() == g_pointSel) { doba_points::setTarget(-1); return STAY; }
+        doba_points::setTarget(g_pointSel);
+        return TO_MAP;
+    }
+    if (hit(kDel, x, y)) {
+        if (!g_deleteArmed) { g_deleteArmed = true; return STAY; }
+        doba_points::remove(g_pointSel);
+        g_pointSel = -1;
+        return TO_POINTS;
+    }
+    if (hit(kToMap, x, y)) return TO_MAP;
+    g_deleteArmed = false;
+    return STAY;
+}
+
+// --- POINT_NEW: a waypoint typed in as MGRS ------------------------------------------
+
+// At least 1 km precision (two digit pairs) before a grid counts: the bare
+// "32U LC" the field starts with would otherwise be a point 50 km away.
+int gridDigits(const char* t) {
+    int n = 0;
+    for (; *t; ++t) if (*t >= '0' && *t <= '9') ++n;
+    return n;
+}
+bool parseGrid(const char* t, double& la, double& lo) {
+    // zone digits (1-2) are not easting/northing digits
+    int zone = 0;
+    while (t[zone] >= '0' && t[zone] <= '9') ++zone;
+    return gridDigits(t) - zone >= 4 && milgeo::parseMgrs(t, la, lo);
+}
+
+const EpdRect kGridBox = {10, TOP + 46, W - 20, 84};
+const EpdRect kNameBox = {10, TOP + 176, W - 20, 84};
+
+void renderPointNew(const RideState& s, uint8_t* fb) {
+    (void)s;
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    kbd::Keyboard& k = g_newFocusName ? g_newName : g_newGrid;
+    k.top = H - k.height();
+    k.enterLabel = "SAVE";
+    auto field = [&](const EpdRect& r, const char* cap, const char* txt, bool focus, const char* empty) {
+        ui::text(ui::font(ui::F_TINY), r.x + 4, r.y - 12, cap, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        frame(r, focus ? 4 : 1, fb);
+        char shown[300];
+        snprintf(shown, sizeof shown, focus ? "%s_" : "%s", txt[0] ? txt : (focus ? "" : empty));
+        ui::text(ui::font(ui::F_KEY), r.x + 16, r.y + 54, shown, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    };
+    field(kGridBox, "GRID (MGRS)  e.g. 32U LC 12345 67890", g_newGrid.text, !g_newFocusName, "");
+    field(kNameBox, "NAME (optional)", g_newName.text, g_newFocusName, "PT..");
+    double la, lo;
+    const char* line = g_newError;
+    char ok[64];
+    if (!line && g_newGrid.text[0] && parseGrid(g_newGrid.text, la, lo)) {
+        snprintf(ok, sizeof ok, "= %c%.5f %c%.5f", la >= 0 ? 'N' : 'S', fabs(la), lo >= 0 ? 'E' : 'W', fabs(lo));
+        line = ok;
+    }
+    if (line) ui::text(ui::font(ui::F_SMALL), 14, kNameBox.y + kNameBox.height + 44, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    k.render(fb);
+}
+
+Go tapPointNew(int x, int y) {
+    if (hit(kGridBox, x, y)) { g_newFocusName = false; return STAY; }
+    if (hit(kNameBox, x, y)) { g_newFocusName = true; return STAY; }
+    kbd::Keyboard& k = g_newFocusName ? g_newName : g_newGrid;
+    const kbd::Action a = k.tap(x, y);
+    while (strlen(g_newName.text) > doba_points::NAME_LEN - 1) kbd::popUtf8(g_newName.text);
+    while (strlen(g_newGrid.text) > 24) kbd::popUtf8(g_newGrid.text);
+    g_newError = nullptr;
+    if (a == kbd::ENTER) {
+        double la, lo;
+        if (!parseGrid(g_newGrid.text, la, lo)) { g_newError = "need zone, square and 4-10 digits"; g_newFocusName = false; return STAY; }
+        const int i = doba_points::add(g_newName.text, la, lo);
+        if (i < 0) { g_newError = "list full (64)"; return STAY; }
+        g_pointsScroll = (i / PROW_N) * PROW_N;
+        g_pointsNote = "added";
+        return TO_POINTS;
+    }
+    return STAY;
+}
+
 }  // namespace
 
 void render(Page p, const RideState& s, uint8_t* fb) {
@@ -286,17 +716,42 @@ void render(Page p, const RideState& s, uint8_t* fb) {
             topo_bg::draw({0, TOP, W, g_search.top - TOP}, fb, 2);   // not among the keys
             break;
         case ARTICLE: doba_lib::renderArticle(fb); break;
+        case SETUP:   renderSetup(s, fb); break;
+        case SETUP_NAME:
+            renderField("CALLSIGN  (how the mesh sees you)", "Short name: first four letters", g_nameKbd, "SAVE", fb);
+            break;
+        case POINTS:  renderPoints(s, fb); break;
+        case POINT:   renderPoint(s, fb); break;
+        case POINT_NEW: renderPointNew(s, fb); break;
     }
 }
 
+const char* title(Page p) {
+    switch (p) {
+        case HOME: return nullptr;
+        case COMMS: return "COMMS";
+        case COMPOSE: return "WRITE";
+        case LIBRARY: case ARTICLE: return "LIBRARY";
+        case SETUP: case SETUP_NAME: return "SETTINGS";
+        case POINTS: return "POSITION";
+        case POINT: return "POINT";
+        case POINT_NEW: return "NEW POINT";
+    }
+    return nullptr;
+}
+
 Go tap(Page p, int x, int y, const RideState& s) {
-    (void)s;
     switch (p) {
         case HOME:    return tapHome(x, y);
         case COMMS:   return tapComms(x, y);
         case COMPOSE: return tapCompose(x, y);
         case LIBRARY: return doba_lib::tapSearch(g_search, x, y) ? TO_ARTICLE : STAY;
         case ARTICLE: doba_lib::tapArticle(x, y); return STAY;
+        case SETUP:   return tapSetup(x, y);
+        case SETUP_NAME: return tapSetupName(x, y);
+        case POINTS:  return tapPoints(x, y, s);
+        case POINT:   return tapPoint(x, y);
+        case POINT_NEW: return tapPointNew(x, y);
     }
     return STAY;
 }
@@ -308,6 +763,11 @@ Go back(Page p) {
         case COMPOSE: return TO_COMMS;
         case LIBRARY: return TO_HOME;
         case ARTICLE: return TO_LIBRARY;
+        case SETUP:   return TO_HOME;
+        case SETUP_NAME: return TO_SETUP;
+        case POINTS:  return TO_HOME;
+        case POINT:   return TO_POINTS;
+        case POINT_NEW: return TO_POINTS;
     }
     return TO_HOME;
 }

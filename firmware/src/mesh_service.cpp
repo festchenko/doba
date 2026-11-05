@@ -1123,7 +1123,7 @@ bool begin() {
     if (!myLongName[0]) {
         // Default identity: something a neighbour can read, ending in the node
         // id so two of these on the same ride are distinguishable.
-        snprintf(myLongName, sizeof(myLongName), "OpenTrail %04x",
+        snprintf(myLongName, sizeof(myLongName), "Doba %04x",   // DOBA (OTP: "OpenTrail")
                  (unsigned)(myNodeNum & 0xFFFF));
     }
     if (!myShortName[0])

@@ -9,3 +9,12 @@ int drawBase(const MapScreenData&, uint8_t*) { return 0; }
 void reset() {}
 Stats stats() { return {0, 0, 0, 0}; }
 }
+
+// DOBA: no waypoints in the preview.
+#include "doba_points.h"
+namespace doba_points {
+int count() { return 0; }
+const Point* at(int) { return nullptr; }
+int target() { return -1; }
+void formatDistance(double, char* out, size_t n) { if (n) out[0] = 0; }
+}

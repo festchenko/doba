@@ -937,6 +937,7 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
     }
     if (map.topo) milspec::drawGrid(map, fb);   // DOBA: km grid under route + rider
     renderMapTop(map, fb);
+    milspec::drawTarget(map, s, fb);   // DOBA: the active waypoint
     drawScaleBar(map.metersPerPixel, s.useMiles, fb);
     // The turn banner occupies the top of the map, exactly where the compass
     // lives (compass spans y 78..146; the banner runs to y 202), so the north

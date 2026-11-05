@@ -94,7 +94,7 @@
 
 // Rider settings
 #define FTP_WATTS           250     // for the power zone bar (Coggan zones)
-#define TIMEZONE_OFFSET_MINUTES (-420)  // clock display; PDT = UTC-7
+#define TIMEZONE_OFFSET_MINUTES (60)    // DOBA: CET (OTP: -420, PDT); no DST — set it in SETTINGS
 
 // Map view: fallback center when there is no GPS fix (indoor testing).
 // Alamo Square, San Francisco.
