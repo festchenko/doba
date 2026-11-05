@@ -23,6 +23,7 @@ import sys
 import zipfile
 import zlib
 
+import dobapic
 from dobafold import KEY_BYTES, fold
 from zim2doba import HDR, LINK_A, LINK_B, LINK_C, REC, to_text, utf8_cut
 
@@ -33,34 +34,14 @@ ALIASES = []                     # (article title, [other titles]) gathered by t
 IMAGES = []                      # (name, .dgi bytes): pictures for <out>/img/
 IMAGE_NAMES = {}                 # .dgi bytes -> name (the same picture is stored once)
 WITH_IMAGES = True               # --no-images turns them off
-IMG_W, IMG_MAX_H = 484, 640      # device column width, tallest picture on a page
+IMG_W, IMG_MAX_H = dobapic.IMG_W, dobapic.IMG_MAX_H
 
 
 # --- pictures --------------------------------------------------------------------
 
 def to_dgi(img):
-    """A PIL greyscale image -> 'name w h' of a stored .dgi: 4 e-ink greys,
-    Floyd-Steinberg dithered, packed two pixels a byte, zlib."""
-    from PIL import Image, ImageOps
-    img = img.convert("L")
-    w, h = img.size
-    k = min(1.0, IMG_W / w, IMG_MAX_H / h)
-    if k < 1.0:
-        img = img.resize((max(1, int(w * k)), max(1, int(h * k))), Image.LANCZOS)
-    img = ImageOps.autocontrast(img, cutoff=0.5)
-    pal = Image.new("P", (1, 1))
-    pal.putpalette([0, 0, 0, 85, 85, 85, 170, 170, 170, 255, 255, 255] + [255] * (252 * 3))
-    q = img.convert("RGB").quantize(palette=pal, dither=Image.Dither.FLOYDSTEINBERG)
-    w, h = q.size
-    data = q.tobytes()
-    grey = bytes([0, 5, 10, 15]) + bytes(252)
-    rows = []
-    for r in range(h):
-        row = data[r * w:(r + 1) * w].translate(grey)
-        if w & 1:
-            row += b"\x0f"
-        rows.append(bytes((a << 4) | b for a, b in zip(row[0::2], row[1::2])))
-    blob = b"DGI1" + struct.pack("<HH", w, h) + zlib.compress(b"".join(rows), 9)
+    """A PIL image -> 'name w h' of a picture stored once for this book."""
+    blob, w, h = dobapic.encode(img)
     name = IMAGE_NAMES.get(blob)
     if not name:
         name = f"{len(IMAGES):05d}"
@@ -507,9 +488,28 @@ def heading_marks(pages, body):
     return []
 
 
+def unreadable(text):
+    """True for a text layer in a broken font encoding ("serviÖe2memÿer"):
+    most words are not runs of letters of one script."""
+    words = [w.strip(".,;:()[]\"'!?—–-") for w in text.split()]
+    words = [w for w in words if len(w) >= 3]
+    if len(words) < 200:
+        return False
+    def ok(w):
+        return w.isalpha() and (all(ord(c) < 0x250 for c in w) or all(0x400 <= ord(c) < 0x530 for c in w)) \
+            and not re.search(r"[àâäéèêëîïôöùûüÿçÖÿ]", w[1:-1] if len(w) > 3 else "")
+    good = sum(1 for w in words if ok(w))
+    return good < len(words) * 0.6
+
+
 def read_pdf(path, title):
     import pymupdf
     doc = pymupdf.open(path)
+    sample = " ".join(doc[i].get_text() for i in range(min(len(doc), 40)))
+    if unreadable(sample):
+        print(f"!! {os.path.basename(path)}: its text layer is in a broken encoding; skipped "
+              "(find another copy, or OCR it)", file=sys.stderr)
+        return []
     meta_title = clean((doc.metadata or {}).get("title") or "")
     if TITLES_FROM_FILENAMES:
         meta_title = ""

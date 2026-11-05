@@ -64,7 +64,7 @@ section shelter | SHELTER | shelter | gov,disaster,manuals,mine,wiki_en
   - Snow cave             | shelter in deep snow                  | wiki_en:Snow cave ; wiki_en:Quinzhee
   - Tarp tent             | pitching a sheet                      | wiki_en:Tarp tent
   - Space blanket         | uses of the foil sheet                | wiki_en:Space blanket
-  - Field hygiene         | latrines, washing, staying well       | gov:FM 21-10* ; wiki_en:Sanitation
+  - Field hygiene         | latrines, washing, staying well       | gov:TC 4-02.3* ; gov:FM 21-10* ; wiki_en:Sanitation
   - Pit latrine           | dig it right, far from water          | wiki_en:Pit latrine
   - Emergency kit         | what to keep ready                    | gov:Build a Kit* ; wiki_en:Bug-out bag ; wiki_en:Survival kit
 

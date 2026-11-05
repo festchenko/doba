@@ -19,6 +19,30 @@ class Page(Item):
     def get_hints(self): return {Hint.FRONT_ARTICLE: True}
 
 
+class Picture(Item):
+    def __init__(self, path, data):
+        super().__init__()
+        self._p, self._d = path, data
+
+    def get_path(self): return self._p
+    def get_title(self): return ""
+    def get_mimetype(self): return "image/png"
+    def get_contentprovider(self): return StringProvider(self._d)
+    def get_hints(self): return {Hint.FRONT_ARTICLE: False}
+
+
+def bowline_png():
+    import io
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (300, 200), "white")
+    d = ImageDraw.Draw(img)
+    d.ellipse((60, 30, 240, 170), outline="black", width=8)
+    d.line((20, 100, 280, 100), fill="black", width=8)
+    b = io.BytesIO()
+    img.save(b, "PNG")
+    return b.getvalue()
+
+
 LONG = " ".join(["Water must be made safe before drinking: boil it for at least one minute,"
                  " or filter and disinfect it."] * 12)
 PAGES = [
@@ -38,7 +62,9 @@ severe bleeding from a limb.</p><h2>Use</h2><p>Apply 5–7 cm above the wound.</
 <ul><li>Шалаш</li><li>Звёздный</li><li>Нодья — горит всю ночь.</li></ul>
 <h2>Примечания</h2><p>НЕ ДОЛЖНО ПОЯВИТЬСЯ</p></body></html>"""),
     ("Knots", "Knots", """<html><body><p>A knot is a method of fastening cordage; the bowline makes a fixed loop
-that will not slip under load and is easy to untie afterwards.</p></body></html>"""),
+that will not slip under load and is easy to untie afterwards.</p>
+<figure><img src="_assets_/bowline.png" width="300" height="200"><figcaption>The bowline, tied.</figcaption></figure>
+<p>An icon <img src="_assets_/bowline.png" width="16" height="16"> stays out.</p></body></html>"""),
 ]
 
 if __name__ == "__main__":
@@ -49,6 +75,10 @@ if __name__ == "__main__":
         c.set_mainpath("Water_purification")
         for p in PAGES:
             c.add_item(Page(*p))
+        try:
+            c.add_item(Picture("_assets_/bowline.png", bowline_png()))
+        except ImportError:
+            pass
         c.add_redirection("Kyiv", "Kyiv", "Київ", {Hint.FRONT_ARTICLE: True})
         c.add_redirection("Boiling_water", "Boiling water", "Water_purification", {})
         c.add_metadata("Title", "Doba test book")

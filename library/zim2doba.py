@@ -26,6 +26,7 @@ try:
 except ImportError:          # docs2doba imports the HTML cleaner without libzim
     Archive = None
 
+import dobapic
 from dobafold import KEY_BYTES, fold
 
 REC = struct.Struct("<56s56sHHIII")      # 128 bytes
@@ -72,9 +73,19 @@ def link_target(href):
     return t[:120]
 
 
+PIC_SKIP_TAGS = SKIP_TAGS - {"figure"}
+PIC_SKIP_CLASSES = tuple(c for c in SKIP_CLASSES if c != "thumb")
+CAPTIONS = ("figcaption", "thumbcaption")
+MAX_PICS = 16                    # per article
+
+
 class Cleaner(HTMLParser):
-    def __init__(self):
+    def __init__(self, picture=None):
         super().__init__(convert_charrefs=True)
+        self.picture = picture   # (src, attrs) -> "name w h" or None
+        self.pics = 0
+        self.skip_tags = PIC_SKIP_TAGS if picture else SKIP_TAGS
+        self.skip_classes = PIC_SKIP_CLASSES if picture else SKIP_CLASSES
         self.lines = []          # (kind, text)
         self.stack = []          # open tags: (tag, skipping)
         self.skip = 0
@@ -100,18 +111,33 @@ class Cleaner(HTMLParser):
         if tag in VOID:
             if tag == "br" and self.kind and not self.skip:
                 self.buf.append(" ")
+            if tag == "img" and self.picture and not self.skip and not self.skip_section \
+                    and self.pics < MAX_PICS:
+                a = dict(attrs)
+                try:
+                    small = int(a.get("width") or 999) < 60 or int(a.get("height") or 999) < 60
+                except ValueError:
+                    small = False
+                ref = None if small else self.picture(a.get("src") or "", a)
+                if ref:
+                    kind = self.kind
+                    self._flush()
+                    self.lines.append(("I", ref))
+                    self.pics += 1
+                    self.kind = kind
             return
         cls = dict(attrs).get("class") or ""
-        skipping = tag in SKIP_TAGS or any(c in cls for c in SKIP_CLASSES)
-        self.stack.append((tag, skipping))
+        skipping = tag in self.skip_tags or any(c in cls for c in self.skip_classes)
+        self.stack.append((tag, skipping, False))
         if skipping:
             self.skip += 1
             return
         if self.skip:
             return
-        if tag in BLOCKS:
+        if tag in BLOCKS or (self.picture and (tag == "figcaption" or "thumbcaption" in cls)):
             self._flush()
-            self.kind = BLOCKS[tag]
+            self.kind = BLOCKS.get(tag, "P")
+            self.stack[-1] = (tag, False, True)   # a block opened here: closes with it
         if tag == "a":
             t = link_target(dict(attrs).get("href"))
             # Not nested, and only inside a block that's being kept.
@@ -125,17 +151,19 @@ class Cleaner(HTMLParser):
         if tag in VOID:
             return
         # Pop to the matching tag (HTML in the wild is not always balanced).
+        block = False
         while self.stack:
-            t, skipping = self.stack.pop()
+            t, skipping, opened = self.stack.pop()
             if skipping:
                 self.skip -= 1
             if t == tag:
+                block = opened
                 break
         if tag == "a" and self.links:
             t = self.links.pop()
             if t and self.kind:
                 self.buf.append(LINK_B + t + LINK_C)
-        if not self.skip and tag in BLOCKS:
+        if not self.skip and (tag in BLOCKS or block):
             self._flush()
 
     def handle_data(self, data):
@@ -173,8 +201,8 @@ def tidy_links(text):
     return " ".join(s.split())
 
 
-def to_text(title, html):
-    c = Cleaner()
+def to_text(title, html, picture=None):
+    c = Cleaner(picture)
     try:
         c.feed(html)
         c.close()
@@ -194,11 +222,63 @@ def utf8_cut(s, n):
 # --- workers -------------------------------------------------------------------
 
 _ARCHIVE = None
+_OUT = None          # book folder for pictures, or None: text only
+_PICS = {}           # zim path -> "name w h" | None, this worker's memory
 
 
-def _init(path):
-    global _ARCHIVE
+def _init(path, out=None):
+    global _ARCHIVE, _OUT
     _ARCHIVE = Archive(path)
+    _OUT = out
+
+
+def _picture_for(article_path):
+    """A resolver for <img src> in one article: the picture from the ZIM,
+    stored once as a .dgi named after its path."""
+    import posixpath
+    from urllib.parse import unquote
+
+    def resolve(src, attrs):
+        if not src or src.startswith(("data:", "http:", "https:", "//")):
+            return None
+        p = posixpath.normpath(posixpath.join(posixpath.dirname(article_path), unquote(src.split("?")[0])))
+        p = p.lstrip("/")
+        while p.startswith("../"):
+            p = p[3:]
+        if p.lower().endswith(".svg"):
+            return None
+        if p in _PICS:
+            return _PICS[p]
+        ref = None
+        for cand in (p, p[2:] if p.startswith(("I/", "-/")) else "I/" + p):
+            try:
+                item = _ARCHIVE.get_entry_by_path(cand).get_item()
+            except Exception:
+                continue
+            if not item.mimetype.startswith("image/") or "svg" in item.mimetype:
+                break
+            name = dobapic.hashed_name(cand)
+            dest = dobapic.path_for(_OUT, name)
+            try:
+                if os.path.exists(dest):
+                    with open(dest, "rb") as f:
+                        w, h = struct.unpack("<HH", f.read(8)[4:8])
+                else:
+                    import io
+                    from PIL import Image
+                    img = Image.open(io.BytesIO(bytes(item.content)))
+                    img.load()
+                    if img.width < 60 or img.height < 60:
+                        break
+                    blob, w, h = dobapic.encode(img)
+                    dobapic.save(_OUT, name, blob)
+                ref = f"{name} {w} {h}"
+            except Exception:
+                ref = None
+            break
+        _PICS[p] = ref
+        return ref
+    return resolve
 
 
 def _work(idx):
@@ -223,7 +303,7 @@ def _work(idx):
         return None
     html = bytes(item.content).decode("utf-8", "replace")
     title = e.title or path.rsplit("/", 1)[-1].replace("_", " ")
-    text = to_text(title, html)
+    text = to_text(title, html, _picture_for(path) if _OUT else None)
     if len(text) < len(title) + 40:     # empty stubs, disambiguation shells
         return None
     return ("A", path, title, zlib.compress(text.encode("utf-8"), 9))
@@ -240,6 +320,7 @@ def main():
     ap.add_argument("--chunk-mb", type=int, default=512)
     ap.add_argument("--jobs", type=int, default=os.cpu_count())
     ap.add_argument("--limit", type=int, default=0, help="first N entries only (testing)")
+    ap.add_argument("--no-images", action="store_true", help="text only (pictures in the ZIM are skipped)")
     a = ap.parse_args()
 
     arc = Archive(a.zim)
@@ -268,7 +349,14 @@ def main():
     redirects = []    # (title, target path)
     t0 = time.time()
     done = arts = 0
-    with mp.Pool(a.jobs, initializer=_init, initargs=(a.zim,)) as pool:
+    pics = None if a.no_images else a.out
+    if pics:
+        try:
+            import PIL  # noqa: F401
+        except ImportError:
+            print("  (no Pillow: pictures skipped — pip install pillow)")
+            pics = None
+    with mp.Pool(a.jobs, initializer=_init, initargs=(a.zim, pics)) as pool:
         for r in pool.imap(_work, range(total), chunksize=64):
             done += 1
             if r is None:

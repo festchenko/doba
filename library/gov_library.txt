@@ -41,7 +41,7 @@ weather|OSHA|Lightning Safety When Working Outdoors|https://www.osha.gov/sites/d
 weather|FEMA|Extreme Heat|https://www.ready.gov/heat
 weather|FEMA|Winter Weather|https://www.ready.gov/winter-weather
 shelter|CDC|Personal Hygiene During an Emergency|https://www.cdc.gov/hygiene/about/personal-hygiene-during-an-emergency.html
-shelter|US Army|FM 21-10 Field Hygiene and Sanitation|https://www.globalsecurity.org/military/library/policy/army/fm/21-10/fm21-10.pdf
+shelter|US Army|TC 4-02.3 Field Hygiene and Sanitation|https://irp.fas.org/doddir/army/tc4-02-3.pdf https://armypubs.army.mil/epubs/DR_pubs/DR_a/pdf/web/tc4_02x3.pdf
 shelter|FEMA|Build a Kit|https://www.ready.gov/kit
 shelter|FEMA|Safeguard Critical Documents and Valuables|https://www.fema.gov/sites/default/files/2020-07/fema_safeguard-critical-documents_brochure.pdf
 # Beyond their list: the survival manuals themselves.

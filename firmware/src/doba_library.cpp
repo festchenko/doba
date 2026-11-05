@@ -317,7 +317,10 @@ int heightOf(const Line& l) {
 // 4-bit greys (0 black .. 15 white), two pixels a byte, rows padded to bytes.
 void drawImage(const char* name, int y, int maxH, uint8_t* fb) {
     char path[128];
-    snprintf(path, sizeof path, "%s/%s/img/%s.dgi", kRoot, g_books[g_book].dir, name);
+    if (strlen(name) >= 8)   // big books shard their pictures: img/ab/abcdef0123.dgi
+        snprintf(path, sizeof path, "%s/%s/img/%.2s/%s.dgi", kRoot, g_books[g_book].dir, name, name);
+    else
+        snprintf(path, sizeof path, "%s/%s/img/%s.dgi", kRoot, g_books[g_book].dir, name);
     sdLock();
     File f = SD.open(path, FILE_READ);
     const size_t zlen = f ? f.size() : 0;

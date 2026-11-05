@@ -272,3 +272,21 @@ def test_a_figure_in_a_manual_is_shown_as_a_picture_in_its_article(doba, tmp_pat
     doba.tap(96, TOP + 92 + 28 + 54)
     doba.wait_log(r"\[lib\] open 'Knots \(US Army\)'", since=since)
     doba.wait_log(r"\[lib\] picture \d+ \d+x\d+", since=since)
+
+
+def test_a_picture_in_a_zim_article_reaches_the_screen_from_its_shard(doba, book):
+    """zim2doba stores ZIM pictures as img/<2 chars>/<name>.dgi; icons stay out."""
+    lib = os.path.join(doba.sd, "doba", "lib")
+    shutil.copytree(book, os.path.join(lib, "field"))
+    pics = [f for _, _, fs in os.walk(os.path.join(lib, "field", "img")) for f in fs]
+    if not pics:
+        pytest.skip("no Pillow for the converter")
+    assert len(pics) == 1
+    with open(os.path.join(lib, "sections.txt"), "w") as f:
+        f.write("X|KNOTS|knots|field|Knots\nS|k|KNOTS|knots|field\n")
+    boot(doba)
+    doba.console("screen library", 800)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(96, TOP + 92 + 28 + 54)
+    doba.wait_log(r"\[lib\] picture [0-9a-f]{10} 300x200", since=since)
