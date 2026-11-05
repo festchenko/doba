@@ -3,18 +3,18 @@
 # Book ids: med_en (WikiMed), medicine, disaster, water, food, knots (zimgit),
 # gov (US Gov field library), manuals, mine (personal), wiki_en, wiki_uk, wiki_ru.
 
-emergency BLEEDING     | bleed  | med_en:Bleeding ; wiki_en:Bleeding ; wiki_en:Tourniquet
-emergency NOT BREATHING| breath | med_en:Cardiopulmonary resuscitation ; wiki_en:Cardiopulmonary resuscitation
-emergency FREEZING     | cold   | med_en:Hypothermia ; wiki_en:Hypothermia
+emergency BLEEDING     | bleed  | med_en:Bleeding ; gov:ATP 4-02.11 — Chapter 4* ; wiki_en:Bleeding ; wiki_en:Tourniquet
+emergency NOT BREATHING| breath | med_en:Cardiopulmonary resuscitation ; wiki_en:Cardiopulmonary resuscitation ; gov:ATP 4-02.11 — Chapter 5*
+emergency FREEZING     | cold   | med_en:Hypothermia ; gov:ATP 4-02.11 — Chapter 8* ; wiki_en:Hypothermia
 
 section firstaid | FIRST AID | firstaid | med_en,medicine,gov,manuals,mine,wiki_en
-  * Stop the bleeding     | pressure, packing, tourniquet         | med_en:Bleeding ; wiki_en:Bleeding
+  * Stop the bleeding     | pressure, packing, tourniquet         | gov:ATP 4-02.11 — Chapter 4* ; med_en:Bleeding ; wiki_en:Bleeding
   * CPR                   | 30 pushes, 2 breaths, don't stop      | med_en:Cardiopulmonary resuscitation ; wiki_en:Cardiopulmonary resuscitation
   - Recovery position     | unconscious but breathing             | med_en:Recovery position ; wiki_en:Recovery position
   - Choking               | back blows, abdominal thrusts         | med_en:Choking ; wiki_en:Choking
   - Shock                 | pale, fast pulse: lay flat, keep warm | med_en:Shock (circulatory) ; wiki_en:Shock (circulatory)
-  - Burns                 | cool 20 min, cover, no ointment       | med_en:Burn ; wiki_en:Burn
-  - Broken bones          | splint above and below                | med_en:Bone fracture ; wiki_en:Bone fracture
+  - Burns                 | cool 20 min, cover, no ointment       | med_en:Burn ; gov:ATP 4-02.11 — Chapter 12* ; wiki_en:Burn
+  - Broken bones          | splint above and below                | gov:ATP 4-02.11 — Chapter 13* ; med_en:Bone fracture ; wiki_en:Bone fracture
   - Splint                | improvise from sticks and cloth       | wiki_en:Splint (medicine) ; med_en:Splint (medicine)
   - Tourniquet            | high and tight, note the time         | med_en:Tourniquet ; wiki_en:Tourniquet
   - Wound care            | clean, close, watch for infection     | med_en:Wound ; wiki_en:Wound
@@ -23,12 +23,13 @@ section firstaid | FIRST AID | firstaid | med_en,medicine,gov,manuals,mine,wiki_
   - Hypothermia           | cold, shivering, confused             | med_en:Hypothermia ; wiki_en:Hypothermia
   - Heat stroke           | hot, dry, confused: cool now          | med_en:Heat stroke ; wiki_en:Heat stroke
   - Frostbite             | rewarm only if it stays warm          | med_en:Frostbite ; wiki_en:Frostbite
-  - Snakebite             | still, splint, no cutting             | med_en:Snakebite ; wiki_en:Snakebite
+  - Bites and stings      | snakes, spiders, ticks                | gov:ATP 4-02.11 — Chapter 16* ; med_en:Snakebite ; wiki_en:Snakebite
   - Anaphylaxis           | swelling, wheeze: adrenaline          | med_en:Anaphylaxis ; wiki_en:Anaphylaxis
   - Dehydration           | signs and oral rehydration            | med_en:Dehydration ; wiki_en:Dehydration
   - Oral rehydration      | salt and sugar in clean water         | med_en:Oral rehydration therapy ; wiki_en:Oral rehydration therapy
   - Drowning              | rescue breaths first                  | med_en:Drowning ; wiki_en:Drowning
-  - Field first aid manual| the whole army manual                 | gov:FM 4-25.11 First Aid* ; manuals:First aid*
+  - Army first aid manual | casualty care, step by step           | gov:ATP 4-02.11 Casualty* ; gov:FM 4-25.11 First Aid* ; manuals:First aid*
+  - Heat and cold injuries| heat stroke to frostbite              | gov:ATP 4-02.11 — Chapter 17* ; med_en:Heat illness
 
 section water | WATER | water | water,gov,med_en,disaster,manuals,mine,wiki_en
   * Make water safe       | boil, filter, disinfect               | gov:Making Water Safe* ; water:Water purification ; wiki_en:Portable water purification
