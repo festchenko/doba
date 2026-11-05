@@ -30,7 +30,9 @@ bool tapSearch(kbd::Keyboard& k, int x, int y);   // true: an article was opened
 void renderArticle(uint8_t* fb);
 void tapArticle(int x, int y);       // a link opens its article; else pages
 bool articleBack();                  // back along followed links; false at the first
-void leaveArticle();                 // forget the link history
+void leaveArticle();
+bool libraryBack();                  // section/search view -> library home; false at home
+const char* libraryTitle();          // status-bar title for the current library view                 // forget the link history
 
 // Title folding, identical to library/zim2doba.py fold(): lower case, accents
 // and ё dropped, punctuation to single spaces. out gets at most cap-1 bytes.

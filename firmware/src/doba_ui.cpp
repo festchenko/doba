@@ -1098,8 +1098,7 @@ void render(Page p, const RideState& s, uint8_t* fb) {
         case COMMS:   renderComms(s, fb); topo_bg::draw({0, TOP, W, H - TOP}, fb, 1); break;
         case COMPOSE: renderCompose(s, fb); break;
         case LIBRARY:
-            doba_lib::renderSearch(g_search, fb);
-            topo_bg::draw({0, TOP + 146, W, g_search.top - TOP - 146}, fb, 2);   // not in the boxes or keys
+            doba_lib::renderSearch(g_search, fb);   // icon grid: no contours behind it
             break;
         case ARTICLE: doba_lib::renderArticle(fb); break;
         case SETUP:   renderSetup(s, fb); break;
@@ -1135,7 +1134,8 @@ const char* title(Page p) {
         case HOME: return nullptr;
         case COMMS: return "COMMS";
         case COMPOSE: return "WRITE";
-        case LIBRARY: case ARTICLE: return "LIBRARY";
+        case LIBRARY: return doba_lib::libraryTitle();
+        case ARTICLE: return "LIBRARY";
         case SETUP: case SETUP_NAME: return "SETTINGS";
         case POINTS: return "POSITION";
         case POINT: return "POINT";
@@ -1171,7 +1171,7 @@ Go back(Page p) {
         case HOME:    return TO_MAP;
         case COMMS:   return TO_HOME;
         case COMPOSE: return TO_COMMS;
-        case LIBRARY: return TO_HOME;
+        case LIBRARY: return doba_lib::libraryBack() ? STAY : TO_HOME;
         case ARTICLE:
             if (doba_lib::articleBack()) return STAY;   // back along a followed link
             return TO_LIBRARY;

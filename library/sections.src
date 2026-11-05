@@ -1,0 +1,161 @@
+# Doba library sections. library/sections.py resolves each guide against the
+# books on the card and keeps the first candidate it finds.
+# Book ids: med_en (WikiMed), medicine, disaster, water, food, knots (zimgit),
+# gov (US Gov field library), manuals, mine (personal), wiki_en, wiki_uk, wiki_ru.
+
+emergency BLEEDING     | bleed  | med_en:Bleeding ; wiki_en:Bleeding ; wiki_en:Tourniquet
+emergency NOT BREATHING| breath | med_en:Cardiopulmonary resuscitation ; wiki_en:Cardiopulmonary resuscitation
+emergency FREEZING     | cold   | med_en:Hypothermia ; wiki_en:Hypothermia
+
+section firstaid | FIRST AID | firstaid | med_en,medicine,gov,manuals,mine,wiki_en
+  * Stop the bleeding     | pressure, packing, tourniquet         | med_en:Bleeding ; wiki_en:Bleeding
+  * CPR                   | 30 pushes, 2 breaths, don't stop      | med_en:Cardiopulmonary resuscitation ; wiki_en:Cardiopulmonary resuscitation
+  - Recovery position     | unconscious but breathing             | med_en:Recovery position ; wiki_en:Recovery position
+  - Choking               | back blows, abdominal thrusts         | med_en:Choking ; wiki_en:Choking
+  - Shock                 | pale, fast pulse: lay flat, keep warm | med_en:Shock (circulatory) ; wiki_en:Shock (circulatory)
+  - Burns                 | cool 20 min, cover, no ointment       | med_en:Burn ; wiki_en:Burn
+  - Broken bones          | splint above and below                | med_en:Bone fracture ; wiki_en:Bone fracture
+  - Splint                | improvise from sticks and cloth       | wiki_en:Splint (medicine) ; med_en:Splint (medicine)
+  - Tourniquet            | high and tight, note the time         | med_en:Tourniquet ; wiki_en:Tourniquet
+  - Wound care            | clean, close, watch for infection     | med_en:Wound ; wiki_en:Wound
+  - Sprain                | rest, ice, compress, raise            | med_en:Sprain ; wiki_en:Sprain
+  - Head injury           | warning signs after a blow            | med_en:Head injury ; wiki_en:Head injury
+  - Hypothermia           | cold, shivering, confused             | med_en:Hypothermia ; wiki_en:Hypothermia
+  - Heat stroke           | hot, dry, confused: cool now          | med_en:Heat stroke ; wiki_en:Heat stroke
+  - Frostbite             | rewarm only if it stays warm          | med_en:Frostbite ; wiki_en:Frostbite
+  - Snakebite             | still, splint, no cutting             | med_en:Snakebite ; wiki_en:Snakebite
+  - Anaphylaxis           | swelling, wheeze: adrenaline          | med_en:Anaphylaxis ; wiki_en:Anaphylaxis
+  - Dehydration           | signs and oral rehydration            | med_en:Dehydration ; wiki_en:Dehydration
+  - Oral rehydration      | salt and sugar in clean water         | med_en:Oral rehydration therapy ; wiki_en:Oral rehydration therapy
+  - Drowning              | rescue breaths first                  | med_en:Drowning ; wiki_en:Drowning
+  - Field first aid manual| the whole army manual                 | gov:FM 4-25.11 First Aid* ; manuals:First aid*
+
+section water | WATER | water | water,gov,med_en,disaster,manuals,mine,wiki_en
+  * Make water safe       | boil, filter, disinfect               | gov:Making Water Safe* ; water:Water purification ; wiki_en:Portable water purification
+  * Boiling               | a rolling boil for one minute         | wiki_en:Boiling ; water:Boiling*
+  - Water purification    | all the methods compared              | wiki_en:Water purification ; water:Water purification
+  - Solar disinfection    | clear bottles, six hours of sun       | wiki_en:Solar water disinfection
+  - Chlorine              | drops per litre, wait 30 min          | wiki_en:Water chlorination
+  - Water filter          | improvised sand and charcoal          | wiki_en:Water filter ; wiki_en:Slow sand filter
+  - Solar still           | water from the ground                 | wiki_en:Solar still
+  - Rainwater             | catching and storing                  | wiki_en:Rainwater harvesting
+  - Storing water         | how much, how long                    | gov:Creating and Storing* ; wiki_en:Water storage
+  - Waterborne disease    | what dirty water carries              | med_en:Waterborne diseases ; wiki_en:Waterborne diseases
+  - Cold water            | the first minute in cold water        | gov:Cold Water Hazards* ; wiki_en:Cold shock response
+  - Rip currents          | swim parallel to shore                | gov:Rip Currents* ; wiki_en:Rip current
+
+section fire | FIRE | fire | gov,manuals,mine,wiki_en
+  * Lighting a fire       | tinder, kindling, fuel                | wiki_en:Fire making ; wiki_en:Campfire
+  - Campfire              | where and how to lay one              | wiki_en:Campfire
+  - Tinder                | what catches a spark                  | wiki_en:Tinder
+  - Ferrocerium           | the fire steel                        | wiki_en:Ferrocerium
+  - Bow drill             | fire by friction                      | wiki_en:Bow drill ; wiki_en:Fire drill
+  - Fire piston           | fire from compressed air              | wiki_en:Fire piston
+  - Dakota fire hole      | small, hidden, wind-proof             | wiki_en:Dakota fire hole
+  - Charcoal              | making and using it                   | wiki_en:Charcoal
+  - Carbon monoxide       | the silent danger indoors             | gov:Carbon Monoxide* ; med_en:Carbon monoxide poisoning ; wiki_en:Carbon monoxide poisoning
+
+section shelter | SHELTER | shelter | gov,disaster,manuals,mine,wiki_en
+  * Survival manual       | the army field manual                 | gov:ATP 3-50.21* ; gov:FM 21-76* ; manuals:Survival*
+  - Bivouac shelter       | quick shelter for one night           | wiki_en:Bivouac shelter
+  - Lean-to               | the simplest frame                    | wiki_en:Lean-to
+  - Debris hut            | warm with no gear                     | wiki_en:Debris hut
+  - Snow cave             | shelter in deep snow                  | wiki_en:Snow cave ; wiki_en:Quinzhee
+  - Tarp tent             | pitching a sheet                      | wiki_en:Tarp tent
+  - Space blanket         | uses of the foil sheet                | wiki_en:Space blanket
+  - Field hygiene         | latrines, washing, staying well       | gov:FM 21-10* ; wiki_en:Sanitation
+  - Pit latrine           | dig it right, far from water          | wiki_en:Pit latrine
+  - Emergency kit         | what to keep ready                    | gov:Build a Kit* ; wiki_en:Bug-out bag ; wiki_en:Survival kit
+
+section food | FOOD | food | food,gov,manuals,mine,wiki_en
+  * Edibility test        | when you don't know a plant           | wiki_en:Universal Edibility Test ; wiki_en:Edible plants*
+  - Foraging              | what to look for                      | wiki_en:Foraging
+  - Wild edible plants    | common and safe                       | wiki_en:List of edible plants* ; wiki_en:Wild edible plants*
+  - Poisonous plants      | what never to eat                     | wiki_en:List of poisonous plants
+  - Mushroom poisoning    | why not to guess                      | med_en:Mushroom poisoning ; wiki_en:Mushroom poisoning
+  - Snares and traps      | catching small game                   | wiki_en:Snare ; wiki_en:Animal trapping
+  - Fishing               | hooks, lines, nets                    | wiki_en:Fishing techniques ; wiki_en:Fishing
+  - Insects as food       | protein that's everywhere             | wiki_en:Entomophagy
+  - Food after power cuts | what to keep, what to throw           | gov:Eat Safe Food* ; gov:Keep Food Safe*
+  - Drying food           | preserve without a fridge             | wiki_en:Food drying
+  - Smoking food          | cold and hot smoking                  | wiki_en:Smoking (cooking)
+  - Home canning          | the USDA guide                        | gov:Complete Guide to Home Canning* ; wiki_en:Home canning
+  - Botulism              | the canning danger                    | med_en:Botulism ; wiki_en:Botulism
+
+section nav | NAVIGATION | nav | gov,manuals,mine,wiki_en
+  * Map reading           | the army land navigation manual       | gov:FM 3-25.26* ; gov:TC 3-25.26* ; wiki_en:Map reading*
+  - Compass               | taking and following a bearing        | wiki_en:Compass
+  - Orienteering          | map and compass together              | wiki_en:Orienteering
+  - Military grid (MGRS)  | the grid Doba shows                   | wiki_en:Military Grid Reference System
+  - Milliradian           | angles in mils                        | wiki_en:Milliradian
+  - Dead reckoning        | where you are by pace and time        | wiki_en:Dead reckoning
+  - Pace count            | measuring distance on foot            | wiki_en:Pace count beads
+  - Celestial navigation  | finding north by the stars            | wiki_en:Celestial navigation
+  - Polaris               | the north star                        | wiki_en:Polaris
+  - Contour lines         | reading the shape of the ground       | wiki_en:Contour line
+  - Mountaineering        | the army mountain manual              | gov:FM 3-97.61* ; gov:TC 3-97.61* ; wiki_en:Mountaineering
+
+section hazards | HAZARDS | hazard | gov,disaster,med_en,manuals,mine,wiki_en
+  * Floods                | what to do before and during          | gov:Flood Safety* ; gov:Floods* ; wiki_en:Flood
+  - Earthquake            | drop, cover, hold on                  | gov:Earthquakes* ; wiki_en:Earthquake preparedness
+  - Wildfire              | leave early                           | gov:Wildfires* ; wiki_en:Wildfire
+  - Nuclear explosion     | get in, stay in, stay tuned           | gov:Nuclear Explosion* ; wiki_en:Nuclear explosion*
+  - Radiation             | shielding, distance, time             | gov:Radiation* ; med_en:Acute radiation syndrome ; wiki_en:Acute radiation syndrome
+  - Potassium iodide      | when it helps and when not            | med_en:Potassium iodide ; wiki_en:Potassium iodide
+  - Chemical spill        | upwind, uphill, indoors               | gov:What to Do in a Chemical* ; gov:Chemicals* ; wiki_en:Chemical accident
+  - Landmines             | if you find one, don't move           | wiki_en:Land mine ; wiki_en:Unexploded ordnance
+  - Unexploded ordnance   | mark, back off, report                | wiki_en:Unexploded ordnance
+  - Tsunami               | strong quake at the coast: go high    | gov:Tsunamis* ; wiki_en:Tsunami
+  - Mold                  | cleaning up after water               | gov:Mold* ; wiki_en:Mold health issues
+  - Avalanche             | rescue in the first 15 minutes        | wiki_en:Avalanche rescue ; wiki_en:Avalanche
+
+section weather | WEATHER | weather | gov,manuals,mine,wiki_en
+  * Lightning             | no safe place outside                 | gov:Lightning Safety (NOAA* ; wiki_en:Lightning safety*
+  - Thunderstorm          | 30 seconds from flash to bang         | wiki_en:Thunderstorm
+  - Tornado               | lowest floor, no windows              | gov:Tornado Safety* ; wiki_en:Tornado
+  - Hurricane             | before, during, after                 | gov:Hurricane Safety* ; wiki_en:Tropical cyclone
+  - Extreme heat          | water, shade, rest                    | gov:Extreme Heat* ; wiki_en:Heat wave
+  - Winter weather        | staying warm and dry                  | gov:Winter Weather* ; wiki_en:Winter storm
+  - Clouds                | reading what's coming                 | wiki_en:Cloud ; wiki_en:List of cloud types
+  - Weather lore          | signs in the sky                      | wiki_en:Weather lore
+  - Wind chill            | how cold it really feels              | wiki_en:Wind chill
+  - Beaufort scale        | wind force by eye                     | wiki_en:Beaufort scale
+
+section tools | TOOLS | tools | gov,manuals,mine,wiki_en
+  * Knife                 | care, sharpening, safe use            | wiki_en:Knife sharpening ; wiki_en:Knife
+  - Axe                   | felling and splitting                 | wiki_en:Axe
+  - Saw                   | cutting wood                          | wiki_en:Bow saw ; wiki_en:Saw
+  - Cordage               | make rope from plants                 | wiki_en:Cordage ; wiki_en:Rope
+  - Rigging               | the army rigging manual               | gov:FM 5-125* ; wiki_en:Rigging
+  - Generator safety      | never indoors                         | wiki_en:Engine-generator
+  - Battery               | charging and care                     | wiki_en:Lead–acid battery ; wiki_en:Lithium-ion battery
+
+section knots | KNOTS | knots | knots,gov,manuals,mine,wiki_en
+  * Bowline               | a loop that won't slip                | knots:Bowline ; wiki_en:Bowline
+  * Clove hitch           | quick hitch to a pole                 | knots:Clove hitch ; wiki_en:Clove hitch
+  - Figure-eight          | stopper and loop                      | knots:Figure-eight knot ; wiki_en:Figure-eight knot
+  - Square knot           | tying two ends                        | knots:Reef knot ; wiki_en:Reef knot
+  - Sheet bend            | joining two ropes                     | knots:Sheet bend ; wiki_en:Sheet bend
+  - Taut-line hitch       | adjustable tent line                  | knots:Taut-line hitch ; wiki_en:Taut-line hitch
+  - Trucker's hitch       | tensioning a load                     | knots:Trucker's hitch ; wiki_en:Trucker's hitch
+  - Prusik                | a grip on another rope                | knots:Prusik ; wiki_en:Prusik
+  - Timber hitch          | dragging logs                         | knots:Timber hitch ; wiki_en:Timber hitch
+  - Lashing               | binding poles together                | wiki_en:Lashing (ropework)
+  - List of knots         | all of them                           | wiki_en:List of knots
+
+section comms | COMMS | comms | gov,manuals,mine,wiki_en
+  * Distress signals      | three of anything, SOS, mayday        | wiki_en:Distress signal
+  - Morse code            | the alphabet in dots and dashes       | wiki_en:Morse code
+  - SOS                   | ... --- ...                           | wiki_en:SOS
+  - Signal mirror         | flash across kilometres               | wiki_en:Signal mirror ; wiki_en:Heliograph
+  - Ground-to-air signals | letters cut into the ground           | wiki_en:Ground-to-air emergency code ; wiki_en:Ground to air emergency code
+  - Signal fire           | three fires in a triangle             | wiki_en:Signal fire
+  - NATO alphabet         | Alfa, Bravo, Charlie                  | wiki_en:NATO phonetic alphabet
+  - Meshtastic            | the radio Doba speaks                 | wiki_en:Meshtastic
+  - Amateur radio         | emergency nets                        | wiki_en:Amateur radio emergency communications
+
+section reference | REFERENCE | books | wiki_en,wiki_uk,wiki_ru,shelf_en,shelf_ru,manuals,mine,gov
+  * Survival skills       | the overview                          | wiki_en:Survival skills
+  - Wilderness medicine   | care far from help                    | med_en:Wilderness medical emergency ; wiki_en:Wilderness medical emergency
+  - Disaster preparedness | getting ready at home                 | gov:Are You Ready* ; wiki_en:Emergency management
+  - Unit conversion       | metric and imperial                   | wiki_en:Conversion of units

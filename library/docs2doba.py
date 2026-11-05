@@ -28,6 +28,7 @@ from zim2doba import HDR, LINK_A, LINK_B, LINK_C, REC, to_text, utf8_cut
 
 MAX_ARTICLE = 1_400_000          # bytes of text; the device holds 1.5 MB inflated
 KINDS = set("THSPB")
+TITLES_FROM_FILENAMES = False    # --titles-from-filenames: the file name is the title
 ALIASES = []                     # (article title, [other titles]) gathered by the readers
 
 
@@ -110,8 +111,13 @@ def strip_links(text):
 def read_html(path, title):
     raw = open(path, "rb").read().decode("utf-8", "replace")
     m = re.search(r"<title[^>]*>(.*?)</title>", raw, re.S | re.I)
-    if m and clean(html.unescape(m.group(1))):
+    if m and clean(html.unescape(m.group(1))) and not TITLES_FROM_FILENAMES:
         title = clean(html.unescape(m.group(1)))
+    # A web page: keep its main content, not the site's menus and footers.
+    mm = re.search(r"<main\b.*?</main>", raw, re.S | re.I)
+    if mm:
+        raw = mm.group(0)
+    raw = re.sub(r"<(header|aside|form)\b.*?</\1>", " ", raw, flags=re.S | re.I)
     return [(title, strip_links(to_text(title, raw)))]
 
 
@@ -148,6 +154,8 @@ def read_pdf(path, title):
     import pymupdf
     doc = pymupdf.open(path)
     meta_title = clean((doc.metadata or {}).get("title") or "")
+    if TITLES_FROM_FILENAMES:
+        meta_title = ""
     if meta_title and len(meta_title) > 3 and not meta_title.lower().startswith(("microsoft", "untitled")):
         title = meta_title
     # Body size: the commonest span size; bigger, bold-ish lines are headings.
@@ -222,6 +230,7 @@ def read_pdf(path, title):
         bare = re.sub(r"^(chapter|section|part|appendix|annex|глава|раздел|розділ)\s+[\w.\-]+[.:]?\s*", "",
                       t, flags=re.I).strip() or t
         bare = re.sub(r"^[\dIVXLC]+(\.\d+)*[.:)]?\s+", "", bare).strip() or bare
+        bare = re.sub(r"^[·•\-–—:]+\s*", "", bare).strip() or bare
         aliases.append((parts[0][0], [t, bare]))
         arts += parts
         contents.append(("B" if lvl > marks[0][2] else "P", LINK_A + t + LINK_B + at + LINK_C))
@@ -274,7 +283,11 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--name", required=True, help="shown on the device")
     ap.add_argument("--source", default="Own files", help="shown under every article")
+    ap.add_argument("--titles-from-filenames", action="store_true",
+                    help="use each file's name as its title (fetch_gov.py names them)")
     a = ap.parse_args()
+    global TITLES_FROM_FILENAMES
+    TITLES_FROM_FILENAMES = a.titles_from_filenames
     files = [a.src] if os.path.isfile(a.src) else sorted(
         os.path.join(d, f) for d, _, fs in os.walk(a.src) for f in fs if not f.startswith("."))
     articles, used, renamed = [], set(), {}

@@ -1,0 +1,51 @@
+# US government publications for Doba's library — public domain (17 U.S.C. § 105).
+# The selection follows what a grid-down reader needs; every file comes from
+# the agency's own site (or the official mirror named). library/fetch_gov.py
+# downloads them, docs2doba.py turns them into the "gov" book, and
+# sections.py files them under Doba's sections.
+#
+# section | agency | title | url
+firstaid|US Army|ATP 4-02.11 Casualty Response, TCCC and First Aid|https://armypubs.army.mil/epubs/DR_pubs/DR_a/ARN46159-ATP_4-02.11-000-WEB-1.pdf
+firstaid|US Army|FM 4-25.11 First Aid (2002)|https://www.globalsecurity.org/military/library/policy/army/fm/4-25-11/fm4-25-11.pdf
+firstaid|CDC|Heat and Your Health|https://www.cdc.gov/heat-health/about/index.html
+firstaid|CDC|Preventing Hypothermia|https://www.cdc.gov/winter-weather/prevention/index.html
+water|CDC|Creating and Storing an Emergency Water Supply|https://www.cdc.gov/water-emergency/about/creating-and-storing-an-emergency-water-supply.html
+water|CDC|Making Water Safe in an Emergency|https://www.cdc.gov/water-emergency/about/index.html
+water|CDC|Treating Water in the Backcountry|https://www.cdc.gov/drinking-water/about/how-to-treat-water-in-the-backcountry.html
+water|CDC|Choosing a Water Filter|https://www.cdc.gov/drinking-water/prevention/choosing-home-water-filters.html
+water|CDC|How Water Treatment Works|https://www.cdc.gov/drinking-water/about/how-water-treatment-works.html
+water|CDC|Drinking Water Advisories|https://www.cdc.gov/water-emergency/about/drinking-water-advisories.html
+water|NOAA NWS|Cold Water Hazards and Safety|https://www.weather.gov/safety/coldwater
+water|NOAA NWS|Rip Currents|https://www.weather.gov/safety/ripcurrent
+food|CDC|Eat Safe Food After a Power Outage|https://www.cdc.gov/food-safety/foods/power-outage.html
+food|CDC|Keep Food Safe After a Disaster|https://www.cdc.gov/food-safety/foods/keep-food-safe-after-emergency.html
+food|USDA|Complete Guide to Home Canning (AIB 539)|https://nchfp.uga.edu/resources/category/usda-guide
+shelter|FEMA|Are You Ready? Guide to Citizen Preparedness|https://www.ready.gov/sites/default/files/2021-11/are-you-ready-guide.pdf
+shelter|US Forest Service|Know Before You Go|https://www.fs.usda.gov/visit/know-before-you-go
+nav|US Army|TC 3-25.26 Map Reading and Land Navigation|https://irp.fas.org/doddir/army/tc3-25-26.pdf
+hazards|CDC|Carbon Monoxide Poisoning Basics|https://www.cdc.gov/carbon-monoxide/about/index.html
+hazards|CDC|Mold Cleanup After Disasters|https://www.cdc.gov/mold/pdf/mold_guide.pdf
+hazards|CDC|What to Do in a Chemical Emergency|https://www.cdc.gov/chemical-emergencies/about/index.html
+hazards|FEMA|Earthquakes|https://www.ready.gov/earthquakes
+hazards|FEMA|Floods|https://www.ready.gov/floods
+hazards|FEMA|Chemicals and Hazardous Materials|https://www.ready.gov/hazardous-materials-incidents
+hazards|FEMA|Nuclear Explosion|https://www.ready.gov/nuclear-explosion
+hazards|FEMA|Radiation Emergencies|https://www.ready.gov/radiation
+hazards|FEMA|Tsunamis|https://www.ready.gov/tsunamis
+hazards|FEMA|Wildfires|https://www.ready.gov/wildfires
+hazards|NOAA NWS|Flood Safety|https://www.weather.gov/safety/flood
+weather|NOAA NWS|Lightning Safety|https://www.weather.gov/safety/lightning
+weather|NOAA NWS|Tornado Safety|https://www.weather.gov/safety/tornado
+weather|NOAA NWS|Hurricane Safety|https://www.weather.gov/safety/hurricane
+weather|OSHA|Lightning Safety When Working Outdoors|https://www.osha.gov/sites/default/files/publications/OSHA3863.pdf
+weather|FEMA|Extreme Heat|https://www.ready.gov/heat
+weather|FEMA|Winter Weather|https://www.ready.gov/winter-weather
+shelter|CDC|Personal Hygiene During an Emergency|https://www.cdc.gov/hygiene/about/personal-hygiene-during-an-emergency.html
+shelter|US Army|FM 21-10 Field Hygiene and Sanitation|https://www.globalsecurity.org/military/library/policy/army/fm/21-10/fm21-10.pdf
+shelter|FEMA|Build a Kit|https://www.ready.gov/kit
+shelter|FEMA|Safeguard Critical Documents and Valuables|https://www.fema.gov/sites/default/files/2020-07/fema_safeguard-critical-documents_brochure.pdf
+# Beyond their list: the survival manuals themselves.
+shelter|US Army|ATP 3-50.21 Survival|https://armypubs.army.mil/epubs/DR_pubs/DR_a/pdf/web/ARN3075_ATP%203-50x21%20FINAL%20WEB.pdf https://irp.fas.org/doddir/army/atp3-50-21.pdf
+shelter|US Army|FM 21-76 Survival (1992)|https://www.globalsecurity.org/military/library/policy/army/fm/21-76/fm21-76.pdf
+knots|US Army|FM 5-125 Rigging Techniques|https://www.globalsecurity.org/military/library/policy/army/fm/5-125/fm5-125.pdf
+nav|US Army|TC 3-97.61 Military Mountaineering|https://irp.fas.org/doddir/army/tc3-97-61.pdf

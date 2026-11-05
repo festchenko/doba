@@ -15,6 +15,7 @@ from otpsim import SimDevice
 HERE = os.path.dirname(os.path.abspath(__file__))
 LIB = os.path.join(HERE, "..", "..", "..", "library")
 W, TOP, KTOP = 540, 64, 960 - 336
+RES_TOP = TOP + 142   # first search result (doba_library.cpp)
 ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
 
 
@@ -61,12 +62,14 @@ def test_an_article_link_opens_its_article_and_back_returns(doba, book):
     boot(doba)
     doba.console("screen library", 800)
     time.sleep(0.6)
+    doba.tap(270, TOP + 45)                                 # "Search all books"
+    time.sleep(0.6)
     for c in "wat":
         doba.tap(*key(c))
         time.sleep(0.2)
     time.sleep(0.6)
     since = doba.log_seq()
-    doba.tap(200, TOP + 146 + 29)
+    doba.tap(200, RES_TOP + 30)
     doba.wait_log(r"\[lib\] open 'Water purification' pages=\d+ links=2", since=since)
     time.sleep(0.6)
     since = doba.log_seq()
@@ -174,12 +177,14 @@ def test_a_manual_pdf_becomes_chapters_found_by_their_own_words(doba, tmp_path):
     boot(doba)
     doba.console("screen library", 800)
     time.sleep(0.6)
+    doba.tap(270, TOP + 45)                                 # "Search all books"
+    time.sleep(0.6)
     for c in "shel":
         doba.tap(*key(c))
         time.sleep(0.2)
     time.sleep(0.6)
     since = doba.log_seq()
-    doba.tap(200, TOP + 146 + 29)
+    doba.tap(200, RES_TOP + 30)
     doba.wait_log(r"\[lib\] open 'Shelter'", since=since)
 
 
@@ -206,3 +211,33 @@ def test_on_water_the_card_gives_depth_not_height(doba):
         since = doba.log_seq()
         doba.console("dem", 500)
         doba.wait_log(want, since=since)
+
+
+def test_library_sections_open_their_guides_and_emergency_buttons_jump(doba, book):
+    """library/sections.py resolves sections.src against the built books; the
+    device shows EMERGENCY buttons and icon sections that open guides."""
+    lib = os.path.join(doba.sd, "doba", "lib")
+    shutil.copytree(book, os.path.join(lib, "field"))
+    src = os.path.join(os.path.dirname(book), "t.src")
+    with open(src, "w") as f:
+        f.write("emergency BLEEDING | bleed | nope:X ; field:Tourniquet\n"
+                "section water | WATER | water | field\n"
+                "  * Make water safe | boil, filter | field:Water purification\n"
+                "  - Missing | gone | field:No such article\n")
+    r = subprocess.run([sys.executable, os.path.join(LIB, "sections.py"), lib, "--src", src],
+                       check=True, capture_output=True, text=True)
+    assert "1 sections, 1 guides, 1 emergency buttons (1 not on this card)" in r.stdout
+    boot(doba)
+    doba.console("screen library", 800)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(96, TOP + 92 + 28 + 54)                        # BLEEDING
+    doba.wait_log(r"\[lib\] open 'Tourniquet'", since=since)
+    time.sleep(0.6)
+    doba.button("home")                                     # back to the sections
+    time.sleep(0.8)
+    doba.tap(96, TOP + 92 + 28 + 108 + 16 + 70)             # WATER, first cell
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(270, TOP + 120 + 50)                           # START HERE card
+    doba.wait_log(r"\[lib\] open 'Water purification'", since=since)

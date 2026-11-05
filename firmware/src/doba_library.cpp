@@ -1,5 +1,6 @@
 // DOBA: offline library reader — see doba_library.h.
 #include "doba_library.h"
+#include "doba_icons.h"
 
 #include <Arduino.h>
 #include <SD.h>
@@ -21,6 +22,7 @@
 namespace doba_lib {
 namespace {
 
+
 constexpr int W = 540, H = 960, TOP = ui::STATUS_H;
 constexpr uint8_t INK = 0x00, PAPER = 0xFF;
 constexpr int REC = 128, KEY = 56, HDR = 32;
@@ -34,8 +36,9 @@ Book g_books[MAX_BOOKS];
 int g_bookCount = -1;      // -1 = not scanned yet
 int g_book = 0;
 
-struct Result { char title[KEY + 1]; uint16_t chunk; uint32_t off, len; };
+struct Result { char title[KEY + 1]; uint16_t chunk; uint32_t off, len; int8_t book; };
 Result g_results[RESULTS];
+bool findIn(int bi, const char* title, Result& out);
 int g_resultCount = 0;
 char g_lastQuery[256] = "\x01";   // forces the first search
 
@@ -174,11 +177,9 @@ void scan() {
     sdUnlock();
 }
 
-// Prefix search: up to RESULTS records whose key starts with `key`.
-void search(const char* key) {
-    g_resultCount = 0;
-    if (g_bookCount <= 0) return;
-    const Book& b = g_books[g_book];
+// Prefix search in one book, appending to g_results (up to RESULTS in all).
+void searchBook(int bi, const char* key) {
+    const Book& b = g_books[bi];
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, b.dir);
     const size_t klen = strlen(key);
@@ -196,7 +197,6 @@ void search(const char* key) {
         if (memcmp(rec, want, KEY) < 0) lo = mid + 1; else hi = mid;
     }
     f.seek(HDR + (uint64_t)lo * REC);
-    char seen[RESULTS][KEY + 1];
     for (uint32_t i = lo; i < b.count && g_resultCount < RESULTS; ++i) {
         if (f.read(rec, REC) != REC) break;
         if (memcmp(rec, want, klen) != 0) break;
@@ -206,14 +206,22 @@ void search(const char* key) {
         r.chunk = (uint16_t)(rec[112] | rec[113] << 8);
         r.off = rd32(rec + 116);
         r.len = rd32(rec + 120);
+        r.book = (int8_t)bi;
         // Redirects share their target: list each article once.
         bool dup = false;
         for (int k = 0; k < g_resultCount; ++k)
-            if (g_results[k].chunk == r.chunk && g_results[k].off == r.off) dup = true;
-        if (!dup) { memcpy(seen[g_resultCount], r.title, KEY + 1); ++g_resultCount; }
+            if (g_results[k].book == bi && g_results[k].chunk == r.chunk && g_results[k].off == r.off) dup = true;
+        if (!dup) ++g_resultCount;
     }
     f.close();
     sdUnlock();
+}
+
+// Prefix search over the books in `mask` (bit per book), in book order.
+void search(const char* key, uint32_t mask) {
+    g_resultCount = 0;
+    for (int bi = 0; bi < g_bookCount && g_resultCount < RESULTS; ++bi)
+        if (mask & (1u << bi)) searchBook(bi, key);
 }
 
 bool inflateTo(const uint8_t* src, size_t len, char* dst, size_t cap, size_t* outLen) {
@@ -359,6 +367,7 @@ void extractLinks() {
 
 bool openArticle(const Result& r) {
     g_note = nullptr;
+    if (r.book >= 0 && r.book < g_bookCount) g_book = r.book;
     const Book& b = g_books[g_book];
     char path[96];
     snprintf(path, sizeof path, "%s/%s/a%04u.dta", kRoot, b.dir, (unsigned)r.chunk);
@@ -392,11 +401,337 @@ bool openArticle(const Result& r) {
 
 // --- search screen geometry -------------------------------------------------------
 
-const EpdRect kBookBtn = {12, TOP + 8, W - 24, 56};
-const EpdRect kQuery = {12, TOP + 72, W - 24, 64};
-constexpr int RES_TOP = TOP + 146, RES_H = 58;
+// --- sections: the library's "what do you need?" -----------------------------------
+//
+// /doba/lib/sections.txt (made by library/sections.py, plain text, editable):
+//   S|id|NAME|icon|book,book,...           a section and the books it searches
+//   E|id|*|Shown title|book|Article title|one line on what it's for
+//                                         an entry ('*' = START HERE)
+//   X|LABEL|icon|book|Article title       an EMERGENCY button (up to 3)
+// Without the file the sections are still there, searching every book.
+
+constexpr int MAX_SECTIONS = 12, MAX_ENTRIES = 480, MAX_EMERGENCY = 3;
+struct Section { char id[16]; char name[24]; doba_icons::Icon icon; uint32_t books; int first, n, starts; };
+struct Entry { int8_t sec, book; bool start; char label[48]; char desc[80]; char title[KEY + 1]; };
+struct Emergency { char label[20]; doba_icons::Icon icon; int8_t book; char title[KEY + 1]; };
+Section g_secs[MAX_SECTIONS];
+int g_secCount = 0;
+Entry* g_entries = nullptr;
+int g_entryCount = 0;
+Emergency g_emerg[MAX_EMERGENCY];
+int g_emergCount = 0;
+
+int bookIndex(const char* dir) {
+    for (int i = 0; i < g_bookCount; ++i)
+        if (!strcmp(g_books[i].dir, dir)) return i;
+    return -1;
+}
+
+void defaultSections() {
+    static const struct { const char* id; const char* name; const char* icon; } kDef[] = {
+        {"firstaid", "FIRST AID", "firstaid"}, {"water", "WATER", "water"},   {"fire", "FIRE", "fire"},
+        {"shelter", "SHELTER", "shelter"},     {"food", "FOOD", "food"},      {"nav", "NAVIGATION", "nav"},
+        {"hazards", "HAZARDS", "hazard"},      {"weather", "WEATHER", "weather"}, {"tools", "TOOLS", "tools"},
+        {"knots", "KNOTS", "knots"},           {"comms", "COMMS", "comms"},   {"reference", "REFERENCE", "books"},
+    };
+    g_secCount = 0;
+    for (const auto& d : kDef) {
+        Section& x = g_secs[g_secCount++];
+        snprintf(x.id, sizeof x.id, "%s", d.id);
+        snprintf(x.name, sizeof x.name, "%s", d.name);
+        x.icon = doba_icons::byName(d.icon);
+        x.books = 0xFFFFFFFFu;
+        x.first = x.n = x.starts = 0;
+    }
+}
+
+// Split `line` on '|' into at most n fields (in place).
+int fields(char* line, char** f, int n) {
+    int k = 0;
+    f[k++] = line;
+    for (char* c = line; *c && k < n; ++c)
+        if (*c == '|') { *c = 0; f[k++] = c + 1; }
+    return k;
+}
+
+void loadSections() {
+    defaultSections();
+    g_entryCount = g_emergCount = 0;
+    if (!g_entries) g_entries = (Entry*)heap_caps_malloc(sizeof(Entry) * MAX_ENTRIES, MALLOC_CAP_SPIRAM);
+    char path[64];
+    snprintf(path, sizeof path, "%s/sections.txt", kRoot);
+    sdLock();
+    File f = SD.open(path, FILE_READ);
+    if (!f) { sdUnlock(); return; }
+    bool fresh = false;
+    char line[400];
+    size_t k = 0;
+    auto take = [&]() {
+        line[k] = 0;
+        k = 0;
+        if (!line[0] || line[0] == '#') return;
+        char* fl[8];
+        const int n = fields(line, fl, 8);
+        if (fl[0][0] == 'S' && n >= 5) {
+            if (!fresh) { g_secCount = 0; fresh = true; }   // the file replaces the defaults
+            if (g_secCount >= MAX_SECTIONS) return;
+            Section& x = g_secs[g_secCount++];
+            snprintf(x.id, sizeof x.id, "%s", fl[1]);
+            snprintf(x.name, sizeof x.name, "%s", fl[2]);
+            x.icon = doba_icons::byName(fl[3]);
+            x.books = 0;
+            for (char* t = strtok(fl[4], ","); t; t = strtok(nullptr, ",")) {
+                const int bi = bookIndex(t);
+                if (bi >= 0) x.books |= 1u << bi;
+            }
+            if (!x.books) x.books = 0xFFFFFFFFu;
+            x.first = g_entryCount;
+            x.n = x.starts = 0;
+        } else if (fl[0][0] == 'E' && n >= 7 && g_entries && g_entryCount < MAX_ENTRIES) {
+            int si = -1;
+            for (int i = 0; i < g_secCount; ++i) if (!strcmp(g_secs[i].id, fl[1])) si = i;
+            const int bi = bookIndex(fl[4]);
+            if (si < 0 || bi < 0 || si != g_secCount - 1) return;   // entries follow their section
+            Entry& e = g_entries[g_entryCount++];
+            e.sec = (int8_t)si;
+            e.book = (int8_t)bi;
+            e.start = fl[2][0] == '*';
+            snprintf(e.label, sizeof e.label, "%s", fl[3]);
+            snprintf(e.title, sizeof e.title, "%s", fl[5]);
+            snprintf(e.desc, sizeof e.desc, "%s", fl[6]);
+            g_secs[si].n++;
+            if (e.start) g_secs[si].starts++;
+        } else if (fl[0][0] == 'X' && n >= 5 && g_emergCount < MAX_EMERGENCY) {
+            const int bi = bookIndex(fl[3]);
+            if (bi < 0) return;
+            Emergency& x = g_emerg[g_emergCount++];
+            snprintf(x.label, sizeof x.label, "%s", fl[1]);
+            x.icon = doba_icons::byName(fl[2]);
+            x.book = (int8_t)bi;
+            snprintf(x.title, sizeof x.title, "%s", fl[4]);
+        }
+    };
+    while (f.available()) {
+        const int c = f.read();
+        if (c < 0) break;
+        if (c == '\n' || c == '\r') { if (k) take(); continue; }
+        if (k < sizeof line - 1) line[k++] = (char)c;
+    }
+    if (k) take();
+    f.close();
+    sdUnlock();
+}
+
+// --- views: HOME (sections), SECTION, SEARCH ----------------------------------------
+
+enum View { V_HOME, V_SECTION, V_SEARCH };
+View g_view = V_HOME;
+int g_sec = 0;            // the open section
+int g_secPage = 0;        // its list page
+int g_scope = -1;         // search scope: -1 all books, else a section
+View g_searchFrom = V_HOME;
+
+const EpdRect kSearchBar = {14, TOP + 12, W - 28, 66};
+constexpr int EM_Y = TOP + 92, EM_H = 108;
+int gridTop() { return g_emergCount ? EM_Y + 28 + EM_H + 16 : TOP + 96; }
+EpdRect cellRect(int i) {
+    const int top = gridTop(), gap = 8, cw = (W - 28 - 2 * gap) / 3;
+    const int ch = (H - 12 - top - 3 * gap) / 4;
+    return {14 + (i % 3) * (cw + gap), top + (i / 3) * (ch + gap), cw, ch};
+}
+EpdRect emergRect(int i) {
+    const int gap = 10, w = (W - 28 - (g_emergCount - 1) * gap) / g_emergCount;
+    return {14 + i * (w + gap), EM_Y + 28, w, EM_H};
+}
+
+void renderHome(uint8_t* fb) {
+    // Search: one bar, every book.
+    frame(kSearchBar, 3, fb);
+    doba_icons::draw(doba_icons::I_SEARCH, kSearchBar.x + 38, kSearchBar.y + 33, 38, INK, PAPER, fb);
+    ui::text(ui::font(ui::F_LABEL), kSearchBar.x + 74, kSearchBar.y + 43, "Search all books", fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char nb[32];
+    snprintf(nb, sizeof nb, "%d book%s", g_bookCount, g_bookCount == 1 ? "" : "s");
+    ui::text(ui::font(ui::F_TINY), kSearchBar.x + kSearchBar.width - 16, kSearchBar.y + 42, nb, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+    // EMERGENCY: straight to the page that matters.
+    if (g_emergCount) {
+        ui::text(ui::font(ui::F_TINY), 16, EM_Y + 18, "EMERGENCY", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        for (int i = 0; i < g_emergCount; ++i) {
+            const EpdRect r = emergRect(i);
+            epd_fill_rect(r, INK, fb);
+            doba_icons::draw(g_emerg[i].icon, r.x + r.width / 2, r.y + 40, 48, PAPER, INK, fb);
+            const EpdFont* ef = ui::font(ui::F_SMALL);
+            if (ui::textWidth(ef, g_emerg[i].label) > r.width - 14) ef = ui::font(ui::F_TINY);
+            ui::text(ef, r.x + r.width / 2, r.y + r.height - 16, g_emerg[i].label, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+        }
+    }
+    // The sections.
+    for (int i = 0; i < g_secCount && i < 12; ++i) {
+        const EpdRect r = cellRect(i);
+        frame(r, 2, fb);
+        const int isz = r.height > 150 ? 70 : 58;
+        doba_icons::draw(g_secs[i].icon, r.x + r.width / 2, r.y + r.height / 2 - 16, isz, INK, PAPER, fb);
+        const EpdFont* f = ui::font(ui::F_SMALL);
+        if (ui::textWidth(f, g_secs[i].name) > r.width - 12) f = ui::font(ui::F_TINY);
+        ui::text(f, r.x + r.width / 2, r.y + r.height - 16, g_secs[i].name, fb, EPD_DRAW_ALIGN_CENTER, INK);
+        if (g_secs[i].n) {
+            char c[8];
+            snprintf(c, sizeof c, "%d", g_secs[i].n);
+            ui::text(ui::font(ui::F_TINY), r.x + r.width - 10, r.y + 24, c, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        }
+    }
+}
+
+// SECTION: header, START HERE, the guides, search in the section.
+constexpr int SEC_HEAD = 120, ROW_H = 84, START_H = 112;
+const EpdRect kSecPrev = {14, H - 88, 90, 76};
+const EpdRect kSecSearch = {114, H - 88, W - 228, 76};
+const EpdRect kSecNext = {W - 104, H - 88, 90, 76};
+
+int secRowsPerPage(const Section& x) {
+    const int avail = kSecPrev.y - 8 - (TOP + SEC_HEAD) - (x.starts ? x.starts * (START_H + 10) + 8 : 0);
+    return avail / ROW_H > 1 ? avail / ROW_H : 1;
+}
+int secPages(const Section& x) {
+    const int rest = x.n - x.starts, per = secRowsPerPage(x);
+    return rest <= 0 ? 1 : (rest + per - 1) / per;
+}
+
+void bookTag(int bi, int xr, int y, uint8_t fg, uint8_t* fb) {
+    if (bi < 0 || bi >= g_bookCount) return;
+    char t[24];
+    snprintf(t, sizeof t, "%.16s", g_books[bi].name);
+    ui::text(ui::font(ui::F_TINY), xr, y, t, fb, EPD_DRAW_ALIGN_RIGHT, fg);
+}
+
+void renderSection(uint8_t* fb) {
+    const Section& x = g_secs[g_sec];
+    doba_icons::draw(x.icon, 64, TOP + 60, 84, INK, PAPER, fb);
+    ui::text(ui::font(ui::F_TITLE), 124, TOP + 58, x.name, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char sub[64];
+    int nb = 0;
+    for (int i = 0; i < g_bookCount; ++i) if (x.books & (1u << i)) ++nb;
+    if (x.n) snprintf(sub, sizeof sub, "%d guides · %d book%s", x.n, nb, nb == 1 ? "" : "s");
+    else snprintf(sub, sizeof sub, "%d book%s · search inside", nb, nb == 1 ? "" : "s");
+    ui::text(ui::font(ui::F_SMALL), 124, TOP + 94, sub, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    epd_fill_rect({14, TOP + SEC_HEAD - 8, W - 28, 3}, INK, fb);
+    int y = TOP + SEC_HEAD;
+    // START HERE cards
+    for (int k = 0, seen = 0; k < x.n && seen < x.starts; ++k) {
+        const Entry& e = g_entries[x.first + k];
+        if (!e.start) continue;
+        ++seen;
+        const EpdRect r = {14, y, W - 28, START_H};
+        frame(r, 4, fb);
+        epd_fill_rect({r.x, r.y, 150, 30}, INK, fb);
+        ui::text(ui::font(ui::F_TINY), r.x + 12, r.y + 21, "START HERE", fb, EPD_DRAW_ALIGN_LEFT, PAPER);
+        bookTag(e.book, r.x + r.width - 14, r.y + 22, INK, fb);
+        ui::text(ui::font(ui::F_KEY), r.x + 16, r.y + 68, e.label, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_TINY), r.x + 16, r.y + 96, e.desc, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        y += START_H + 10;
+    }
+    if (x.starts) y += 8;
+    // the rest, a page at a time
+    const int per = secRowsPerPage(x);
+    int idx = 0;
+    for (int k = 0; k < x.n; ++k) {
+        const Entry& e = g_entries[x.first + k];
+        if (e.start) continue;
+        if (idx >= g_secPage * per && idx < (g_secPage + 1) * per) {
+            ui::text(ui::font(ui::F_LABEL), 20, y + 36, e.label, fb, EPD_DRAW_ALIGN_LEFT, INK);
+            ui::text(ui::font(ui::F_TINY), 20, y + 64, e.desc, fb, EPD_DRAW_ALIGN_LEFT, INK);
+            bookTag(e.book, W - 22, y + 36, INK, fb);
+            ui::text(ui::font(ui::F_KEY), W - 22, y + 70, ">", fb, EPD_DRAW_ALIGN_RIGHT, INK);
+            epd_fill_rect({14, y + ROW_H - 2, W - 28, 1}, INK, fb);
+            y += ROW_H;
+        }
+        ++idx;
+    }
+    if (!x.n) {
+        ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 300, "No guides picked for this yet.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 334, "Search its books below.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    }
+    // footer: pages and search
+    const int pages = secPages(x);
+    frame(kSecSearch, 3, fb);
+    doba_icons::draw(doba_icons::I_SEARCH, kSecSearch.x + 36, kSecSearch.y + 38, 34, INK, PAPER, fb);
+    ui::text(ui::font(ui::F_SMALL), kSecSearch.x + 64, kSecSearch.y + 46, "SEARCH HERE", fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (pages > 1) {
+        frame(kSecPrev, 2, fb);
+        frame(kSecNext, 2, fb);
+        ui::text(ui::font(ui::F_KEY), kSecPrev.x + 45, kSecPrev.y + 50, g_secPage > 0 ? "<" : "", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_KEY), kSecNext.x + 45, kSecNext.y + 50, g_secPage + 1 < pages ? ">" : "", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        char pg[16];
+        snprintf(pg, sizeof pg, "%d/%d", g_secPage + 1, pages);
+        ui::text(ui::font(ui::F_TINY), W / 2, kSecPrev.y - 8, pg, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    }
+}
+
+// SEARCH: the query, its scope, results with their book.
+const EpdRect kScope = {12, TOP + 8, W - 24, 52};
+const EpdRect kQuery = {12, TOP + 68, W - 24, 64};
+constexpr int RES_TOP = TOP + 142, RES_H = 60;
+
+uint32_t scopeMask() { return g_scope < 0 ? 0xFFFFFFFFu : g_secs[g_scope].books; }
+
+void renderSearchView(kbd::Keyboard& k, uint8_t* fb) {
+    k.top = H - k.height();
+    k.enterLabel = "OPEN";
+    char line[96];
+    if (g_scope < 0) snprintf(line, sizeof line, "IN: ALL BOOKS (%d)", g_bookCount);
+    else snprintf(line, sizeof line, "IN: %s   ·   all books >", g_secs[g_scope].name);
+    frame(kScope, 2, fb);
+    ui::text(ui::font(ui::F_SMALL), kScope.x + 14, kScope.y + 34, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    frame(kQuery, 3, fb);
+    char q[300];
+    snprintf(q, sizeof q, "%s_", k.text);
+    if (k.text[0])
+        ui::text(ui::font(ui::F_KEY), kQuery.x + 14, kQuery.y + 44, q, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    else
+        ui::text(ui::font(ui::F_SMALL), kQuery.x + 14, kQuery.y + 42, "_  type the start of a title", fb,
+                 EPD_DRAW_ALIGN_LEFT, INK);
+    char key[KEY + 1];
+    fold(k.text, key, sizeof key);
+    char want[KEY + 8];
+    snprintf(want, sizeof want, "%d|%s", g_scope, key);
+    if (strcmp(want, g_lastQuery) != 0) {
+        snprintf(g_lastQuery, sizeof g_lastQuery, "%s", want);
+        if (key[0]) search(key, scopeMask()); else g_resultCount = 0;
+    }
+    for (int i = 0; i < g_resultCount; ++i) {
+        const int y = RES_TOP + i * RES_H;
+        if (y + RES_H > k.top) break;
+        ui::text(ui::font(ui::F_KEY), 24, y + 40, g_results[i].title, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        if (g_bookCount > 1) bookTag(g_results[i].book, W - 20, y + 22, INK, fb);
+        epd_fill_rect({12, y + RES_H - 2, W - 24, 1}, INK, fb);
+    }
+    if (key[0] && g_resultCount == 0)
+        ui::text(ui::font(ui::F_SMALL), W / 2, RES_TOP + 60, "nothing starts with that", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    if (!key[0]) {
+        ui::text(ui::font(ui::F_SMALL), W / 2, RES_TOP + 50, "e.g.  water, burn, knot, костёр", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_TINY), W / 2, RES_TOP + 84, "case and accents don't matter", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    }
+    k.render(fb);
+}
+
+bool openEntry(int book, const char* title) {
+    Result r;
+    if (!findIn(book, title, r)) {
+        Serial.printf("[lib] missing '%s' in book %d\n", title, book);
+        g_note = "not on this card";
+        return false;
+    }
+    g_historyCount = 0;
+    return openArticle(r);
+}
 
 }  // namespace
+
+int count() {
+    if (g_bookCount < 0) { scan(); loadSections(); }
+    return g_bookCount;
+}
+
+void rescan() { g_bookCount = -1; g_view = V_HOME; }
 
 void fold(const char* in, char* out, size_t cap) {
     size_t n = 0;
@@ -411,77 +746,6 @@ void fold(const char* in, char* out, size_t cap) {
     out[n] = 0;
 }
 
-int count() {
-    if (g_bookCount < 0) scan();
-    return g_bookCount;
-}
-
-void rescan() { g_bookCount = -1; g_lastQuery[0] = 1; }
-
-void renderSearch(kbd::Keyboard& k, uint8_t* fb) {
-    if (g_bookCount < 0) scan();
-    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
-    k.top = H - k.height();
-    k.enterLabel = "OPEN";
-    if (g_bookCount <= 0) {
-        ui::text(ui::font(ui::F_TITLE), W / 2, 380, "NO BOOKS", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(ui::font(ui::F_SMALL), W / 2, 430, "copy books to /doba/lib on the card", fb,
-                 EPD_DRAW_ALIGN_CENTER, INK);
-        return;
-    }
-    char line[96];
-    snprintf(line, sizeof line, g_bookCount > 1 ? "BOOK: %s  (%lu)   next >" : "BOOK: %s  (%lu)",
-             g_books[g_book].name, (unsigned long)g_books[g_book].count);
-    frame(kBookBtn, 2, fb);
-    ui::text(ui::font(ui::F_SMALL), kBookBtn.x + 14, kBookBtn.y + 36, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    frame(kQuery, 3, fb);
-    char q[300];
-    snprintf(q, sizeof q, "%s_", k.text);
-    if (k.text[0])
-        ui::text(ui::font(ui::F_KEY), kQuery.x + 14, kQuery.y + 44, q, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    else   // placeholder: what to type
-        ui::text(ui::font(ui::F_SMALL), kQuery.x + 14, kQuery.y + 42, "_  type the start of a title", fb,
-                 EPD_DRAW_ALIGN_LEFT, INK);
-
-    char key[KEY + 1];
-    fold(k.text, key, sizeof key);
-    if (strcmp(key, g_lastQuery) != 0) {
-        snprintf(g_lastQuery, sizeof g_lastQuery, "%s", key);
-        if (key[0]) search(key); else g_resultCount = 0;
-    }
-    for (int i = 0; i < g_resultCount; ++i) {
-        const int y = RES_TOP + i * RES_H;
-        ui::text(ui::font(ui::F_KEY), 24, y + 40, g_results[i].title, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        epd_fill_rect({12, y + RES_H - 2, W - 24, 1}, INK, fb);
-    }
-    if (key[0] && g_resultCount == 0)
-        ui::text(ui::font(ui::F_SMALL), W / 2, RES_TOP + 60, "nothing starts with that", fb,
-                 EPD_DRAW_ALIGN_CENTER, INK);
-    if (!key[0]) {
-        ui::text(ui::font(ui::F_SMALL), W / 2, RES_TOP + 50, "e.g.  water, burn, knot, костёр", fb,
-                 EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(ui::font(ui::F_TINY), W / 2, RES_TOP + 84, "case and accents don't matter", fb,
-                 EPD_DRAW_ALIGN_CENTER, INK);
-    }
-    k.render(fb);
-}
-
-bool tapSearch(kbd::Keyboard& k, int x, int y) {
-    if (g_bookCount <= 0) return false;
-    if (hit(kBookBtn, x, y)) {
-        g_book = (g_book + 1) % g_bookCount;
-        g_lastQuery[0] = 1;   // search again in the new book
-        return false;
-    }
-    if (y >= RES_TOP && y < RES_TOP + RESULTS * RES_H && y < k.top - 6) {
-        const int i = (y - RES_TOP) / RES_H;
-        if (i < g_resultCount) { g_historyCount = 0; return openArticle(g_results[i]); }
-        return false;
-    }
-    if (k.tap(x, y) == kbd::ENTER && g_resultCount > 0) { g_historyCount = 0; return openArticle(g_results[0]); }
-    return false;
-}
-
 void renderArticle(uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     g_hotCount = 0;
@@ -490,8 +754,16 @@ void renderArticle(uint8_t* fb) {
     char pg[24];
     snprintf(pg, sizeof pg, "%d/%d", g_page + 1, g_pageCount);
     ui::text(ui::font(ui::F_TINY), W - 14, TOP + 30, pg, fb, EPD_DRAW_ALIGN_RIGHT, INK);
-    ui::text(ui::font(ui::F_SMALL), 14, TOP + 32, g_title, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    // Breadcrumb: the section it was opened from, then the title.
+    char crumb[KEY + 40];
+    if (g_view == V_SECTION || (g_view == V_SEARCH && g_searchFrom == V_SECTION))
+        snprintf(crumb, sizeof crumb, "%s  >  %s", g_secs[g_sec].name, g_title);
+    else
+        snprintf(crumb, sizeof crumb, "%s", g_title);
+    ui::text(ui::font(ui::F_SMALL), 14, TOP + 32, crumb, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    // Rule doubles as a progress bar: thick for the read part.
     epd_fill_rect({0, TOP + 44, W, 2}, INK, fb);
+    epd_fill_rect({0, TOP + 42, W * (g_page + 1) / g_pageCount, 6}, INK, fb);
 
     const int first = g_pageStarts[g_page];
     const int last = g_page + 1 < g_pageCount ? g_pageStarts[g_page + 1] : g_lineCount;
@@ -549,15 +821,110 @@ void renderArticle(uint8_t* fb) {
     }
 }
 
-// The article whose folded title is exactly the target's, in the open book.
-bool findExact(const char* title, Result& out) {
+
+void renderSearch(kbd::Keyboard& k, uint8_t* fb) {
+    if (g_bookCount < 0) { scan(); loadSections(); }
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    if (g_bookCount <= 0) {
+        doba_icons::draw(doba_icons::I_SHELF, W / 2, 300, 120, INK, PAPER, fb);
+        ui::text(ui::font(ui::F_TITLE), W / 2, 430, "NO BOOKS", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), W / 2, 474, "copy books to /doba/lib on the card", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        return;
+    }
+    switch (g_view) {
+        case V_HOME: renderHome(fb); break;
+        case V_SECTION: renderSection(fb); break;
+        case V_SEARCH: renderSearchView(k, fb); break;
+    }
+    if (g_note && g_view != V_SEARCH) {
+        const int tw = ui::textWidth(ui::font(ui::F_SMALL), g_note) + 24;
+        epd_fill_rect({(W - tw) / 2, H - 150, tw, 42}, INK, fb);
+        ui::text(ui::font(ui::F_SMALL), W / 2, H - 120, g_note, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+        g_note = nullptr;
+    }
+}
+
+bool tapSearch(kbd::Keyboard& k, int x, int y) {
     if (g_bookCount <= 0) return false;
+    switch (g_view) {
+        case V_HOME:
+            if (hit(kSearchBar, x, y)) { g_scope = -1; g_searchFrom = V_HOME; g_view = V_SEARCH; k.clear(); return false; }
+            for (int i = 0; i < g_emergCount; ++i)
+                if (hit(emergRect(i), x, y)) return openEntry(g_emerg[i].book, g_emerg[i].title);
+            for (int i = 0; i < g_secCount && i < 12; ++i)
+                if (hit(cellRect(i), x, y)) { g_sec = i; g_secPage = 0; g_view = V_SECTION; return false; }
+            return false;
+        case V_SECTION: {
+            const Section& sx = g_secs[g_sec];
+            if (hit(kSecSearch, x, y)) { g_scope = g_sec; g_searchFrom = V_SECTION; g_view = V_SEARCH; k.clear(); return false; }
+            const int pages = secPages(sx);
+            if (pages > 1 && hit(kSecPrev, x, y)) { if (g_secPage > 0) --g_secPage; return false; }
+            if (pages > 1 && hit(kSecNext, x, y)) { if (g_secPage + 1 < pages) ++g_secPage; return false; }
+            int ry = TOP + SEC_HEAD;
+            for (int kk = 0, seen = 0; kk < sx.n && seen < sx.starts; ++kk) {
+                const Entry& e = g_entries[sx.first + kk];
+                if (!e.start) continue;
+                ++seen;
+                if (y >= ry && y < ry + START_H) return openEntry(e.book, e.title);
+                ry += START_H + 10;
+            }
+            if (sx.starts) ry += 8;
+            const int per = secRowsPerPage(sx);
+            int idx = 0;
+            for (int kk = 0; kk < sx.n; ++kk) {
+                const Entry& e = g_entries[sx.first + kk];
+                if (e.start) continue;
+                if (idx >= g_secPage * per && idx < (g_secPage + 1) * per) {
+                    if (y >= ry && y < ry + ROW_H) return openEntry(e.book, e.title);
+                    ry += ROW_H;
+                }
+                ++idx;
+            }
+            return false;
+        }
+        case V_SEARCH:
+            if (hit(kScope, x, y)) { g_scope = -1; return false; }
+            if (y >= RES_TOP && y < RES_TOP + RESULTS * RES_H && y < k.top - 6) {
+                const int i = (y - RES_TOP) / RES_H;
+                if (i < g_resultCount) { g_historyCount = 0; return openArticle(g_results[i]); }
+                return false;
+            }
+            if (k.tap(x, y) == kbd::ENTER && g_resultCount > 0) { g_historyCount = 0; return openArticle(g_results[0]); }
+            return false;
+    }
+    return false;
+}
+
+bool libraryBack() {
+    switch (g_view) {
+        case V_HOME: return false;
+        case V_SECTION: g_view = V_HOME; return true;
+        case V_SEARCH: g_view = g_searchFrom == V_SECTION ? V_SECTION : V_HOME; return true;
+    }
+    return false;
+}
+
+const char* libraryTitle() {
+    switch (g_view) {
+        case V_SECTION: return g_secs[g_sec].name;
+        case V_SEARCH: return "SEARCH";
+        default: return "LIBRARY";
+    }
+}
+
+namespace {
+
+// The article whose folded title is exactly the target's, in book bi.
+bool findIn(int bi, const char* title, Result& out);
+bool findExact(const char* title, Result& out) { return findIn(g_book, title, out); }
+bool findIn(int bi, const char* title, Result& out) {
+    if (g_bookCount <= 0 || bi < 0 || bi >= g_bookCount) return false;
     char key[KEY + 1];
     fold(title, key, sizeof key);
     if (!key[0]) return false;
     uint8_t want[KEY] = {};
     memcpy(want, key, strlen(key) < (size_t)KEY ? strlen(key) : KEY);
-    const Book& b = g_books[g_book];
+    const Book& b = g_books[bi];
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, b.dir);
     bool found = false;
@@ -579,6 +946,7 @@ bool findExact(const char* title, Result& out) {
             out.chunk = (uint16_t)(rec[112] | rec[113] << 8);
             out.off = rd32(rec + 116);
             out.len = rd32(rec + 120);
+            out.book = (int8_t)bi;
             found = true;
         }
         f.close();
@@ -603,6 +971,8 @@ void follow(int link) {
     g_history[g_historyCount++] = v;
     if (!openArticle(r)) { --g_historyCount; g_note = "can't open it"; }
 }
+
+}  // namespace
 
 void tapArticle(int x, int y) {
     if (y >= H - FOOT_H) {            // the footer pages
