@@ -587,6 +587,7 @@ def read_pdf(path, title):
                 continue
             if re.fullmatch(r"[\divxlcIVXLC\-–. ]{1,12}", t):
                 continue
+            t = re.sub(r"^\d{1,4}B\s?(?=[A-Z]{2})", "", t)   # bookmark ids printed by some PDFs ("208BOVERVIEW")
             if size >= body * 1.35 and len(t) < 120:
                 out.append(("H", t))
             elif size >= body * 1.12 and len(t) < 160:
