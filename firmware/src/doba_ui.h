@@ -18,14 +18,30 @@ enum Page : uint8_t {
     POINTS,      // own position + waypoint list
     POINT,       // one waypoint: azimuth, distance, GO TO / DELETE
     POINT_NEW,   // a waypoint typed in as MGRS
+    MAPOPTS,     // map options: orientation, grid, points
+    SOS,         // a distress call over the mesh, repeated
+    SUN,         // sunrise, sunset, twilight, moon
 };
 
 // Where a tap leads. STAY = redraw this page.
 enum Go : uint8_t {
     STAY, TO_HOME, TO_MAP, TO_POSITION, TO_LIBRARY, TO_ARTICLE, TO_COMMS,
     TO_COMPOSE, TO_TRACKS, TO_ROUTES, TO_SETTINGS, TO_RECORD,
-    TO_SETUP, TO_SETUP_NAME, TO_POINTS, TO_POINT, TO_POINT_NEW,
+    TO_SETUP, TO_SETUP_NAME, TO_POINTS, TO_POINT, TO_POINT_NEW, TO_MAPOPTS,
+    TO_SOS, TO_SUN, TO_POWER,
 };
+
+// Called every pass of the UI loop: repeats an active SOS. True when the SOS
+// page (or HOME's tile) needs a repaint.
+bool tick(const RideState& s);
+bool sosActive();
+
+// Show waypoint i on the POINT page next (after a long-press on the map).
+void openPoint(int i);
+
+// The map's orientation lives in ui_dashboard; MAPOPTS reads and sets it here.
+bool mapTrackUp();
+void setMapTrackUp(bool on);
 
 // The status band's title for a page (nullptr: the clock line only).
 const char* title(Page p);

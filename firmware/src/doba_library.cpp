@@ -430,14 +430,18 @@ void renderSearch(kbd::Keyboard& k, uint8_t* fb) {
         return;
     }
     char line[96];
-    snprintf(line, sizeof line, "%s  (%lu)  >", g_books[g_book].name,
-             (unsigned long)g_books[g_book].count);
+    snprintf(line, sizeof line, g_bookCount > 1 ? "BOOK: %s  (%lu)   next >" : "BOOK: %s  (%lu)",
+             g_books[g_book].name, (unsigned long)g_books[g_book].count);
     frame(kBookBtn, 2, fb);
     ui::text(ui::font(ui::F_SMALL), kBookBtn.x + 14, kBookBtn.y + 36, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
     frame(kQuery, 3, fb);
     char q[300];
     snprintf(q, sizeof q, "%s_", k.text);
-    ui::text(ui::font(ui::F_KEY), kQuery.x + 14, kQuery.y + 44, q, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (k.text[0])
+        ui::text(ui::font(ui::F_KEY), kQuery.x + 14, kQuery.y + 44, q, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    else   // placeholder: what to type
+        ui::text(ui::font(ui::F_SMALL), kQuery.x + 14, kQuery.y + 42, "_  type the start of a title", fb,
+                 EPD_DRAW_ALIGN_LEFT, INK);
 
     char key[KEY + 1];
     fold(k.text, key, sizeof key);
@@ -453,6 +457,12 @@ void renderSearch(kbd::Keyboard& k, uint8_t* fb) {
     if (key[0] && g_resultCount == 0)
         ui::text(ui::font(ui::F_SMALL), W / 2, RES_TOP + 60, "nothing starts with that", fb,
                  EPD_DRAW_ALIGN_CENTER, INK);
+    if (!key[0]) {
+        ui::text(ui::font(ui::F_SMALL), W / 2, RES_TOP + 50, "e.g.  water, burn, knot, костёр", fb,
+                 EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_TINY), W / 2, RES_TOP + 84, "case and accents don't matter", fb,
+                 EPD_DRAW_ALIGN_CENTER, INK);
+    }
     k.render(fb);
 }
 

@@ -23,6 +23,15 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb);
 // its mark, over the map, under the chrome.
 void drawTarget(const MapScreenData& map, const RideState& s, uint8_t* fb);
 
+// Map options kept in NVS: the MGRS grid, every waypoint on the map.
+bool gridOn();
+void setGridOn(bool on);
+bool pointsOn();
+void setPointsOn(bool on);
+
+// The map as last drawn: screen point -> lat/lon (false before a first frame).
+bool screenToLatLon(int x, int y, double& lat, double& lon);
+
 // Mils system: 6000 ("05-33", the 60-00 dial) or 6400 (NATO). Kept in NVS.
 int milsSystem();
 void setMilsSystem(int system);

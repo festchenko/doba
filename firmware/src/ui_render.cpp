@@ -177,6 +177,29 @@ void drawBolt(int cx, int cy, uint8_t color, uint8_t* fb) {
 // below as statusBarOtp() for reference.
 void statusBarOtp(const RideState& s, uint8_t* fb, const char* title);
 
+void statusBarBack(const RideState& s, uint8_t* fb, const char* title) {
+    const int W = epd_rotated_display_width();
+    const int H = STATUS_H;
+    const uint8_t BG = 0x00, FG = 0xFF;
+    epd_fill_rect({0, 0, W, H}, BG, fb);
+    const int base = 42;
+    // Back: a bold chevron and a hairline, the whole left 96 px is the target.
+    const int cx = 30, cy = H / 2;
+    for (int t = -3; t <= 3; ++t) {
+        epd_draw_line(cx + 14 + t, cy - 16, cx + t, cy, FG, fb);
+        epd_draw_line(cx + t, cy, cx + 14 + t, cy + 16, FG, fb);
+    }
+    text(&Arial_L, cx + 24, base, "BACK", fb, EPD_DRAW_ALIGN_LEFT, FG);
+    epd_fill_rect({BACK_W + 20, 14, 2, H - 28}, FG, fb);
+    if (title && title[0]) text(&Arial_B, (BACK_W + 22 + W - 120) / 2, base, title, fb, EPD_DRAW_ALIGN_CENTER, FG);
+    char clock[10];
+    formatClock(clock, sizeof(clock), s);
+    char right[32];
+    if (s.batteryPercent == 0) snprintf(right, sizeof right, "%s  --%%", clock);
+    else snprintf(right, sizeof right, "%s  %u%%%s", clock, s.batteryPercent, s.charging ? "+" : "");
+    text(&Arial_L, W - 14, base, right, fb, EPD_DRAW_ALIGN_RIGHT, FG);
+}
+
 void statusBar(const RideState& s, uint8_t* fb, const char* title) {
     const int W = epd_rotated_display_width();
     const int H = STATUS_H;

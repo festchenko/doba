@@ -105,7 +105,8 @@ def test_settings_change_the_band_on_the_device(doba):
     boot(doba)
     doba.console("screen setup", 800)
     time.sleep(0.6)
-    doba.tap(270, TOP + 8 + 86 * 0 + 40)                    # RADIO on
+    # Rows sit under section headers: RADIO row at TOP+4+38, 84 px each.
+    doba.tap(500, TOP + 4 + 38 + 42)                        # RADIO: the ON half
 
     def freq(ok):
         end = time.time() + 8
@@ -116,7 +117,7 @@ def test_settings_change_the_band_on_the_device(doba):
             time.sleep(0.2)
         raise AssertionError(doba.lora())
     freq(lambda f: abs(f - 869.525) < 1e-3)
-    doba.tap(270, TOP + 8 + 86 * 1 + 40)                    # BAND: EU_868 -> UA_868
+    doba.tap(500, TOP + 4 + 38 + 84 + 42)                   # BAND: ">" EU_868 -> UA_868
     freq(lambda f: 868.0 <= f <= 868.6)
 
 

@@ -75,7 +75,7 @@ enum Screen { SCREEN_DASH, SCREEN_MAP, SCREEN_SUMMARY, SCREEN_MENU,
               // DOBA: the launcher, comms and library (doba_ui.h).
               SCREEN_HOME, SCREEN_COMMS, SCREEN_COMPOSE, SCREEN_LIBRARY,
               SCREEN_ARTICLE, SCREEN_SETUP, SCREEN_SETUP_NAME, SCREEN_POINTS,
-              SCREEN_POINT, SCREEN_POINT_NEW };
+              SCREEN_POINT, SCREEN_POINT_NEW, SCREEN_MAPOPTS, SCREEN_SOS, SCREEN_SUN };
 #ifdef OTP_SIM
 // DOBA: the inherited OTP sim suites were written for a dashboard boot; they set
 // DOBA_START=dash (sim/tests/conftest.py). The device always boots to HOME.
@@ -787,6 +787,9 @@ doba_ui::Page dobaPage() {
         case SCREEN_POINTS:  return doba_ui::POINTS;
         case SCREEN_POINT:   return doba_ui::POINT;
         case SCREEN_POINT_NEW: return doba_ui::POINT_NEW;
+        case SCREEN_MAPOPTS: return doba_ui::MAPOPTS;
+        case SCREEN_SOS: return doba_ui::SOS;
+        case SCREEN_SUN: return doba_ui::SUN;
         default:             return doba_ui::HOME;
     }
 }
@@ -797,7 +800,7 @@ void dobaGo(doba_ui::Go g) {
         case doba_ui::STAY:        break;
         case doba_ui::TO_HOME:     screen = SCREEN_HOME; break;
         case doba_ui::TO_MAP:      screen = SCREEN_MAP; break;
-        case doba_ui::TO_POSITION: dashPage = firstContentPage(); screen = SCREEN_DASH; break;
+        case doba_ui::TO_POSITION: screen = SCREEN_POINTS; break;
         case doba_ui::TO_LIBRARY:  screen = SCREEN_LIBRARY; break;
         case doba_ui::TO_ARTICLE:  screen = SCREEN_ARTICLE; break;
         case doba_ui::TO_COMMS:    screen = SCREEN_COMMS; break;
@@ -811,6 +814,10 @@ void dobaGo(doba_ui::Go g) {
         case doba_ui::TO_POINTS:   screen = SCREEN_POINTS; break;
         case doba_ui::TO_POINT:    screen = SCREEN_POINT; break;
         case doba_ui::TO_POINT_NEW: screen = SCREEN_POINT_NEW; break;
+        case doba_ui::TO_MAPOPTS:  screen = SCREEN_MAPOPTS; break;
+        case doba_ui::TO_SOS:      screen = SCREEN_SOS; break;
+        case doba_ui::TO_SUN:      screen = SCREEN_SUN; break;
+        case doba_ui::TO_POWER:    sheetKind = SHEET_POWER; powerOverlay = true; break;
     }
 }
 
@@ -836,7 +843,7 @@ void goBack() {
         case SCREEN_COMPOSE:
         case SCREEN_LIBRARY:
         case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
-        case SCREEN_POINT: case SCREEN_POINT_NEW:
+        case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN:
         case SCREEN_ARTICLE:  dobaGo(doba_ui::back(dobaPage())); break;
         case SCREEN_SENSORS:  leaveList(); break;  // also stops the BLE scan
         case SCREEN_MENU:     screen = SCREEN_DASH; break;
@@ -938,6 +945,32 @@ void ackPagerTap(const EpdRect& r) {
     refresh(false, true, false);
 }
 
+// DOBA: a finger held on the map body drops a waypoint there and opens it.
+bool mapLongPress(int x, int y) {
+    if (screen != SCREEN_MAP) return false;
+    if (y < ui::STATUS_H + 10 || y > ui::MAP_STRIP_TOP - 10) return false;
+    if (x >= kMapZoom.zoomX - 10) return false;          // the button column
+    double lat, lon;
+    if (!milspec::screenToLatLon(x, y, lat, lon)) return false;
+    const int i = doba_points::add(nullptr, lat, lon);
+    if (i < 0) return false;
+    Serial.printf("[pts] long-press point %d at %.6f,%.6f\n", i, lat, lon);
+    doba_ui::openPoint(i);
+    screen = SCREEN_POINT;
+    return true;
+}
+
+bool isDobaSubPage(Screen sc) {
+    switch (sc) {
+        case SCREEN_COMMS: case SCREEN_COMPOSE: case SCREEN_LIBRARY: case SCREEN_ARTICLE:
+        case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS: case SCREEN_POINT:
+        case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN:
+            return true;
+        default:
+            return false;
+    }
+}
+
 void handleTap(int x, int y) {
     // The "Start navigation?" prompt owns every tap while it is up. START
     // begins navigation; any other tap dismisses it, so it can never trap
@@ -956,6 +989,13 @@ void handleTap(int x, int y) {
             // be started later from Saved Routes.
             routes::clearRoute();
         }
+        return;
+    }
+
+    // DOBA: Doba's sub-pages carry a BACK chevron at the left of the band (the
+    // Home key still goes back too; this is the one a new user finds).
+    if (y < ui::STATUS_H && x < ui::BACK_W + 20 && isDobaSubPage(screen)) {
+        goBack();
         return;
     }
 
@@ -1163,9 +1203,10 @@ void handleTap(int x, int y) {
             }
             if (screen == SCREEN_MAP && x >= kMapZoom.zoomX &&
                 x < kMapZoom.zoomX + kMapZoom.size) {
-                // MAP LAYERS: which cycling layers the map draws.
+                // DOBA: the layers button opens Doba's map options (OTP's were
+                // cycling layers: bike routes, toilets, bike shops).
                 if (y >= kMapZoom.layersY && y < kMapZoom.layersY + kMapZoom.size) {
-                    screen = SCREEN_MAPLAYERS;
+                    screen = SCREEN_MAPOPTS;
                     break;
                 }
                 if (y >= kMapZoom.zoomInY && y < kMapZoom.zoomInY + kMapZoom.size) {
@@ -1191,8 +1232,7 @@ void handleTap(int x, int y) {
             // which is the only way back to the map.
             if (y < ui::STATUS_H) screen = SCREEN_HOME;   // DOBA: was the menu
             else if (screen == SCREEN_MAP && y >= ui::MAP_STRIP_TOP) {
-                dashPage = firstContentPage();
-                screen = SCREEN_DASH;
+                screen = SCREEN_POINTS;   // DOBA: the strip opens POSITION (no ride dashboard)
             }
             break;
         case SCREEN_SUMMARY:
@@ -1283,7 +1323,7 @@ void handleTap(int x, int y) {
         case SCREEN_COMPOSE:
         case SCREEN_LIBRARY:
         case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
-        case SCREEN_POINT: case SCREEN_POINT_NEW:
+        case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN:
         case SCREEN_ARTICLE: {  // DOBA
             const int bl = settings::backlight();
             dobaGo(doba_ui::tap(dobaPage(), x, y, g_state.snapshot()));
@@ -3368,6 +3408,9 @@ static void runConsoleLine(char* line) {
         else if (!strcasecmp(arg, "library"))  screen = SCREEN_LIBRARY;   // DOBA
         else if (!strcasecmp(arg, "setup"))    screen = SCREEN_SETUP;     // DOBA
         else if (!strcasecmp(arg, "points"))   screen = SCREEN_POINTS;    // DOBA
+        else if (!strcasecmp(arg, "mapopts"))  screen = SCREEN_MAPOPTS;   // DOBA
+        else if (!strcasecmp(arg, "sos"))      screen = SCREEN_SOS;       // DOBA
+        else if (!strcasecmp(arg, "sun"))      screen = SCREEN_SUN;       // DOBA
         else { Serial.printf("[cmd] unknown screen '%s'\n", arg); return; }
         noteActivity();
     } else if (!strcasecmp(cmd, "zoom")) {
@@ -3791,7 +3834,8 @@ void task(void*) {
                     // silently, which is why a quick tap sometimes did nothing.
                     // The edge interrupt that woke us is already independent
                     // evidence, so a single debounced read is not noise.
-                    if (bootLow >= 1 && !bootLong) { noteActivity(); toggleRide(); }
+                    // DOBA: no ride recording; BOOT goes HOME.
+                    if (bootLow >= 1 && !bootLong) { noteActivity(); screen = SCREEN_HOME; forceDraw = true; }
                     bootLow = 0;
                 }
             }
@@ -3806,6 +3850,16 @@ void task(void*) {
                     if (sideLow >= 1) { noteActivity(); cycleBacklight(); }  // see above
                     sideLow = 0;
                 }
+            }
+        }
+
+        // DOBA: an active SOS repeats; its page counts down.
+        {
+            static uint32_t sosPaint = 0;
+            if (doba_ui::tick(g_state.snapshot())) forceDraw = true;
+            if (screen == SCREEN_SOS && doba_ui::sosActive() && millis() - sosPaint > 30000) {
+                sosPaint = millis();
+                forceDraw = true;
             }
         }
 
@@ -3836,6 +3890,7 @@ void task(void*) {
                         lastTapMs = millis();
                         noteActivity();
                         if (powerOverlay) handlePowerTap(lastX, lastY);
+                        else if (millis() - touchDownAt >= 800 && mapLongPress(lastX, lastY)) {}   // DOBA
                         else handleTap(lastX, lastY);
                     }
                 }
@@ -4214,10 +4269,11 @@ void task(void*) {
                 case SCREEN_COMPOSE:
                 case SCREEN_LIBRARY:
                 case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
-                case SCREEN_POINT: case SCREEN_POINT_NEW:
+                case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN:
                 case SCREEN_ARTICLE: {   // DOBA
                     doba_ui::render(dobaPage(), s, fb);
-                    ui::statusBar(s, fb, doba_ui::title(dobaPage()));
+                    if (screen == SCREEN_HOME) ui::statusBar(s, fb, doba_ui::title(dobaPage()));
+                    else ui::statusBarBack(s, fb, doba_ui::title(dobaPage()));
                     break;
                 }
                 case SCREEN_SETTINGS: {
@@ -4396,3 +4452,10 @@ void task(void*) {
 }
 
 }  // namespace ui_dashboard
+
+
+// DOBA: the map's orientation, for doba_ui's MAP options page.
+namespace doba_ui {
+bool mapTrackUp() { return ::mapTrackUp; }
+void setMapTrackUp(bool on) { ::mapTrackUp = on; }
+}  // namespace doba_ui

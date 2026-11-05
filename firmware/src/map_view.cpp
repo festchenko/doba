@@ -935,7 +935,7 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
         ui_render_map_base(map, fb);
         if (onBase) onBase(fb);
     }
-    if (map.topo) milspec::drawGrid(map, fb);   // DOBA: km grid under route + rider
+    if (map.topo && milspec::gridOn()) milspec::drawGrid(map, fb);   // DOBA: km grid under route + rider
     renderMapTop(map, fb);
     milspec::drawTarget(map, s, fb);   // DOBA: the active waypoint
     drawScaleBar(map.metersPerPixel, s.useMiles, fb);

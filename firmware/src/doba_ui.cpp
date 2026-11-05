@@ -17,6 +17,8 @@
 #include "milspec.h"
 #include "doba_points.h"
 #include "doba_dem.h"
+#include "doba_sun.h"
+#include <time.h>
 #include "ride_state.h"
 #include "settings.h"
 #include "ui_render.h"
@@ -87,6 +89,8 @@ void clockOf(uint32_t utc, char* out, size_t n) {
 // --- HOME --------------------------------------------------------------------
 
 struct Tile { EpdRect r; const char* title; Go go; };
+void sosSubtitle(char* out, size_t n);
+void sunSubtitle(const RideState& s, char* out, size_t n);
 constexpr int TILE_GAP = 10;
 constexpr int TILE_W = (W - 3 * TILE_GAP) / 2;
 constexpr int TILE_H = (H - TOP - 5 * TILE_GAP) / 4;
@@ -96,11 +100,12 @@ EpdRect tileRect(int col, int row) {
             TILE_W, TILE_H};
 }
 
+// DOBA is for survival, not a navigator: no routes, no recorded tracks.
 const Tile kTiles[8] = {
     {tileRect(0, 0), "MAP", TO_MAP},         {tileRect(1, 0), "POSITION", TO_POINTS},
     {tileRect(0, 1), "LIBRARY", TO_LIBRARY}, {tileRect(1, 1), "COMMS", TO_COMMS},
-    {tileRect(0, 2), "TRACKS", TO_TRACKS},   {tileRect(1, 2), "ROUTES", TO_ROUTES},
-    {tileRect(0, 3), "SETTINGS", TO_SETUP}, {tileRect(1, 3), "", TO_RECORD},
+    {tileRect(0, 2), "SOS", TO_SOS},         {tileRect(1, 2), "SUN", TO_SUN},
+    {tileRect(0, 3), "SETTINGS", TO_SETUP},  {tileRect(1, 3), "POWER", TO_POWER},
 };
 
 void renderHome(const RideState& s, uint8_t* fb) {
@@ -108,11 +113,10 @@ void renderHome(const RideState& s, uint8_t* fb) {
     char sub[64];
     for (int i = 0; i < 8; ++i) {
         const Tile& t = kTiles[i];
-        const bool rec = t.go == TO_RECORD;
-        const bool dark = rec && s.recording;
+        const bool dark = t.go == TO_SOS && sosActive();   // an active SOS shows from across the room
         if (dark) epd_fill_rect(t.r, INK, fb); else frame(t.r, 3, fb);
         const uint8_t fg = dark ? PAPER : INK;
-        const char* title = rec ? (s.recording ? "STOP" : "RECORD") : t.title;
+        const char* title = t.title;
         ui::text(ui::font(ui::F_TITLE), t.r.x + 16, t.r.y + 52, title, fb, EPD_DRAW_ALIGN_LEFT, fg);
         sub[0] = 0;
         switch (t.go) {
@@ -134,14 +138,12 @@ void renderHome(const RideState& s, uint8_t* fb) {
                 else snprintf(sub, sizeof sub, "%d new · %d nodes", mesh_service::unreadCount(),
                               mesh_service::nodeCount());
                 break;
-            case TO_RECORD:
-                if (s.recording)
-                    snprintf(sub, sizeof sub, "%lu:%02lu · %.2f km", (unsigned long)(s.elapsedS / 3600),
-                             (unsigned long)(s.elapsedS / 60 % 60), s.distanceM / 1000.0);
-                else snprintf(sub, sizeof sub, "start a track");
+            case TO_SOS: sosSubtitle(sub, sizeof sub); break;
+            case TO_SUN: sunSubtitle(s, sub, sizeof sub); break;
+            case TO_POWER:
+                if (s.batteryPercent) snprintf(sub, sizeof sub, "%u%%%s · sleep / off", s.batteryPercent, s.charging ? " charging" : "");
+                else snprintf(sub, sizeof sub, "sleep / off");
                 break;
-            case TO_TRACKS: snprintf(sub, sizeof sub, "saved .fit tracks"); break;
-            case TO_ROUTES: snprintf(sub, sizeof sub, "follow a .gpx"); break;
             case TO_SETUP: snprintf(sub, sizeof sub, "%s · %s", mesh::region(mesh_service::regionIndex()).name,
                                     milspec::milsSystem() == 6400 ? "6400" : "60-00"); break;
             default: break;
@@ -338,91 +340,251 @@ void shortName(const char* lng, char* out, size_t n) {
     out[o] = 0;
 }
 
+// --- controls: a switch, segments, a stepper -----------------------------------
+// One visual language for every setting: what you see is what a tap does.
+
+constexpr int CTRL_W = 250, CTRL_H = 56, CTRL_X = W - 14 - CTRL_W;
+
+void section(int y, const char* name, uint8_t* fb) {
+    ui::text(ui::font(ui::F_TINY), 16, y + 24, name, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    epd_fill_rect({16 + ui::textWidth(ui::font(ui::F_TINY), name) + 10, y + 16, W - 46 - ui::textWidth(ui::font(ui::F_TINY), name), 2}, INK, fb);
+}
+
+void caption(int y, int h, const char* name, const char* hint, uint8_t* fb) {
+    ui::text(ui::font(ui::F_LABEL), 16, y + (hint ? h / 2 - 2 : h / 2 + 10), name, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (hint) ui::text(ui::font(ui::F_TINY), 16, y + h / 2 + 26, hint, fb, EPD_DRAW_ALIGN_LEFT, INK);
+}
+
+// n labels side by side, the chosen one filled.
+void segments(int y, int h, const char* const* labels, int n, int sel, uint8_t* fb, int x0 = CTRL_X, int w = CTRL_W) {
+    const int top = y + (h - CTRL_H) / 2;
+    frame({x0, top, w, CTRL_H}, 3, fb);
+    for (int i = 0; i < n; ++i) {
+        const int sx = x0 + w * i / n, sw = w * (i + 1) / n - w * i / n;
+        if (i == sel) epd_fill_rect({sx, top, sw, CTRL_H}, INK, fb);
+        else if (i) epd_fill_rect({sx, top + 8, 2, CTRL_H - 16}, INK, fb);
+        ui::text(ui::font(ui::F_SMALL), sx + sw / 2, top + CTRL_H / 2 + 9, labels[i], fb, EPD_DRAW_ALIGN_CENTER,
+                 i == sel ? PAPER : INK);
+    }
+}
+int segmentHit(int x, int n, int x0 = CTRL_X, int w = CTRL_W) {
+    if (x < x0 - 10 || x > x0 + w + 10) return -1;
+    const int i = (x - x0) * n / w;
+    return i < 0 ? 0 : i >= n ? n - 1 : i;
+}
+
+// "‹  value  ›": the halves step back and forward.
+void stepper(int y, int h, const char* value, uint8_t* fb) {
+    const int top = y + (h - CTRL_H) / 2;
+    frame({CTRL_X, top, CTRL_W, CTRL_H}, 3, fb);
+    epd_fill_rect({CTRL_X + 52, top + 8, 2, CTRL_H - 16}, INK, fb);
+    epd_fill_rect({CTRL_X + CTRL_W - 54, top + 8, 2, CTRL_H - 16}, INK, fb);
+    ui::text(ui::font(ui::F_KEY), CTRL_X + 26, top + CTRL_H / 2 + 11, "<", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    ui::text(ui::font(ui::F_KEY), CTRL_X + CTRL_W - 26, top + CTRL_H / 2 + 11, ">", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    ui::text(ui::font(ui::F_SMALL), CTRL_X + CTRL_W / 2, top + CTRL_H / 2 + 9, value, fb, EPD_DRAW_ALIGN_CENTER, INK);
+}
+int stepperHit(int x) {   // -1, +1, or 0 (the middle: also forward)
+    if (x < CTRL_X - 10) return 0;
+    return x < CTRL_X + CTRL_W / 2 ? -1 : +1;
+}
+
+// ON | OFF as two segments.
+void toggle(int y, int h, bool on, uint8_t* fb) {
+    static const char* const kOnOff[] = {"OFF", "ON"};
+    segments(y, h, kOnOff, 2, on ? 1 : 0, fb, CTRL_X + CTRL_W - 150, 150);
+}
+bool toggleHit(int x) { return x >= CTRL_X + CTRL_W - 160; }
+
 // --- SETUP: settings without the phone -------------------------------------------
 
-constexpr int SROW_TOP = TOP + 8, SROW_H = 86;
-enum SetupRow { R_RADIO, R_REGION, R_PRESET, R_NAME, R_MILS, R_LIGHT, R_TZ, R_MORE, R_COUNT };
 // The bands that make sense for a device carried in Europe and Ukraine, then
-// the rest of the world for the odd trip. Cycled in this order.
+// the rest of the world for the odd trip. Stepped through in this order.
 const char* const kRegionCycle[] = {"EU_868", "UA_868", "EU_433", "UA_433", "US", "RU"};
+constexpr int kRegions = sizeof(kRegionCycle) / sizeof(kRegionCycle[0]);
 kbd::Keyboard g_nameKbd;
+
+// The layout, top to bottom: section headers and rows.
+enum SetupRow { R_RADIO, R_REGION, R_PRESET, R_NAME, R_LIGHT, R_TZ, R_MILS, R_MORE, R_COUNT };
+constexpr int SROW_H = 84, SEC_H = 38;
+int setupRowY(int r) {
+    // RADIO: 4 rows · DISPLAY: 2 · NAVIGATION: 2
+    const int sec = r < R_LIGHT ? 1 : r < R_MILS ? 2 : 3;
+    return TOP + 4 + sec * SEC_H + r * SROW_H;
+}
+int setupRowAt(int y) {
+    for (int r = 0; r < R_COUNT; ++r)
+        if (y >= setupRowY(r) && y < setupRowY(r) + SROW_H) return r;
+    return -1;
+}
 
 void renderSetup(const RideState& s, uint8_t* fb) {
     (void)s;
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
-    char v[48];
+    section(setupRowY(R_RADIO) - SEC_H, "RADIO  (MESHTASTIC LORA)", fb);
+    section(setupRowY(R_LIGHT) - SEC_H, "DISPLAY", fb);
+    section(setupRowY(R_MILS) - SEC_H, "NAVIGATION", fb);
+    char v[48], hint[48];
     for (int r = 0; r < R_COUNT; ++r) {
-        const int y = SROW_TOP + r * SROW_H;
+        const int y = setupRowY(r);
         switch (r) {
-            case R_RADIO: row(y, SROW_H, "RADIO", onOff(mesh_service::enabled()), fb); break;
+            case R_RADIO:
+                caption(y, SROW_H, "RADIO", mesh_service::enabled() ? "on: messages + nodes" : "off: saves battery", fb);
+                toggle(y, SROW_H, mesh_service::enabled(), fb);
+                break;
             case R_REGION: {
                 const mesh::Region& rg = mesh::region(mesh_service::regionIndex());
-                snprintf(v, sizeof v, "%s", rg.name);
-                row(y, SROW_H, "BAND", v, fb);
+                snprintf(hint, sizeof hint, "%.3f MHz%s", mesh_service::frequencyMHz(),
+                         !strcmp(rg.name, "EU_868") ? " · Europe" : !strcmp(rg.name, "UA_868") ? " · Ukraine" : "");
+                caption(y, SROW_H, "BAND", hint, fb);
+                stepper(y, SROW_H, rg.name, fb);
                 break;
             }
-            case R_PRESET: row(y, SROW_H, "MODE", mesh_service::presetName(), fb); break;
+            case R_PRESET:
+                caption(y, SROW_H, "MODE", "Long = range, Short = speed", fb);
+                stepper(y, SROW_H, mesh_service::presetName(), fb);
+                break;
             case R_NAME: {
-                snprintf(v, sizeof v, "%.18s", mesh_service::longName());
-                row(y, SROW_H, "CALLSIGN", v[0] ? v : "--", fb);
+                char sh[20];
+                shortName(mesh_service::longName(), sh, sizeof sh);
+                snprintf(hint, sizeof hint, "short: %s · tap to edit", sh);
+                caption(y, SROW_H, "CALLSIGN", hint, fb);
+                snprintf(v, sizeof v, "%.14s", mesh_service::longName());
+                const int top = y + (SROW_H - CTRL_H) / 2;
+                frame({CTRL_X, top, CTRL_W, CTRL_H}, 1, fb);
+                ui::text(ui::font(ui::F_SMALL), CTRL_X + 14, top + CTRL_H / 2 + 9, v[0] ? v : "--", fb,
+                         EPD_DRAW_ALIGN_LEFT, INK);
+                // a pencil: a slanted bar and a tip
+                const int px = CTRL_X + CTRL_W - 34, py = top + CTRL_H / 2;
+                for (int t = -2; t <= 2; ++t) epd_draw_line(px - 10 + t, py + 12, px + 10 + t, py - 12, INK, fb);
+                epd_fill_triangle(px - 14, py + 16, px - 10, py + 8, px - 6, py + 14, INK, fb);
                 break;
             }
-            case R_MILS:
-                row(y, SROW_H, "ANGLES", milspec::milsSystem() == 6400 ? "6400 mils" : "60-00 mils", fb);
-                break;
             case R_LIGHT: {
-                static const char* kL[] = {"OFF", "LOW", "MID", "HIGH"};
+                static const char* const kL[] = {"OFF", "LOW", "MID", "HI"};
                 const int b = settings::backlight();
-                row(y, SROW_H, "LIGHT", kL[b < 0 ? 0 : b > 3 ? 3 : b], fb);
+                caption(y, SROW_H, "LIGHT", "front light", fb);
+                segments(y, SROW_H, kL, 4, b < 0 ? 0 : b > 3 ? 3 : b, fb);
                 break;
             }
             case R_TZ: {
                 const int m = settings::tzMinutes();
-                if (m % 60) snprintf(v, sizeof v, "-  UTC%+d:%02d  +", m / 60, abs(m % 60));
-                else snprintf(v, sizeof v, "-  UTC%+d  +", m / 60);
-                row(y, SROW_H, "TIME", v, fb, false);
+                if (m % 60) snprintf(v, sizeof v, "UTC%+d:%02d", m / 60, abs(m % 60));
+                else snprintf(v, sizeof v, "UTC%+d", m / 60);
+                caption(y, SROW_H, "TIME ZONE", "no summer time: step it", fb);
+                stepper(y, SROW_H, v, fb);
                 break;
             }
-            case R_MORE: row(y, SROW_H, "MORE", "GPS, sensors", fb); break;
+            case R_MILS: {
+                static const char* const kM[] = {"60-00", "6400"};
+                caption(y, SROW_H, "ANGLES", milspec::milsSystem() == 6400 ? "NATO mils" : "6000 mils (UA/RU)", fb);
+                segments(y, SROW_H, kM, 2, milspec::milsSystem() == 6400 ? 1 : 0, fb);
+                break;
+            }
+            case R_MORE: {
+                caption(y, SROW_H, "MORE", "GPS, clock, sensors, phone", fb);
+                const int top = y + (SROW_H - CTRL_H) / 2;
+                frame({CTRL_X, top, CTRL_W, CTRL_H}, 1, fb);
+                ui::text(ui::font(ui::F_SMALL), CTRL_X + CTRL_W / 2, top + CTRL_H / 2 + 9, "OPEN  >", fb,
+                         EPD_DRAW_ALIGN_CENTER, INK);
+                break;
+            }
         }
+        if (r != R_NAME && r != R_TZ && r != R_MORE && r != R_PRESET)
+            epd_fill_rect({16, y + SROW_H - 1, W - 32, 1}, INK, fb);
+        else
+            epd_fill_rect({16, y + SROW_H - 1, W - 32, 1}, INK, fb);
     }
     char f[64];
-    snprintf(f, sizeof f, "%.3f MHz · %d nodes heard", mesh_service::frequencyMHz(), mesh_service::nodeCount());
+    snprintf(f, sizeof f, "%d nodes heard · settings save at once", mesh_service::nodeCount());
     ui::text(ui::font(ui::F_TINY), W / 2, H - 24, f, fb, EPD_DRAW_ALIGN_CENTER, INK);
 }
 
 Go tapSetup(int x, int y) {
-    const int r = (y - SROW_TOP) / SROW_H;
-    if (y < SROW_TOP || r < 0 || r >= R_COUNT) return STAY;
+    const int r = setupRowAt(y);
+    if (r < 0) return STAY;
     switch (r) {
-        case R_RADIO: mesh_service::setEnabled(!mesh_service::enabled()); break;
+        case R_RADIO:
+            if (toggleHit(x)) mesh_service::setEnabled(x >= CTRL_X + CTRL_W - 75);
+            break;
         case R_REGION: {
+            const int step = stepperHit(x) < 0 ? -1 : 1;
             const char* cur = mesh::region(mesh_service::regionIndex()).name;
-            const int n = sizeof(kRegionCycle) / sizeof(kRegionCycle[0]);
             int at = -1;
-            for (int i = 0; i < n; ++i) if (!strcmp(cur, kRegionCycle[i])) at = i;
-            for (int k = 1; k <= n; ++k) {
-                const int ri = mesh::regionIndexByName(kRegionCycle[(at + k + n) % n]);
+            for (int i = 0; i < kRegions; ++i) if (!strcmp(cur, kRegionCycle[i])) at = i;
+            if (at < 0) at = step > 0 ? -1 : 0;
+            for (int k = 1; k <= kRegions; ++k) {
+                const int ri = mesh::regionIndexByName(kRegionCycle[((at + step * k) % kRegions + kRegions) % kRegions]);
                 if (ri >= 0) { mesh_service::setRegion((uint8_t)ri); break; }
             }
             break;
         }
-        case R_PRESET: mesh_service::setPreset((uint8_t)((mesh_service::presetIndex() + 1) % mesh::PRESET_COUNT)); break;
+        case R_PRESET: {
+            const int n = mesh::PRESET_COUNT, step = stepperHit(x) < 0 ? -1 : 1;
+            mesh_service::setPreset((uint8_t)(((mesh_service::presetIndex() + step) % n + n) % n));
+            break;
+        }
         case R_NAME:
             g_nameKbd.clear();
             snprintf(g_nameKbd.text, sizeof g_nameKbd.text, "%s", mesh_service::longName());
             return TO_SETUP_NAME;
-        case R_MILS: milspec::setMilsSystem(milspec::milsSystem() == 6400 ? 6000 : 6400); break;
-        case R_LIGHT: settings::setBacklight((settings::backlight() + 1) % 4); break;
+        case R_LIGHT: {
+            const int i = segmentHit(x, 4);
+            if (i >= 0) settings::setBacklight(i);
+            break;
+        }
         case R_TZ: {
-            int m = settings::tzMinutes() + (x < W / 2 ? -60 : 60);
+            int m = settings::tzMinutes() + (stepperHit(x) < 0 ? -60 : 60);
             if (m < -12 * 60) m = 14 * 60;
             if (m > 14 * 60) m = -12 * 60;
             settings::setTzMinutes(m);
             break;
         }
+        case R_MILS: {
+            const int i = segmentHit(x, 2);
+            if (i >= 0) milspec::setMilsSystem(i ? 6400 : 6000);
+            break;
+        }
         case R_MORE: return TO_SETTINGS;
     }
+    return STAY;
+}
+
+// --- MAPOPTS: what the map shows ----------------------------------------------------
+
+constexpr int MROW_TOP = TOP + 30, MROW_H = 96;
+const EpdRect kOpenPoints = {14, TOP + 30 + 3 * 96 + 36, W - 28, 80};
+
+void renderMapOpts(const RideState& s, uint8_t* fb) {
+    (void)s;
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    static const char* const kO[] = {"NORTH", "COURSE"};
+    int y = MROW_TOP;
+    caption(y, MROW_H, "UP IS", mapTrackUp() ? "map turns with your course" : "north always up", fb);
+    segments(y, MROW_H, kO, 2, mapTrackUp() ? 1 : 0, fb);
+    epd_fill_rect({16, y + MROW_H - 1, W - 32, 1}, INK, fb);
+    y += MROW_H;
+    caption(y, MROW_H, "MGRS GRID", "1 km lines, 10 km zoomed out", fb);
+    toggle(y, MROW_H, milspec::gridOn(), fb);
+    epd_fill_rect({16, y + MROW_H - 1, W - 32, 1}, INK, fb);
+    y += MROW_H;
+    caption(y, MROW_H, "POINTS", "your waypoints on the map", fb);
+    toggle(y, MROW_H, milspec::pointsOn(), fb);
+    epd_fill_rect({16, y + MROW_H - 1, W - 32, 1}, INK, fb);
+    button(kOpenPoints, "POINTS LIST  >", false, fb);
+    const char* tips[] = {"Hold a finger on the map 1 s", "to drop a point there.",
+                          "Tap the compass to switch", "north-up / course-up."};
+    for (int i = 0; i < 4; ++i)
+        ui::text(ui::font(ui::F_SMALL), W / 2, kOpenPoints.y + kOpenPoints.height + 60 + i * 34 + (i >= 2 ? 20 : 0),
+                 tips[i], fb, EPD_DRAW_ALIGN_CENTER, INK);
+}
+
+Go tapMapOpts(int x, int y) {
+    if (hit(kOpenPoints, x, y)) return TO_POINTS;
+    const int r = (y - MROW_TOP) / MROW_H;
+    if (y < MROW_TOP || r > 2) return STAY;
+    if (r == 0) { const int i = segmentHit(x, 2); if (i >= 0) setMapTrackUp(i == 1); }
+    if (r == 1 && toggleHit(x)) milspec::setGridOn(x >= CTRL_X + CTRL_W - 75);
+    if (r == 2 && toggleHit(x)) milspec::setPointsOn(x >= CTRL_X + CTRL_W - 75);
     return STAY;
 }
 
@@ -493,7 +655,12 @@ void renderPoints(const RideState& s, uint8_t* fb) {
     const int n = doba_points::count();
     if (g_pointsScroll > n - 1) g_pointsScroll = n > 0 ? ((n - 1) / PROW_N) * PROW_N : 0;
     if (n == 0)
-        ui::text(ui::font(ui::F_SMALL), W / 2, PROW_TOP + 120, "no points yet", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    {
+        ui::text(ui::font(ui::F_KEY), W / 2, PROW_TOP + 100, "No points yet", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), W / 2, PROW_TOP + 150, "MARK HERE saves where you stand,", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), W / 2, PROW_TOP + 182, "ADD GRID takes an MGRS reference,", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), W / 2, PROW_TOP + 214, "or hold a finger on the map.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    }
     for (int k = 0; k < PROW_N && g_pointsScroll + k < n; ++k) {
         const int i = g_pointsScroll + k;
         const doba_points::Point* p = doba_points::at(i);
@@ -514,6 +681,8 @@ void renderPoints(const RideState& s, uint8_t* fb) {
             azText(b, az, sizeof az);
             doba_points::formatDistance(d, ds, sizeof ds);
             ui::text(ui::font(ui::F_KEY), W - 22, y + 40, az, fb, EPD_DRAW_ALIGN_RIGHT, fg);
+            ui::text(ui::font(ui::F_TINY), W - 30 - ui::textWidth(ui::font(ui::F_KEY), az), y + 38, "AZ", fb,
+                     EPD_DRAW_ALIGN_RIGHT, fg);
             ui::text(ui::font(ui::F_SMALL), W - 22, y + 72, ds, fb, EPD_DRAW_ALIGN_RIGHT, fg);
         }
         if (!tgt) epd_fill_rect({10, y + PROW_H - 2, W - 20, 1}, INK, fb);
@@ -630,8 +799,10 @@ void renderPoint(const RideState& s, uint8_t* fb) {
         } else if (doba_dem::height(p->lat, p->lon, pz)) {
             char hz[48];
             const int dz = (int)lroundf(pz - groundAlt(s));
-            snprintf(hz, sizeof hz, "HEIGHT %dm  (%+dm)", (int)lroundf(pz), dz);
+            snprintf(hz, sizeof hz, "HEIGHT %dm", (int)lroundf(pz));
             ui::text(ui::font(ui::F_SMALL), tx, dialY + 126, hz, fb, EPD_DRAW_ALIGN_LEFT, INK);
+            snprintf(hz, sizeof hz, dz >= 0 ? "climb %+dm" : "drop %dm", dz);
+            ui::text(ui::font(ui::F_SMALL), tx, dialY + 156, hz, fb, EPD_DRAW_ALIGN_LEFT, INK);
         }
         if (!s.gpsFix)
             ui::text(ui::font(ui::F_TINY), W / 2, dialY + dialR + 40, "from the last fix", fb, EPD_DRAW_ALIGN_CENTER, INK);
@@ -727,6 +898,198 @@ Go tapPointNew(int x, int y) {
     return STAY;
 }
 
+// --- SOS: a distress call over the mesh -------------------------------------------
+
+constexpr uint32_t SOS_EVERY_MS = 5 * 60 * 1000;
+bool g_sosOn = false, g_sosArmed = false;
+uint32_t g_sosArmedAt = 0, g_sosLast = 0;
+int g_sosSent = 0;
+const EpdRect kSosBtn = {30, TOP + 300, W - 60, 220};
+const EpdRect kSosCancel = {30, H - 130, W - 60, 96};
+
+void wrapAt(const EpdFont* f, int x, int y, int maxW, int lh, const char* text, uint8_t* fb) {
+    int k = 0;
+    wrap(f, text, maxW, [&](const char* l) {
+        ui::text(f, x, y + k * lh, l, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ++k;
+    });
+}
+
+void sosMessage(const RideState& s, char* out, size_t n) {
+    char where[32] = "position unknown";
+    if (s.gpsFix || s.everHadFix) milgeo::mgrs(s.latitude, s.longitude, where, sizeof where);
+    char when[16] = "";
+    if (s.utc) {
+        struct tm g;
+        const time_t t = s.utc;
+        gmtime_r(&t, &g);
+        snprintf(when, sizeof when, " %02d%02dZ", g.tm_hour, g.tm_min);
+    }
+    snprintf(out, n, "SOS SOS SOS %s %s%s%s", mesh_service::longName(), where, when,
+             s.gpsFix ? "" : (s.everHadFix ? " (last fix)" : ""));
+}
+
+void sosSend(const RideState& s) {
+    if (!mesh_service::enabled()) mesh_service::setEnabled(true);
+    char msg[200];
+    sosMessage(s, msg, sizeof msg);
+    mesh_service::queueText(0xFFFFFFFFu, msg, 0);
+    g_sosLast = millis();
+    ++g_sosSent;
+    Serial.printf("[sos] sent #%d: %s\n", g_sosSent, msg);
+}
+
+void sosSubtitle(char* out, size_t n) {
+    if (g_sosOn) snprintf(out, n, "ACTIVE · sent %d", g_sosSent);
+    else snprintf(out, n, "distress call");
+}
+
+void renderSos(const RideState& s, uint8_t* fb) {
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    char msg[200];
+    sosMessage(s, msg, sizeof msg);
+    if (!g_sosOn) {
+        ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 60, "Broadcasts on the mesh, every 5 min:", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        frame({20, TOP + 84, W - 40, 150}, 1, fb);
+        wrapAt(ui::font(ui::F_BODY), 36, TOP + 124, W - 72, 34, msg, fb);
+        const bool armed = g_sosArmed && millis() - g_sosArmedAt < 6000;
+        epd_fill_rect(kSosBtn, INK, fb);
+        ui::text(ui::font(ui::F_BIG), W / 2, kSosBtn.y + 120, "SOS", fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+        ui::text(ui::font(ui::F_SMALL), W / 2, kSosBtn.y + 180, armed ? "TAP AGAIN TO SEND" : "tap, then tap again", fb,
+                 EPD_DRAW_ALIGN_CENTER, PAPER);
+        ui::text(ui::font(ui::F_TINY), W / 2, kSosBtn.y + kSosBtn.height + 50,
+                 mesh_service::enabled() ? "radio is on" : "radio is off: it will be turned on", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_TINY), W / 2, kSosBtn.y + kSosBtn.height + 80,
+                 "Anyone on the channel within range sees it.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        return;
+    }
+    epd_fill_rect({0, TOP, W, 290}, INK, fb);
+    ui::text(ui::font(ui::F_BIG), W / 2, TOP + 130, "SOS ACTIVE", fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+    char line[64];
+    const uint32_t left = g_sosLast + SOS_EVERY_MS > millis() ? (g_sosLast + SOS_EVERY_MS - millis()) / 1000 : 0;
+    snprintf(line, sizeof line, "sent %d · next in %lu:%02lu", g_sosSent, (unsigned long)(left / 60),
+             (unsigned long)(left % 60));
+    ui::text(ui::font(ui::F_LABEL), W / 2, TOP + 210, line, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+    frame({20, TOP + 320, W - 40, 150}, 1, fb);
+    wrapAt(ui::font(ui::F_BODY), 36, TOP + 360, W - 72, 34, msg, fb);
+    ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 530, "Stay with the device. Replies show in COMMS.", fb,
+             EPD_DRAW_ALIGN_CENTER, INK);
+    button(kSosCancel, "CANCEL SOS", false, fb);
+}
+
+Go tapSos(int x, int y, const RideState& s) {
+    if (!g_sosOn) {
+        if (!hit(kSosBtn, x, y)) { g_sosArmed = false; return STAY; }
+        if (g_sosArmed && millis() - g_sosArmedAt < 6000) {
+            g_sosArmed = false;
+            g_sosOn = true;
+            g_sosSent = 0;
+            sosSend(s);
+        } else {
+            g_sosArmed = true;
+            g_sosArmedAt = millis();
+        }
+        return STAY;
+    }
+    if (hit(kSosCancel, x, y)) {
+        g_sosOn = false;
+        Serial.println("[sos] cancelled");
+        char msg[96];
+        snprintf(msg, sizeof msg, "SOS cancelled by %s", mesh_service::longName());
+        mesh_service::queueText(0xFFFFFFFFu, msg, 0);
+    }
+    return STAY;
+}
+
+// --- SUN ---------------------------------------------------------------------------
+
+void hhmm(time_t utc, char* out, size_t n) {
+    const time_t t = utc + settings::tzMinutes() * 60;
+    struct tm g;
+    gmtime_r(&t, &g);
+    snprintf(out, n, "%02d:%02d", g.tm_hour, g.tm_min);
+}
+
+void sunSubtitle(const RideState& s, char* out, size_t n) {
+    if (!s.utc || !(s.gpsFix || s.everHadFix)) { snprintf(out, n, "needs a GPS fix"); return; }
+    const doba_sun::Day d = doba_sun::day(s.latitude, s.longitude, s.utc);
+    char t[8];
+    if (d.setOk && s.utc < d.set && (!d.riseOk || s.utc > d.rise)) { hhmm(d.set, t, sizeof t); snprintf(out, n, "sunset %s", t); }
+    else if (d.riseOk) {
+        const time_t r = s.utc > d.rise ? doba_sun::day(s.latitude, s.longitude, s.utc + 86400).rise : d.rise;
+        hhmm(r, t, sizeof t);
+        snprintf(out, n, "sunrise %s", t);
+    } else snprintf(out, n, d.setOk ? "" : "polar day/night");
+}
+
+void renderSun(const RideState& s, uint8_t* fb) {
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    if (!s.utc || !(s.gpsFix || s.everHadFix)) {
+        ui::text(ui::font(ui::F_KEY), W / 2, TOP + 300, "Needs a GPS fix", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 340, "for the date, time and place.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        return;
+    }
+    const doba_sun::Day d = doba_sun::day(s.latitude, s.longitude, s.utc);
+    char a[8], b[8], line[64];
+    // Daylight left: the headline when the sun is up.
+    int y = TOP + 40;
+    if (d.riseOk && d.setOk && s.utc >= d.rise && s.utc < d.set) {
+        const long left = (long)(d.set - s.utc) / 60;
+        ui::text(ui::font(ui::F_TINY), 20, y + 6, "DAYLIGHT LEFT", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        snprintf(line, sizeof line, "%ld h %02ld min", left / 60, left % 60);
+        ui::text(ui::font(ui::F_BIG), 20, y + 80, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        if (d.duskOk) {
+            const long l2 = (long)(d.dusk - s.utc) / 60;
+            snprintf(line, sizeof line, "+ %ld min of twilight after sunset", l2 - left);
+            ui::text(ui::font(ui::F_SMALL), 20, y + 120, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        }
+    } else {
+        ui::text(ui::font(ui::F_TINY), 20, y + 6, "NIGHT", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        const doba_sun::Day nx = s.utc > d.rise ? doba_sun::day(s.latitude, s.longitude, s.utc + 86400) : d;
+        if (nx.riseOk) {
+            const long to = (long)(nx.rise - s.utc) / 60;
+            snprintf(line, sizeof line, "%ld h %02ld min", to / 60, to % 60);
+            ui::text(ui::font(ui::F_BIG), 20, y + 80, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+            ui::text(ui::font(ui::F_SMALL), 20, y + 120, "until sunrise", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        }
+    }
+    // The day's table.
+    y = TOP + 200;
+    epd_fill_rect({20, y, W - 40, 2}, INK, fb);
+    struct Row { const char* name; bool ok; time_t t; } rows[] = {
+        {"FIRST LIGHT", d.dawnOk, d.dawn}, {"SUNRISE", d.riseOk, d.rise},
+        {"SUNSET", d.setOk, d.set},        {"LAST LIGHT", d.duskOk, d.dusk},
+    };
+    for (int i = 0; i < 4; ++i) {
+        const int ry = y + 16 + i * 72;
+        ui::text(ui::font(ui::F_LABEL), 24, ry + 44, rows[i].name, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        if (rows[i].ok) hhmm(rows[i].t, a, sizeof a); else snprintf(a, sizeof a, "--");
+        ui::text(ui::font(ui::F_TITLE), W - 24, ry + 48, a, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        epd_fill_rect({20, ry + 70, W - 40, 1}, INK, fb);
+    }
+    // Sun's bearing at rise and set? Keep it simple: the moon.
+    y += 16 + 4 * 72 + 30;
+    const double lit = doba_sun::moonLit(s.utc);
+    const int mx = 90, my = y + 80, mr = 52;
+    epd_fill_circle(mx, my, mr, INK, fb);
+    // lit part: an ellipse-ish terminator, drawn as white columns
+    const double age = doba_sun::moonAge(s.utc);
+    const bool waxing = age < 14.765;
+    for (int dx = -mr; dx <= mr; ++dx) {
+        const int h = (int)sqrt((double)(mr * mr - dx * dx));
+        const double term = mr * (1 - 2 * lit);                // x of the terminator, from the lit edge
+        const double xs = waxing ? dx : -dx;                   // lit edge on the right when waxing
+        if (xs > term) epd_fill_rect({mx + dx, my - h, 1, 2 * h}, PAPER, fb);
+    }
+    epd_draw_circle(mx, my, mr, INK, fb);
+    ui::text(ui::font(ui::F_KEY), 170, y + 66, doba_sun::moonName(s.utc), fb, EPD_DRAW_ALIGN_LEFT, INK);
+    snprintf(line, sizeof line, "%d%% lit · day %d of 29", (int)lround(lit * 100), (int)age);
+    ui::text(ui::font(ui::F_SMALL), 170, y + 104, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    hhmm(s.utc, b, sizeof b);
+    snprintf(line, sizeof line, "now %s  ·  UTC%+d  ·  times local", b, settings::tzMinutes() / 60);
+    ui::text(ui::font(ui::F_TINY), W / 2, H - 24, line, fb, EPD_DRAW_ALIGN_CENTER, INK);
+}
+
 }  // namespace
 
 void render(Page p, const RideState& s, uint8_t* fb) {
@@ -746,7 +1109,25 @@ void render(Page p, const RideState& s, uint8_t* fb) {
         case POINTS:  renderPoints(s, fb); break;
         case POINT:   renderPoint(s, fb); break;
         case POINT_NEW: renderPointNew(s, fb); break;
+        case MAPOPTS: renderMapOpts(s, fb); break;
+        case SOS:     renderSos(s, fb); break;
+        case SUN:     renderSun(s, fb); break;
     }
+}
+
+bool sosActive() { return g_sosOn; }
+
+bool tick(const RideState& s) {
+    if (g_sosOn && millis() - g_sosLast >= SOS_EVERY_MS) {
+        sosSend(s);
+        return true;
+    }
+    return false;
+}
+
+void openPoint(int i) {
+    g_pointSel = i;
+    g_deleteArmed = false;
 }
 
 const char* title(Page p) {
@@ -759,6 +1140,9 @@ const char* title(Page p) {
         case POINTS: return "POSITION";
         case POINT: return "POINT";
         case POINT_NEW: return "NEW POINT";
+        case MAPOPTS: return "MAP";
+        case SOS: return "SOS";
+        case SUN: return "SUN & MOON";
     }
     return nullptr;
 }
@@ -775,6 +1159,9 @@ Go tap(Page p, int x, int y, const RideState& s) {
         case POINTS:  return tapPoints(x, y, s);
         case POINT:   return tapPoint(x, y);
         case POINT_NEW: return tapPointNew(x, y);
+        case MAPOPTS: return tapMapOpts(x, y);
+        case SOS:     return tapSos(x, y, s);
+        case SUN:     return STAY;
     }
     return STAY;
 }
@@ -793,6 +1180,9 @@ Go back(Page p) {
         case POINTS:  return TO_HOME;
         case POINT:   return TO_POINTS;
         case POINT_NEW: return TO_POINTS;
+        case MAPOPTS: return TO_MAP;
+        case SOS:     return TO_HOME;
+        case SUN:     return TO_HOME;
     }
     return TO_HOME;
 }

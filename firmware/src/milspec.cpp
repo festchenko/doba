@@ -89,6 +89,46 @@ void setMilsSystem(int system) {
     p.end();
 }
 
+namespace {
+bool flag(const char* key, bool def, int8_t& cache) {
+    if (cache < 0) {
+        Preferences p;
+        p.begin("doba", true);
+        cache = p.getBool(key, def) ? 1 : 0;
+        p.end();
+    }
+    return cache == 1;
+}
+void setFlag(const char* key, bool on, int8_t& cache) {
+    cache = on ? 1 : 0;
+    Preferences p;
+    p.begin("doba", false);
+    p.putBool(key, on);
+    p.end();
+}
+int8_t g_grid = -1, g_points = -1;
+// The last frame's projection, for long-press -> point.
+struct Frame { bool ok; int rx, ry; float mpp, north; double lat, lon; } g_frame = {};
+}  // namespace
+
+bool gridOn() { return flag("grid", true, g_grid); }
+void setGridOn(bool on) { setFlag("grid", on, g_grid); }
+bool pointsOn() { return flag("pts", true, g_points); }
+void setPointsOn(bool on) { setFlag("pts", on, g_points); }
+
+bool screenToLatLon(int x, int y, double& lat, double& lon) {
+    if (!g_frame.ok) return false;
+    const double dx = x - g_frame.rx, dy = y - g_frame.ry;
+    const double d = hypot(dx, dy) * g_frame.mpp;
+    const double brg = (atan2(dx, -dy) * 180.0 / M_PI - g_frame.north) * M_PI / 180.0;
+    const double R = 6371008.8, la1 = g_frame.lat * M_PI / 180.0, lo1 = g_frame.lon * M_PI / 180.0;
+    const double la2 = asin(sin(la1) * cos(d / R) + cos(la1) * sin(d / R) * cos(brg));
+    const double lo2 = lo1 + atan2(sin(brg) * sin(d / R) * cos(la1), cos(d / R) - sin(la1) * sin(la2));
+    lat = la2 * 180.0 / M_PI;
+    lon = lo2 * 180.0 / M_PI;
+    return true;
+}
+
 void drawGrid(const MapScreenData& map, uint8_t* fb) {
     const View v = viewFor(map);
     const int top = ui::STATUS_H, bottom = ui::MAP_STRIP_TOP;
@@ -165,12 +205,37 @@ void drawGrid(const MapScreenData& map, uint8_t* fb) {
 }
 
 void drawTarget(const MapScreenData& map, const RideState& s, uint8_t* fb) {
-    const int t = doba_points::target();
-    const doba_points::Point* p = doba_points::at(t);
-    if (!p || map.metersPerPixel <= 0) return;
     const bool have = s.gpsFix || s.everHadFix;
     const double lat = have ? s.latitude : map.centerLat;
     const double lon = have ? s.longitude : map.centerLon;
+    if (map.metersPerPixel <= 0) return;
+    g_frame = {true, map.riderX, map.riderY, map.metersPerPixel, map.northDeg, lat, lon};
+    const int top0 = ui::STATUS_H, bottom0 = ui::MAP_STRIP_TOP;
+    const int t = doba_points::target();
+    // Every waypoint: a small open triangle, its name when zoomed in.
+    if (pointsOn()) {
+        for (int i = 0; i < doba_points::count(); ++i) {
+            if (i == t) continue;
+            const doba_points::Point* q = doba_points::at(i);
+            double b, d;
+            milgeo::bearingDistance(lat, lon, q->lat, q->lon, b, d);
+            const double a = (b + map.northDeg) * M_PI / 180.0, px = d / map.metersPerPixel;
+            const int x = map.riderX + (int)lround(sin(a) * px), y = map.riderY - (int)lround(cos(a) * px);
+            if (x < 12 || x > SCREEN_W - 12 || y < top0 + 14 || y > bottom0 - 12) continue;
+            for (int k = 0; k < 3; ++k) {
+                epd_draw_line(x, y - 12 + k, x - 10 + k, y + 7 - k, 0x00, fb);
+                epd_draw_line(x - 10 + k, y + 7 - k, x + 10 - k, y + 7 - k, 0x00, fb);
+                epd_draw_line(x + 10 - k, y + 7 - k, x, y - 12 + k, 0x00, fb);
+            }
+            if (map.metersPerPixel < 40) {
+                const int w = ui::textWidth(&Mono_M, q->name) + 8;
+                epd_fill_rect({x + 13, y - 12, w, 24}, 0xFF, fb);
+                ui::text(&Mono_M, x + 17, y + 6, q->name, fb, EPD_DRAW_ALIGN_LEFT, 0x00);
+            }
+        }
+    }
+    const doba_points::Point* p = doba_points::at(t);
+    if (!p) return;
     double b, d;
     milgeo::bearingDistance(lat, lon, p->lat, p->lon, b, d);
     const double a = (b + map.northDeg) * M_PI / 180.0;
@@ -258,10 +323,10 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     // Course over ground means nothing standing still: show it from walking pace.
     if (fix && s.gpsSpeedKmh >= 2.0f) {
         char mil[8];
-        milgeo::mils(s.courseDeg, milsSystem(), mil, sizeof mil);
-        snprintf(az, sizeof az, "AZ %s %03d\xC2\xB0", mil, (int)lroundf(s.courseDeg) % 360);
+        milgeo::mils(s.courseDeg, milsSystem(), mil, sizeof mil);   // course over ground
+        snprintf(az, sizeof az, "CRS %s", mil);
     } else {
-        snprintf(az, sizeof az, "AZ --");
+        snprintf(az, sizeof az, "CRS still");   // course needs movement (2 km/h+)
     }
     char row[64];
     // DOBA: ground height from the DEM when the card has it, else GPS.
