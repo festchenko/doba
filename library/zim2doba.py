@@ -127,7 +127,10 @@ class Cleaner(HTMLParser):
                     self.kind = kind
             return
         cls = dict(attrs).get("class") or ""
-        skipping = tag in self.skip_tags or any(c in cls for c in self.skip_classes)
+        # Class tokens that start with a skipped name ("thumbinner", "navbox-inner"),
+        # not any substring: <html class="vector-feature-toc-pinned"> is no "toc".
+        toks = cls.split()
+        skipping = tag in self.skip_tags or any(t.startswith(c) for t in toks for c in self.skip_classes)
         self.stack.append((tag, skipping, False))
         if skipping:
             self.skip += 1

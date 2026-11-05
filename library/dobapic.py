@@ -25,7 +25,9 @@ def encode(img, max_w=IMG_W, max_h=IMG_MAX_H):
     img = img.convert("L")
     w, h = img.size
     k = min(1.0, max_w / w, max_h / h)
-    if k < 1.0:
+    if w < 320 and h < 400:          # web thumbnails: a little larger reads better on paper
+        k = min(1.6, max_w / w, max_h / h)
+    if k != 1.0:
         img = img.resize((max(1, int(w * k)), max(1, int(h * k))), Image.LANCZOS)
     img = ImageOps.autocontrast(img, cutoff=0.5)
     pal = Image.new("P", (1, 1))

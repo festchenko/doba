@@ -61,7 +61,7 @@ severe bleeding from a limb.</p><h2>Use</h2><p>Apply 5–7 cm above the wound.</
 Для розжига нужна растопка: береста, сухие ветки.</p><h2>Виды</h2>
 <ul><li>Шалаш</li><li>Звёздный</li><li>Нодья — горит всю ночь.</li></ul>
 <h2>Примечания</h2><p>НЕ ДОЛЖНО ПОЯВИТЬСЯ</p></body></html>"""),
-    ("Knots", "Knots", """<html><body><p>A knot is a method of fastening cordage; the bowline makes a fixed loop
+    ("Knots", "Knots", """<html class="vector-feature-toc-pinned-clientpref-0"><body class="skin-vector mediawiki"><p>A knot is a method of fastening cordage; the bowline makes a fixed loop
 that will not slip under load and is easy to untie afterwards.</p>
 <figure><img src="_assets_/bowline.png" width="300" height="200"><figcaption>The bowline, tied.</figcaption></figure>
 <p>An icon <img src="_assets_/bowline.png" width="16" height="16"> stays out.</p></body></html>"""),
