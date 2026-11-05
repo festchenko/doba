@@ -55,6 +55,30 @@ Every change is marked `// DOBA:` in the sources.
   PSRAM, word-wrapped and paged; tap left/right half to turn pages.
 - Console: `screen home|comms|compose|library`.
 
+## SETTINGS and POSITION (`doba_ui.cpp`, `doba_points.*`, `milgeo` parse)
+- SETTINGS (the HOME tile): radio, band (cycles EU_868, UA_868, EU_433,
+  UA_433, US, RU), mode, callsign typed on the device (short name = first four
+  letters), 60-00 / 6400 mils, light, time zone. MORE opens OTP's settings.
+- POSITION: own MGRS / lat-lon / height, MARK HERE, ADD GRID (MGRS typed in,
+  zone and square prefilled from the fix, at least 4 digits), the points with
+  azimuth (mils) and distance. A point: north-up dial, azimuth, distance, its
+  height and the climb (DEM), GO TO / DELETE. GO TO: a dashed line on the map,
+  a name tag where it leaves the screen, AZ and distance in the strip.
+- Points live in `/doba/points.txt` (`name;lat;lon` per line).
+- Defaults: TZ UTC+1, callsign "Doba xxxx".
+
+## Ground height (`doba_dem.*`, `maps/dempack.py`)
+- `/doba/dem/N52E006.dem`: 1x1 degree, ~90 m samples, delta-coded zlib blocks
+  of 100x100. Every GPS fix looks it up and sets `mapElevation`, which the
+  altitude field, the strip and POSITION prefer over GPS height.
+
+## Library links and documents
+- `zim2doba.py` keeps in-book links; the reader underlines them, follows by
+  exact title, Home goes back (16 deep). PREV / NEXT footer pages.
+- Every article ends "Source: …" (`source=` in info.txt).
+- `library/docs2doba.py`: PDF (split per bookmark chapter, contents article
+  with links, chapters indexed by their bare names), EPUB, HTML, MD, TXT.
+
 ## Contour background (`src/doba_topo_bg.*`)
 - A made-up landscape contoured like a topo sheet (every 5th line 2 px) behind
   HOME, COMMS, the LIBRARY search and below the boot log. Drawn after the

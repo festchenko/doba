@@ -146,3 +146,37 @@ def test_ground_height_comes_from_the_card_dem(doba):
     # Off the card's ground: no height (and GPS altitude remains the fallback).
     doba.gps(50.5, 6.6, alt=999)
     doba.wait_status(lambda s: s["ride"].get("ground_m") == -99999, timeout=8)
+
+
+def test_a_manual_pdf_becomes_chapters_found_by_their_own_words(doba, tmp_path):
+    """library/docs2doba.py: a PDF with bookmarks -> contents + one article a
+    chapter, each also indexed by its bare name ("Shelter")."""
+    pymupdf = pytest.importorskip("pymupdf")
+    src = tmp_path / "in"
+    src.mkdir()
+    doc = pymupdf.open()
+    toc = []
+    for i, (h, body) in enumerate([("Chapter 1 Basics", "Plan and stay calm."),
+                                   ("Chapter 2 Shelter", "Build it before dark, out of the wind."),
+                                   ("Chapter 3 Water", "Boil it for one minute.")]):
+        p = doc.new_page()
+        p.insert_text((72, 90), h, fontsize=18)
+        for k in range(5):
+            p.insert_text((72, 130 + 16 * k), body, fontsize=10)
+        toc.append([1, h, i + 1])
+    doc.set_toc(toc)
+    doc.set_metadata({"title": "FM 21-76 Survival"})
+    doc.save(str(src / "fm.pdf"))
+    out = os.path.join(doba.sd, "doba", "lib", "manuals")
+    subprocess.run([sys.executable, os.path.join(LIB, "docs2doba.py"), str(src), out, "--name", "Manuals",
+                    "--source", "US Army · public domain"], check=True, capture_output=True)
+    boot(doba)
+    doba.console("screen library", 800)
+    time.sleep(0.6)
+    for c in "shel":
+        doba.tap(*key(c))
+        time.sleep(0.2)
+    time.sleep(0.6)
+    since = doba.log_seq()
+    doba.tap(200, TOP + 146 + 29)
+    doba.wait_log(r"\[lib\] open 'Shelter'", since=since)

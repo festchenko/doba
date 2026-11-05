@@ -21,7 +21,10 @@ import time
 import zlib
 from html.parser import HTMLParser
 
-from libzim.reader import Archive
+try:
+    from libzim.reader import Archive
+except ImportError:          # docs2doba imports the HTML cleaner without libzim
+    Archive = None
 
 from dobafold import KEY_BYTES, fold
 

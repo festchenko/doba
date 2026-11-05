@@ -9,7 +9,7 @@ maps/       конвейер карт: OSM + рельеф → тайлы 4 би�
 firmware/   прошивка: форк OpenTrailPaper (Apache 2.0) + слой топокарты
 release/    готовые образы прошивки
 tools/      прошивка и подготовка SD-карты с Mac
-library/    библиотека: ZIM (Kiwix) → лёгкий формат для ESP32
+library/    библиотека: ZIM (Kiwix), PDF/EPUB/MD → лёгкий формат для ESP32
 ```
 
 ## День прошивки (когда приедет устройство)
@@ -25,6 +25,7 @@ library/    библиотека: ZIM (Kiwix) → лёгкий формат дл
    tools/prepare-sd-mac.sh format disk4        # номер диска из list!
    DOBA_BUILD=/Volumes/SSD/doba maps/make-region.sh groenlo
    tools/prepare-sd-mac.sh copy /Volumes/SSD/doba/tiles/groenlo
+   tools/prepare-sd-mac.sh copy-dem /Volumes/SSD/doba/dem-pack   # высоты рельефа
    ```
 3. **Библиотека** (по желанию, можно позже):
    ```bash
@@ -34,7 +35,20 @@ library/    библиотека: ZIM (Kiwix) → лёгкий формат дл
    tools/prepare-sd-mac.sh copy-lib /Volumes/SSD/doba/lib
    ```
    Список книг — в начале `library/fetch_zims.sh`. Википедия EN без картинок ≈ 50 ГБ ZIM, конвертация идёт часами.
-4. **Проверить.** Вставить карту, включить — откроется главный экран (8 плиток). Кнопка Home: главный ↔ карта. Выйти на улицу за GPS. COMMS → TURN ON → WRITE — сообщение в эфир Meshtastic с экранной клавиатуры (EN/RU/UA). LIBRARY — поиск по началу названия.
+
+   **Наставления и свои файлы** (PDF, EPUB, HTML, MD, TXT) — отдельными книгами, PDF режутся по главам:
+   ```bash
+   pip3 install pymupdf
+   python3 library/docs2doba.py ~/Doba/manuals /Volumes/SSD/doba/lib/manuals --name "Manuals" --source "US Army / FEMA · public domain"
+   python3 library/docs2doba.py ~/Doba/my-files /Volumes/SSD/doba/lib/mine --name "My files"
+   ```
+   Какие наставления брать и где — `library/manuals.md`.
+4. **Проверить.** Вставить карту, включить — откроется главный экран (8 плиток). Кнопка Home: главный ↔ карта, на остальных экранах — «назад».
+   - SETTINGS: радио, диапазон (EU_868 / UA_868 …), позывной, тысячные, подсветка, часовой пояс.
+   - POSITION: своя MGRS, MARK HERE, ADD GRID (ввод MGRS), список точек с азимутом в тысячных и дистанцией; GO TO — пунктир к точке на карте.
+   - COMMS → TURN ON → WRITE — сообщение в эфир Meshtastic с экранной клавиатуры (EN/RU/UA).
+   - LIBRARY — поиск по началу названия; подчёркнутые ссылки открывают статью, Home — назад.
+   - Высота берётся из рельефа на карте памяти (`/doba/dem`), если он есть, иначе из GPS.
 5. **Калибровка серого.** По USB в консоли (`screen /dev/cu.usbmodem* 115200` или Serial Monitor) ввести `greytest` — на экране 16 полос. Сфотографировать: по фото подстроим стиль карты под реальную панель.
 
 Что делает прошивка сейчас — в `firmware/DOBA.md`.
