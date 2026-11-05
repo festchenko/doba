@@ -7,7 +7,8 @@ into <out>/<section>/<title>.pdf|.html, ready for docs2doba.py.
         --source "US Government · public domain" --titles-from-filenames
 
 Pages already downloaded are kept; failures are listed at the end (rerun to
-retry). Run it where the agency sites are reachable (a normal internet line).
+retry). --save asks the Internet Archive to capture a page it has no copy of
+(for agency sites that turn scripts away) and takes that copy. Run it where the agency sites are reachable (a normal internet line).
 """
 import os
 import re
@@ -47,8 +48,12 @@ def safe(name):
     return re.sub(r'[/\\\\:*?"<>|]+', " ", name).strip()
 
 
+SAVE = "--save" in sys.argv     # ask the Archive to capture pages it lacks
+
+
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else "build/gov"
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    out = args[0] if args else "build/gov"
     failed = []
     for sec, agency, title, url in entries():
         ext = ".pdf" if url.split()[0].lower().split("?")[0].endswith(".pdf") else ".html"
@@ -65,6 +70,18 @@ def main():
             ok = fetch(src, dest + ".part", ext)
             if ok:
                 break
+        if not ok and SAVE:
+            # Nobody archived it yet: ask the Internet Archive to fetch the
+            # agency's page now (it is let in where scripts are not), then
+            # take that copy.
+            for u in urls:
+                time.sleep(8)
+                subprocess.run(["curl", "-s", "-o", "/dev/null", "-m", "120", "-A", UA,
+                                "https://web.archive.org/save/" + u])
+                time.sleep(20)
+                ok = fetch(WAYBACK + u, dest + ".part", ext)
+                if ok:
+                    break
         if ok:
             os.replace(dest + ".part", dest)
             print(f"ok    {sec:9} {title}")
