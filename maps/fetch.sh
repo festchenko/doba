@@ -59,9 +59,12 @@ getsrc https://github.com/acalcutt/osm-lakelines/releases/download/v12/lake_cent
 MBT="$BUILD/$NAME.mbtiles"
 if [ ! -f "$MBT" ]; then
   echo "== building vector tiles (Planetiler)"
+  # Its temp files are memory-mapped: keep them off exFAT/FAT external disks.
+  mkdir -p "${PLANETILER_TMP:-$HOME/.doba-tools/planetiler-tmp}"
   java -Xmx"${PLANETILER_RAM:-4g}" -jar "$JAR" \
     --osm_path="$PBF" \
     --download --download_dir="$BUILD/sources" --http_timeout=300s \
+    --tmpdir="${PLANETILER_TMP:-$HOME/.doba-tools/planetiler-tmp}" \
     --download_osm_tile_weights=false \
     --bounds="$BBOX" --maxzoom=14 \
     --output="$MBT" --force
