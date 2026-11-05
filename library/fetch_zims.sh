@@ -43,7 +43,15 @@ if [ "${1:-}" = "convert" ]; then
     [ -n "$zim" ] || { echo "skip $id: no zim"; continue; }
     [ -f "$OUT/$id/index.dti" ] && { echo "skip $id: done"; continue; }
     echo "== $id <- $(basename "$zim")"
-    python3 zim2doba.py "$zim" "$OUT/$id" --name "$name" --source "$source"
+    # zimgit-* collections are PDFs behind a little web app: unpack, then docs2doba.
+    tmp="$OUT/.src-$id"
+    rm -rf "$tmp"
+    if python3 nautilus2dir.py "$zim" "$tmp" >/dev/null 2>&1; then
+      python3 docs2doba.py "$tmp" "$OUT/$id" --name "$name" --source "$source" --titles-from-filenames
+      rm -rf "$tmp"
+    else
+      python3 zim2doba.py "$zim" "$OUT/$id" --name "$name" --source "$source"
+    fi
   done
   echo "books in $OUT — copy to the card: tools/prepare-sd-mac.sh copy-lib $OUT"
   exit 0
