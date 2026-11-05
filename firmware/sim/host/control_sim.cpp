@@ -262,6 +262,7 @@ std::string statusJson() {
       << ",\"distance_m\":" << s.distanceM << ",\"elapsed_s\":" << s.elapsedS << ",\"moving_s\":" << s.movingS
       << ",\"speed_kmh\":" << s.speedKmh << ",\"gps_fix\":" << (s.gpsFix ? "true" : "false")
       << ",\"lat\":" << s.latitude << ",\"lon\":" << s.longitude << ",\"sats\":" << (int)s.satellites
+      << ",\"ground_m\":" << (s.mapElevationValid ? s.mapElevationM : -99999.0f)   // DOBA: DEM
       << ",\"time_valid\":" << (s.timeValid ? "true" : "false")
       << ",\"utc\":" << (long long)s.utc
       << ",\"card_full\":" << (s.cardFull ? "true" : "false")

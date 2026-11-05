@@ -16,6 +16,7 @@
 #include "milgeo.h"
 #include "milspec.h"
 #include "doba_points.h"
+#include "doba_dem.h"
 #include "ride_state.h"
 #include "settings.h"
 #include "ui_render.h"
@@ -310,6 +311,11 @@ bool here(const RideState& s, double& lat, double& lon) {
     return true;
 }
 
+// Height: barometer, else the card's DEM, else GPS.
+float groundAlt(const RideState& s) {
+    return s.baroValid ? s.baroAltM : s.mapElevationValid ? s.mapElevationM : s.altitudeM;
+}
+
 // "12-34" / "1234" and degrees.
 void azText(double deg, char* out, size_t n) {
     char m[8];
@@ -470,7 +476,7 @@ void renderPoints(const RideState& s, uint8_t* fb) {
     ui::text(ui::font(ui::F_BODY_H), 14, TOP + 76, have ? m : "NO FIX YET", fb, EPD_DRAW_ALIGN_LEFT, INK);
     char ll[64];
     if (have) snprintf(ll, sizeof ll, "%c%.5f %c%.5f  ALT %dm  SAT %d", lat >= 0 ? 'N' : 'S', fabs(lat),
-                       lon >= 0 ? 'E' : 'W', fabs(lon), (int)lroundf(s.altitudeM), s.satellites);
+                       lon >= 0 ? 'E' : 'W', fabs(lon), (int)lroundf(groundAlt(s)), s.satellites);
     else snprintf(ll, sizeof ll, "waiting for satellites · SAT %d", s.satellites);
     ui::text(ui::font(ui::F_SMALL), 14, TOP + 116, ll, fb, EPD_DRAW_ALIGN_LEFT, INK);
     if (g_pointsNote) {
@@ -610,6 +616,14 @@ void renderPoint(const RideState& s, uint8_t* fb) {
         ui::text(ui::font(ui::F_SMALL), tx, dialY - 12, deg, fb, EPD_DRAW_ALIGN_LEFT, INK);
         ui::text(ui::font(ui::F_TINY), tx, dialY + 42, "DISTANCE", fb, EPD_DRAW_ALIGN_LEFT, INK);
         ui::text(ui::font(ui::F_TITLE), tx, dialY + 88, ds, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        // Height of the point (DEM) and the climb to it.
+        float pz;
+        if (doba_dem::height(p->lat, p->lon, pz)) {
+            char hz[48];
+            const int dz = (int)lroundf(pz - groundAlt(s));
+            snprintf(hz, sizeof hz, "HEIGHT %dm  (%+dm)", (int)lroundf(pz), dz);
+            ui::text(ui::font(ui::F_SMALL), tx, dialY + 126, hz, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        }
         if (!s.gpsFix)
             ui::text(ui::font(ui::F_TINY), W / 2, dialY + dialR + 40, "from the last fix", fb, EPD_DRAW_ALIGN_CENTER, INK);
     } else {

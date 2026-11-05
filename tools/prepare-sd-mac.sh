@@ -5,6 +5,7 @@
 #   tools/prepare-sd-mac.sh format disk4                 # ERASES disk4 -> FAT32 "DOBA"
 #   tools/prepare-sd-mac.sh copy /path/to/tiles/groenlo  # copy packs to /Volumes/DOBA
 #   tools/prepare-sd-mac.sh copy-lib /path/to/lib        # copy library books
+#   tools/prepare-sd-mac.sh copy-dem /path/to/dem-pack   # copy ground heights
 #
 # The device reads only FAT32 (not exFAT, which cards over 32 GB come with).
 set -euo pipefail
@@ -33,6 +34,15 @@ case "${1:-}" in
     find "$DST" -name '._*' -delete 2>/dev/null || true
     echo "== on the card:"; du -sh "$DST/doba/map"
     ;;
+  copy-dem)
+    SRC="${2:?usage: copy-dem <dir of .dem files>}"
+    DST="${3:-/Volumes/DOBA}"
+    mkdir -p "$DST/doba/dem"
+    rsync -rt --progress --include '*.dem' --exclude '*' "$SRC/" "$DST/doba/dem/"
+    dot_clean -m "$DST" 2>/dev/null || true
+    find "$DST" -name '._*' -delete 2>/dev/null || true
+    echo "== on the card: $(ls "$DST/doba/dem" | wc -l | tr -d ' ') degree files, $(du -sh "$DST/doba/dem" | cut -f1)"
+    ;;
   copy-lib)
     SRC="${2:?usage: copy-lib <dir with one folder per book>}"
     DST="${3:-/Volumes/DOBA}"
@@ -43,5 +53,5 @@ case "${1:-}" in
     echo "== on the card:"; du -sh "$DST/doba/lib"/*
     ;;
   *)
-    sed -n 2,10p "$0"; exit 1 ;;
+    sed -n 2,11p "$0"; exit 1 ;;
 esac

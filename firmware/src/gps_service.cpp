@@ -1,4 +1,5 @@
 #include "gps_service.h"
+#include "doba_dem.h"   // DOBA
 
 #include <Arduino.h>
 #include <TinyGPS++.h>
@@ -773,7 +774,17 @@ void task(void*) {
         }
 
         if (gps.location.isUpdated() && gps.location.isValid()) {
-            routes::updateProgress(gps.location.lat(), gps.location.lng());
+            const double la = gps.location.lat(), lo = gps.location.lng();
+            routes::updateProgress(la, lo);
+            // DOBA: ground height from the card's DEM (outside the state lock:
+            // it may read the card). Feeds mapElevation, which the altitude
+            // field prefers and the barometer, if fitted, calibrates from.
+            float m = 0;
+            const bool ok = doba_dem::height(la, lo, m);
+            g_state.with([&](RideState& s) {
+                s.mapElevationValid = ok;
+                if (ok) s.mapElevationM = m;
+            });
         }
         if (gps.location.isUpdated() || gps.satellites.isUpdated()) {
             g_state.with([](RideState& s) {

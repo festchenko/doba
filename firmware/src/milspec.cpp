@@ -263,7 +263,9 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
         snprintf(az, sizeof az, "AZ --");
     }
     char row[64];
-    if (fix) snprintf(row, sizeof row, "ALT %4dm  %s  SAT %d", (int)lroundf(s.altitudeM), az, s.satellites);
+    // DOBA: ground height from the DEM when the card has it, else GPS.
+    const float alt = s.baroValid ? s.baroAltM : s.mapElevationValid ? s.mapElevationM : s.altitudeM;
+    if (fix) snprintf(row, sizeof row, "ALT %4dm  %s  SAT %d", (int)lroundf(alt), az, s.satellites);
     else     snprintf(row, sizeof row, "NO FIX  SAT %d", s.satellites);
     ui::text(&Mono_M, x0, top + 122, row, fb, EPD_DRAW_ALIGN_LEFT, 0x00);
     (void)map;

@@ -27,6 +27,7 @@
 #include "doba_ui.h"      // DOBA
 #include "milspec.h"      // DOBA
 #include "doba_points.h" // DOBA
+#include "doba_dem.h"    // DOBA
 #include "doba_library.h" // DOBA
 #include "map_tiles.h"
 #include "map_store.h"
@@ -3453,7 +3454,7 @@ void task(void*) {
         bool host = usb_storage::hostActive();
         if (lastHostActive && !host) {
             applySdUpdate();
-            map_store::rescanCard(); doba_lib::rescan(); doba_points::rescan();  // DOBA   // it may have added/removed maps too
+            map_store::rescanCard(); doba_lib::rescan(); doba_points::rescan(); doba_dem::rescan();  // DOBA   // it may have added/removed maps too
         }
         lastHostActive = host;
 
@@ -3475,7 +3476,7 @@ void task(void*) {
             }
             routes::begin();
             segments::begin();
-            map_store::rescanCard(); doba_lib::rescan(); doba_points::rescan();  // DOBA
+            map_store::rescanCard(); doba_lib::rescan(); doba_points::rescan(); doba_dem::rescan();  // DOBA
             applySdUpdate();      // a firmware.bin may have been on the card
             usb_storage::begin(); // no-op if it already came up
         }

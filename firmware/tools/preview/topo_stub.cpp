@@ -18,3 +18,6 @@ const Point* at(int) { return nullptr; }
 int target() { return -1; }
 void formatDistance(double, char* out, size_t n) { if (n) out[0] = 0; }
 }
+
+#include "doba_dem.h"
+namespace doba_dem { bool height(double, double, float&) { return false; } void rescan() {} }

@@ -656,7 +656,7 @@ void dashFieldValue(uint8_t field, const RideState& s, char* val, size_t valCap,
                 snprintf(val, valCap, "%.0f", units::elev(s.baroAltM, s.useMiles));
             else if (s.mapElevationValid)
                 snprintf(val, valCap, "%.0f", units::elev(s.mapElevationM, s.useMiles));
-            else if (s.gpsFix)   // DOBA: topo maps carry no DEM yet; GPS beats nothing
+            else if (s.gpsFix)   // DOBA: no DEM file for this ground (/doba/dem): GPS height
                 snprintf(val, valCap, "%.0f", units::elev(s.altitudeM, s.useMiles));
             else snprintf(val, valCap, "--");
             *unit = units::elevLabel(s.useMiles);

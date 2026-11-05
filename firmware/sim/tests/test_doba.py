@@ -118,3 +118,31 @@ def test_settings_change_the_band_on_the_device(doba):
     freq(lambda f: abs(f - 869.525) < 1e-3)
     doba.tap(270, TOP + 8 + 86 * 1 + 40)                    # BAND: EU_868 -> UA_868
     freq(lambda f: 868.0 <= f <= 868.6)
+
+
+def test_ground_height_comes_from_the_card_dem(doba):
+    """maps/dempack.py file on the card -> the state's map elevation at the fix."""
+    sys.path.insert(0, os.path.join(HERE, "..", "..", "..", "maps"))
+    import numpy as np
+    import dempack
+    n = 1200
+    k = np.linspace(0, 1, n)
+    x, y = np.meshgrid(k, k)
+    h = (40 + 300 * np.exp(-((x - 0.4) ** 2 + (y - 0.6) ** 2) * 12)).astype(np.float32)
+    os.makedirs(os.path.join(doba.sd, "doba", "dem"), exist_ok=True)
+    with open(os.path.join(doba.sd, "doba", "dem", "N52E006.dem"), "wb") as f:
+        f.write(dempack.encode(h, 52, 6))
+    boot(doba)
+    lat, lon = 52.0421, 6.6170
+    doba.gps(lat, lon, alt=999)
+    fi, fj = (53 - lat) * n - 0.5, (lon - 6) * n - 0.5
+    i0, j0 = int(fi), int(fj)
+    di, dj = fi - i0, fj - j0
+    r = np.rint(h)
+    want = ((r[i0, j0] * (1 - dj) + r[i0, j0 + 1] * dj) * (1 - di)
+            + (r[i0 + 1, j0] * (1 - dj) + r[i0 + 1, j0 + 1] * dj) * di)
+    st = doba.wait_status(lambda s: s["ride"].get("ground_m", -99999) > -99999, timeout=8)
+    assert abs(st["ride"]["ground_m"] - want) < 0.6, (st["ride"]["ground_m"], want)
+    # Off the card's ground: no height (and GPS altitude remains the fallback).
+    doba.gps(50.5, 6.6, alt=999)
+    doba.wait_status(lambda s: s["ride"].get("ground_m") == -99999, timeout=8)
