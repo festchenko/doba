@@ -67,7 +67,8 @@ if [ ! -f "$MBT" ]; then
     --tmpdir="${PLANETILER_TMP:-$HOME/.doba-tools/planetiler-tmp}" \
     --download_osm_tile_weights=false \
     --bounds="$BBOX" --maxzoom=14 \
-    --output="$MBT" --force
+    --output="$BUILD/$NAME.part.mbtiles" --force
+  mv "$BUILD/$NAME.part.mbtiles" "$MBT"   # only a finished build counts
 fi
 
 # --- elevation (Copernicus GLO-30, public on AWS) -------------------------------
