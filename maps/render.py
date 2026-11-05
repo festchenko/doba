@@ -569,7 +569,11 @@ def render_job(args):
     else:
         cz, (cx, cy) = CELL_Z, job
         zooms = range(max(zmin, CELL_Z + 1), zmax + 1)
-    writer = PackWriter(pack_path(opts["out"], cz, cx, cy), cz, cx, cy)
+    final = pack_path(opts["out"], cz, cx, cy)
+    if os.path.exists(final):          # resumable: finished packs are kept
+        return job, 0
+    os.makedirs(os.path.dirname(final), exist_ok=True)
+    writer = PackWriter(final + ".part", cz, cx, cy)
     count = 0
     for z in zooms:
         bx0, by0, bx1, by1 = tile_range(bbox, z)
@@ -593,6 +597,7 @@ def render_job(args):
                         writer.add(z, x, y, lv)
                         count += 1
     writer.close()
+    os.replace(final + ".part", final)
     return job, count
 
 

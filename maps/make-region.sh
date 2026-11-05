@@ -10,7 +10,7 @@ REGION="${1:?usage: make-region.sh <region>   (see regions/*.env)}"
 source "regions/${REGION}.env"
 BUILD="${DOBA_BUILD:-build}"
 ./fetch.sh "$REGION"
-python3 render.py --mbtiles "$BUILD/$NAME.mbtiles" --dem "$BUILD/dem" \
+python3 render.py --mbtiles "$BUILD/$NAME.mbtiles" --dem "$BUILD/dem" --jobs "${RENDER_JOBS:-6}" \
   --bbox "$BBOX" --zoom "$ZOOM" --out "$BUILD/tiles/$NAME"
 python3 dempack.py --dem "$BUILD/dem" --bbox "$BBOX" --out "$BUILD/dem-pack"
 IFS=, read -r W S E N <<< "$BBOX"
