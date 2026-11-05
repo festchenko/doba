@@ -5,3 +5,4 @@ scikit-image
 rasterio
 mapbox-vector-tile
 shapely
+pyshp

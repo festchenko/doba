@@ -33,13 +33,36 @@ if [ ! -f "$PBF" ]; then
   mv "$PBF.part" "$PBF"
 fi
 
+# --- Planetiler's own sources (water, lakes, Natural Earth) ---------------------
+# Fetched here with resumable curl: Planetiler's built-in downloader gives up
+# after 30 s on a slow or shared line.
+getsrc() {   # url file
+  [ -f "$BUILD/sources/$2" ] && return 0
+  echo "== downloading $2"
+  for i in 1 2 3; do
+    curl -fL --retry 5 --retry-delay 10 -C - -o "$BUILD/sources/$2.part" "$1" && \
+      mv "$BUILD/sources/$2.part" "$BUILD/sources/$2" && return 0
+    sleep 15
+  done
+  return 1
+}
+if ! getsrc https://osmdata.openstreetmap.de/download/water-polygons-split-3857.zip water-polygons-split-3857.zip; then
+  echo "!! osmdata.openstreetmap.de unreachable: using placeholder ocean polygons (fine inland;"
+  echo "   for coasts delete $BUILD/sources/water-polygons-split-3857.zip and rerun later)"
+  python3 -c "import shapefile" 2>/dev/null || python3 -m pip install -q pyshp
+  python3 placeholder_water.py "$BUILD/sources/water-polygons-split-3857.zip"
+fi
+getsrc https://naciscdn.org/naturalearth/packages/natural_earth_vector.sqlite.zip natural_earth_vector.sqlite.zip
+getsrc https://github.com/acalcutt/osm-lakelines/releases/download/v12/lake_centerline.shp.zip lake_centerline.shp.zip
+
 # --- vector tiles ---------------------------------------------------------------
 MBT="$BUILD/$NAME.mbtiles"
 if [ ! -f "$MBT" ]; then
   echo "== building vector tiles (Planetiler)"
   java -Xmx"${PLANETILER_RAM:-4g}" -jar "$JAR" \
     --osm_path="$PBF" \
-    --download --download_dir="$BUILD/sources" \
+    --download --download_dir="$BUILD/sources" --http_timeout=300s \
+    --download_osm_tile_weights=false \
     --bounds="$BBOX" --maxzoom=14 \
     --output="$MBT" --force
 fi
