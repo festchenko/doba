@@ -64,10 +64,10 @@ class Books:
         t = self.titles(book)
         if title.endswith("*"):
             pre = fold(title[:-1])
-            for k in self.sorted[book]:
-                if k.startswith(pre):
-                    return t[k]
-            return None
+            hits = [t[k] for k in self.sorted[book] if k.startswith(pre)]
+            # A whole document (its contents page) before one of its chapters.
+            whole = [h for h in hits if " — " not in h]
+            return (whole or hits or [None])[0]
         return t.get(fold(title))
 
     def first(self, cands):

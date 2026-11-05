@@ -34,7 +34,7 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, 
 def fetch(url, part, ext):
     if url.startswith(WAYBACK):
         time.sleep(8)    # the Archive shuts its door on more than ~15 requests a minute
-    r = subprocess.run(["curl", "-fsSL", "--retry", "2", "-m", "300", "-A", UA, "-o", part, url])
+    r = subprocess.run(["curl", "-fsSL", "--compressed", "--retry", "2", "-m", "300", "-A", UA, "-o", part, url])
     ok = r.returncode == 0 and os.path.exists(part) and os.path.getsize(part) > 2000
     if ok and ext == ".pdf":
         ok = open(part, "rb").read(5) == b"%PDF-"

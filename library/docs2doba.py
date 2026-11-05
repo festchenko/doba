@@ -74,7 +74,7 @@ def split_long(title, text):
 # --- readers: each returns [(title, text)] ---------------------------------------
 
 def read_txt(path, title):
-    raw = open(path, "rb").read().decode("utf-8", "replace")
+    raw = read_text(path)
     md = path.lower().endswith((".md", ".markdown"))
     lines, para = [], []
 
@@ -108,8 +108,17 @@ def strip_links(text):
     return re.sub("\x01([^\x02]*)\x02[^\x03]*\x03", r"\1", text)
 
 
+def read_text(path):
+    """A text file as str; gzip-compressed copies (as web archives store them) too."""
+    data = open(path, "rb").read()
+    if data[:2] == b"\x1f\x8b":
+        import gzip
+        data = gzip.decompress(data)
+    return data.decode("utf-8", "replace")
+
+
 def read_html(path, title):
-    raw = open(path, "rb").read().decode("utf-8", "replace")
+    raw = read_text(path)
     m = re.search(r"<title[^>]*>(.*?)</title>", raw, re.S | re.I)
     if m and clean(html.unescape(m.group(1))) and not TITLES_FROM_FILENAMES:
         title = clean(html.unescape(m.group(1)))
@@ -148,6 +157,41 @@ def read_epub(path, title):
         body += [ln for ln in t.split("\n")[1:] if ln]
     text = "\n".join(["T" + title] + body)
     return split_long(title, text)
+
+
+def short_title(title):
+    """What a chapter's title starts with: the publication number if there is
+    one ("ATP 4-02.11"), else the title cut to a few words. Keys are 55 bytes,
+    so the chapter's own name has to fit after it."""
+    m = re.match(r"^((?:FM|ATP|TC|TM|ADP|GTA|AIB|MCRP|AFH|NAVEDTRA|OSHA)\s*[\d][\w.\-]*)", title)
+    if m:
+        return m.group(1)
+    t = re.sub(r"(\s*\([^)]*\))+\s*$", "", title).strip()
+    head = re.split(r"[:?—–]|\s{2,}", t)[0].strip()
+    if 3 <= len(head) <= 28:
+        return head
+    cut = t[:28].rsplit(" ", 1)[0]
+    return cut or t[:28]
+
+
+def heading_marks(pages, body):
+    """Chapters from the print itself when the bookmarks don't give them: the
+    largest heading size that starts between 8 and 80 sections."""
+    by_size = {}
+    for pno, (h, blocks) in enumerate(pages):
+        for size, text, bbox in blocks:
+            t = clean(text)
+            if size < body * 1.35 or not t or len(t) > 90 or bbox[1] < h * 0.04:
+                continue
+            if re.search(r"(?i)intentionally left blank|^contents$|^\W*$|^[\divxlc\-–. ]+$", t):
+                continue
+            seen = by_size.setdefault(round(size), {})
+            seen.setdefault(t.lower(), (pno, t))
+    for size in sorted(by_size, reverse=True):
+        heads = sorted(by_size[size].values())
+        if 8 <= len(heads) <= 80:
+            return [(p, t, 1) for p, t in heads]
+    return []
 
 
 def read_pdf(path, title):
@@ -201,12 +245,16 @@ def read_pdf(path, title):
         return out
 
     toc = [(lvl, clean(t), p - 1) for lvl, t, p in doc.get_toc(simple=True) if clean(t) and p >= 1]
+    # Bookmarks for figures and tables ("Figure_Burn1d", "Table 2-1") are not chapters.
+    toc = [m for m in toc if not re.match(r"(?i)^(fig(ure)?|table|tab)\b|^\S*_\S*$", m[1])]
     # Chapters: the bookmarks at the top one or two levels, if there are enough.
     marks = []
     if toc:
         top = min(l for l, _, _ in toc)
         marks = [m for m in toc if m[0] <= top + 1]
         marks = sorted({(p, t, l) for l, t, p in marks})
+    if len(marks) < 3:
+        marks = heading_marks(pages, body)
     if len(marks) < 3:
         lines = [ln for p in range(len(pages)) for ln in page_lines(p)]
         return split_long(title, lines_to_text(title, lines))
@@ -219,10 +267,15 @@ def read_pdf(path, title):
     for i, (p, t, lvl) in enumerate(marks):
         end = max(starts[i + 1], p + 1) if starts[i + 1] > p else p + 1
         lines = [ln for q in range(p, min(end, len(pages))) for ln in page_lines(q)]
-        at = f"{title} — {t}"
-        while fold(at) in seen:
-            at += " ·"
-        seen.add(fold(at))
+        at = f"{short_title(title)} — {t}"
+        # Unique by the whole title: a long one's key is cut at 55 bytes, so a
+        # suffix there would never change it.
+        n = 2
+        base = at
+        while fold(at, 10**6) in seen:
+            at = f"{base} ({n})"
+            n += 1
+        seen.add(fold(at, 10**6))
         if not lines:
             continue
         parts = split_long(at, lines_to_text(at, lines))
@@ -307,9 +360,11 @@ def main():
             if len(text) < len(t) + 20:
                 continue
             t0 = t
-            while fold(t) in used:
-                t += " ·"
-            used.add(fold(t))
+            k, base = 2, t
+            while fold(t, 10**6) in used:
+                t = f"{base} ({k})"
+                k += 1
+            used.add(fold(t, 10**6))
             renamed[t0] = t
             articles.append((t, text))
             n += 1
