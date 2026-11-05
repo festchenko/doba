@@ -29,7 +29,7 @@ constexpr int MAX_BOOKS = 12;
 constexpr int RESULTS = 6;
 const char* kRoot = "/doba/lib";
 
-struct Book { char dir[32]; char name[40]; uint32_t count; };
+struct Book { char dir[32]; char name[40]; char source[64]; uint32_t count; };
 Book g_books[MAX_BOOKS];
 int g_bookCount = -1;      // -1 = not scanned yet
 int g_book = 0;
@@ -48,8 +48,31 @@ Line* g_lines = nullptr;
 int g_lineCount = 0, g_lineCap = 0;
 int g_page = 0;
 constexpr int MAX_PAGES = 4096;
+constexpr int FOOT_H = 76;     // PREV / NEXT
 int* g_pageStarts = nullptr;   // PSRAM: keeps 16 KB out of internal RAM
 int g_pageCount = 0;
+
+// Links in the open article, cut out of the text when it opens: the visible
+// words stay in g_text, the targets go to g_targets.
+struct Link { uint32_t start, end, target; };   // [start, end) in g_text
+constexpr int MAX_LINKS = 6000;
+constexpr size_t TARGETS_CAP = 192 * 1024;
+Link* g_links = nullptr;
+int g_linkCount = 0;
+char* g_targets = nullptr;
+size_t g_targetsLen = 0;
+// Where the links on the page on screen are, for taps.
+struct Hot { int16_t x0, y0, x1, y1; int link; };
+constexpr int MAX_HOT = 96;
+Hot g_hot[MAX_HOT];
+int g_hotCount = 0;
+const char* g_note = nullptr;   // one-off line in the footer ("not in this book")
+// Back through followed links.
+struct Visit { Result r; int book; int page; };
+constexpr int HISTORY = 16;
+Visit g_history[HISTORY];
+int g_historyCount = 0;
+Result g_current = {};
 
 uint32_t rd32(const uint8_t* p) {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
@@ -124,6 +147,7 @@ void scan() {
             ix.close();
             if (!ok) continue;
             b.count = rd32(h + 8);
+            b.source[0] = 0;
             snprintf(b.name, sizeof b.name, "%s", b.dir);
             snprintf(path, sizeof path, "%s/%s/info.txt", kRoot, b.dir);
             File info = SD.open(path, FILE_READ);
@@ -131,13 +155,17 @@ void scan() {
                 char buf[256] = {};
                 info.read((uint8_t*)buf, sizeof buf - 1);
                 info.close();
-                char* n = strstr(buf, "name=");
-                if (n) {
-                    n += 5;
-                    char* e = strpbrk(n, "\r\n");
-                    if (e) *e = 0;
-                    snprintf(b.name, sizeof b.name, "%s", n);
-                }
+                auto field = [&](const char* key, char* out, size_t cap) {
+                    char* n = strstr(buf, key);
+                    if (!n) return;
+                    n += strlen(key);
+                    const char* e = strpbrk(n, "\r\n");
+                    const size_t len = e ? (size_t)(e - n) : strlen(n);
+                    snprintf(out, cap, "%.*s", (int)len, n);
+                };
+                b.source[0] = 0;
+                field("name=", b.name, sizeof b.name);
+                field("source=", b.source, sizeof b.source);
             }
             ++g_bookCount;
         }
@@ -216,14 +244,14 @@ bool inflateTo(const uint8_t* src, size_t len, char* dst, size_t cap, size_t* ou
 
 const EpdFont* fontFor(uint8_t kind) {
     return (kind == 'T' || kind == 'H') ? ui::font(ui::F_BODY_H)
-         : kind == 'S' ? ui::font(ui::F_KEY) : ui::font(ui::F_BODY);
+         : kind == 'S' ? ui::font(ui::F_KEY) : kind == 'F' ? ui::font(ui::F_TINY) : ui::font(ui::F_BODY);
 }
 int lineHeight(uint8_t kind) {
-    return kind == 'T' ? 46 : kind == 'H' ? 42 : kind == 'S' ? 36 : 30;
+    return kind == 'T' ? 46 : kind == 'H' ? 42 : kind == 'S' ? 36 : kind == 'F' ? 34 : 30;
 }
 
 int widthOf(const EpdFont* f, const char* s, size_t n) {
-    char tmp[160];
+    char tmp[512];
     if (n >= sizeof tmp) n = sizeof tmp - 1;
     memcpy(tmp, s, n);
     tmp[n] = 0;
@@ -278,7 +306,7 @@ void layout() {
     if (!g_pageStarts)
         g_pageStarts = (int*)heap_caps_malloc(MAX_PAGES * sizeof(int), MALLOC_CAP_SPIRAM);
     if (!g_pageStarts) return;
-    const int bodyTop = TOP + 60, bodyBottom = H - 50;
+    const int bodyTop = TOP + 60, bodyBottom = H - FOOT_H - 6;
     int y = bodyTop, k = 0;
     g_pageStarts[g_pageCount++] = 0;
     for (k = 0; k < g_lineCount; ++k) {
@@ -291,7 +319,46 @@ void layout() {
     }
 }
 
+// \x01 visible \x02 target \x03 -> visible, and a Link. In place: the text
+// only gets shorter.
+void extractLinks() {
+    g_linkCount = 0;
+    g_targetsLen = 0;
+    if (!g_links) g_links = (Link*)heap_caps_malloc(MAX_LINKS * sizeof(Link), MALLOC_CAP_SPIRAM);
+    if (!g_targets) g_targets = (char*)heap_caps_malloc(TARGETS_CAP, MALLOC_CAP_SPIRAM);
+    size_t w = 0;
+    Link cur = {};
+    int state = 0;   // 0 text, 1 visible, 2 target
+    for (size_t i = 0; i < g_textLen; ++i) {
+        const char c = g_text[i];
+        if (c == '\x01' && state == 0) { cur.start = (uint32_t)w; state = 1; continue; }
+        if (c == '\x02' && state == 1) {
+            cur.end = (uint32_t)w;
+            cur.target = (uint32_t)g_targetsLen;
+            state = 2;
+            continue;
+        }
+        if (state == 2) {
+            if (c == '\x03') {
+                if (g_targets && g_targetsLen < TARGETS_CAP) g_targets[g_targetsLen++] = 0;
+                if (g_links && g_targets && g_linkCount < MAX_LINKS && g_targetsLen <= TARGETS_CAP && cur.end > cur.start)
+                    g_links[g_linkCount++] = cur;
+                state = 0;
+            } else if (g_targets && g_targetsLen < TARGETS_CAP - 1) {
+                g_targets[g_targetsLen++] = c;
+            }
+            continue;
+        }
+        if (c == '\n') state = 0;   // a link never crosses a line
+        if (c == '\x01' || c == '\x02' || c == '\x03') continue;
+        g_text[w++] = c;
+    }
+    g_textLen = w;
+    g_text[w] = 0;
+}
+
 bool openArticle(const Result& r) {
+    g_note = nullptr;
     const Book& b = g_books[g_book];
     char path[96];
     snprintf(path, sizeof path, "%s/%s/a%04u.dta", kRoot, b.dir, (unsigned)r.chunk);
@@ -309,9 +376,17 @@ bool openArticle(const Result& r) {
     if (!ok) return false;
     g_textLen = n;
     g_text[n] = 0;
+    extractLinks();
+    // Every article names where it came from (info.txt source=, else the book).
+    const char* src = b.source[0] ? b.source : b.name;
+    const int add = snprintf(g_text + g_textLen, MAX_TEXT + 1 - g_textLen, "\nFSource: %s", src);
+    if (add > 0 && g_textLen + add <= MAX_TEXT) g_textLen += add;
+    g_text[g_textLen] = 0;
     snprintf(g_title, sizeof g_title, "%s", r.title);
+    g_current = r;
     layout();
     g_page = 0;
+    Serial.printf("[lib] open '%s' pages=%d links=%d\n", g_title, g_pageCount, g_linkCount);
     return true;
 }
 
@@ -390,15 +465,16 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
     }
     if (y >= RES_TOP && y < RES_TOP + RESULTS * RES_H && y < k.top - 6) {
         const int i = (y - RES_TOP) / RES_H;
-        if (i < g_resultCount) return openArticle(g_results[i]);
+        if (i < g_resultCount) { g_historyCount = 0; return openArticle(g_results[i]); }
         return false;
     }
-    if (k.tap(x, y) == kbd::ENTER && g_resultCount > 0) return openArticle(g_results[0]);
+    if (k.tap(x, y) == kbd::ENTER && g_resultCount > 0) { g_historyCount = 0; return openArticle(g_results[0]); }
     return false;
 }
 
 void renderArticle(uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    g_hotCount = 0;
     if (!g_text || !g_pageStarts || g_pageCount == 0) return;
     // Header: the title, small, and the page counter.
     char pg[24];
@@ -411,6 +487,10 @@ void renderArticle(uint8_t* fb) {
     const int last = g_page + 1 < g_pageCount ? g_pageStarts[g_page + 1] : g_lineCount;
     int y = TOP + 60;
     char buf[512];
+    // Links are in text order, like the lines: start the scan where this page does.
+    int li = 0;
+    if (first < g_lineCount)
+        while (li < g_linkCount && g_links[li].end <= g_lines[first].off) ++li;
     for (int k = first; k < last; ++k) {
         const Line& l = g_lines[k];
         if (l.kind == 'G') { y += 10; continue; }
@@ -425,20 +505,129 @@ void renderArticle(uint8_t* fb) {
             if (firstOfItem) epd_fill_rect({20, y + h / 2 - 6, 8, 8}, INK, fb);
             x += 26;
         }
-        ui::text(fontFor(l.kind), x, y + h - 8, buf, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        const EpdFont* f = fontFor(l.kind);
+        ui::text(f, x, y + h - 8, buf, fb, EPD_DRAW_ALIGN_LEFT, INK);
         if (l.kind == 'H') epd_fill_rect({18, y + h - 2, W - 36, 2}, INK, fb);
+        if (l.kind == 'F') epd_fill_rect({18, y + 2, W - 36, 1}, INK, fb);
+        // Links on this line: underlined, and remembered for taps.
+        const uint32_t ls = l.off, le = l.off + l.len;
+        for (int j = li; j < g_linkCount && g_links[j].start < le; ++j) {
+            const Link& L = g_links[j];
+            if (L.end <= ls) continue;
+            const uint32_t a = L.start > ls ? L.start : ls, b = L.end < le ? L.end : le;
+            const int x0 = x + widthOf(f, g_text + ls, a - ls);
+            const int x1 = x + widthOf(f, g_text + ls, b - ls);
+            epd_fill_rect({x0, y + h - 5, x1 - x0, 2}, INK, fb);
+            if (g_hotCount < MAX_HOT)
+                g_hot[g_hotCount++] = {(int16_t)x0, (int16_t)y, (int16_t)x1, (int16_t)(y + h), j};
+        }
+        while (li < g_linkCount && g_links[li].end <= le) ++li;
         y += h;
     }
-    // Footer: how to page.
-    epd_fill_rect({0, H - 44, W, 2}, INK, fb);
-    ui::text(ui::font(ui::F_TINY), 18, H - 14, "< tap left", fb, EPD_DRAW_ALIGN_LEFT, INK);
-    ui::text(ui::font(ui::F_TINY), W - 18, H - 14, "tap right >", fb, EPD_DRAW_ALIGN_RIGHT, INK);
+    // Footer: PREV / NEXT, the history depth, a one-off note.
+    const int fy = H - FOOT_H;
+    epd_fill_rect({0, fy, W, 2}, INK, fb);
+    epd_fill_rect({W / 2, fy, 2, FOOT_H}, INK, fb);
+    ui::text(ui::font(ui::F_KEY), W / 4, fy + 50, g_page > 0 ? "< PREV" : "", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    ui::text(ui::font(ui::F_KEY), W * 3 / 4, fy + 50, g_page + 1 < g_pageCount ? "NEXT >" : "END", fb,
+             EPD_DRAW_ALIGN_CENTER, INK);
+    if (g_note) {
+        const int tw = ui::textWidth(ui::font(ui::F_SMALL), g_note) + 24;
+        epd_fill_rect({(W - tw) / 2, fy - 50, tw, 42}, INK, fb);
+        ui::text(ui::font(ui::F_SMALL), W / 2, fy - 20, g_note, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+        g_note = nullptr;
+    }
+}
+
+// The article whose folded title is exactly the target's, in the open book.
+bool findExact(const char* title, Result& out) {
+    if (g_bookCount <= 0) return false;
+    char key[KEY + 1];
+    fold(title, key, sizeof key);
+    if (!key[0]) return false;
+    uint8_t want[KEY] = {};
+    memcpy(want, key, strlen(key) < (size_t)KEY ? strlen(key) : KEY);
+    const Book& b = g_books[g_book];
+    char path[96];
+    snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, b.dir);
+    bool found = false;
+    sdLock();
+    File f = SD.open(path, FILE_READ);
+    if (f) {
+        uint8_t rec[REC];
+        uint32_t lo = 0, hi = b.count;
+        while (lo < hi) {
+            const uint32_t mid = lo + (hi - lo) / 2;
+            f.seek(HDR + (uint64_t)mid * REC);
+            if (f.read(rec, REC) != REC) break;
+            if (memcmp(rec, want, KEY) < 0) lo = mid + 1; else hi = mid;
+        }
+        if (lo < b.count && f.seek(HDR + (uint64_t)lo * REC) && f.read(rec, REC) == REC &&
+            memcmp(rec, want, KEY) == 0) {
+            memcpy(out.title, rec + KEY, KEY);
+            out.title[KEY] = 0;
+            out.chunk = (uint16_t)(rec[112] | rec[113] << 8);
+            out.off = rd32(rec + 116);
+            out.len = rd32(rec + 120);
+            found = true;
+        }
+        f.close();
+    }
+    sdUnlock();
+    return found;
+}
+
+void follow(int link) {
+    const char* target = g_targets + g_links[link].target;
+    Result r;
+    if (!findExact(target, r)) {
+        Serial.printf("[lib] no '%s' in this book\n", target);
+        g_note = "not in this book";
+        return;
+    }
+    const Visit v = {g_current, g_book, g_page};
+    if (g_historyCount == HISTORY) {
+        memmove(g_history, g_history + 1, sizeof(Visit) * (HISTORY - 1));
+        --g_historyCount;
+    }
+    g_history[g_historyCount++] = v;
+    if (!openArticle(r)) { --g_historyCount; g_note = "can't open it"; }
 }
 
 void tapArticle(int x, int y) {
-    (void)y;
+    if (y >= H - FOOT_H) {            // the footer pages
+        if (x >= W / 2) { if (g_page + 1 < g_pageCount) ++g_page; }
+        else if (g_page > 0) --g_page;
+        return;
+    }
+    // A link, with a finger's slack round it; the nearest wins.
+    int best = -1, bestD = 1 << 30;
+    for (int i = 0; i < g_hotCount; ++i) {
+        const Hot& h = g_hot[i];
+        const int dx = x < h.x0 - 10 ? h.x0 - 10 - x : x > h.x1 + 10 ? x - h.x1 - 10 : 0;
+        const int dy = y < h.y0 - 4 ? h.y0 - 4 - y : y > h.y1 + 4 ? y - h.y1 - 4 : 0;
+        if (dx || dy) continue;
+        const int cx = (h.x0 + h.x1) / 2, cy = (h.y0 + h.y1) / 2;
+        const int d = (x - cx) * (x - cx) + 4 * (y - cy) * (y - cy);
+        if (d < bestD) { bestD = d; best = h.link; }
+    }
+    if (best >= 0) { follow(best); return; }
     if (x > W * 2 / 5) { if (g_page + 1 < g_pageCount) ++g_page; }
     else if (g_page > 0) --g_page;
 }
+
+bool articleBack() {
+    while (g_historyCount > 0) {
+        const Visit v = g_history[--g_historyCount];
+        g_book = v.book;
+        if (openArticle(v.r)) {
+            g_page = v.page < g_pageCount ? v.page : 0;
+            return true;
+        }
+    }
+    return false;
+}
+
+void leaveArticle() { g_historyCount = 0; }
 
 }  // namespace doba_lib

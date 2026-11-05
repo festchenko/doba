@@ -713,7 +713,7 @@ void render(Page p, const RideState& s, uint8_t* fb) {
         case COMPOSE: renderCompose(s, fb); break;
         case LIBRARY:
             doba_lib::renderSearch(g_search, fb);
-            topo_bg::draw({0, TOP, W, g_search.top - TOP}, fb, 2);   // not among the keys
+            topo_bg::draw({0, TOP + 146, W, g_search.top - TOP - 146}, fb, 2);   // not in the boxes or keys
             break;
         case ARTICLE: doba_lib::renderArticle(fb); break;
         case SETUP:   renderSetup(s, fb); break;
@@ -762,7 +762,9 @@ Go back(Page p) {
         case COMMS:   return TO_HOME;
         case COMPOSE: return TO_COMMS;
         case LIBRARY: return TO_HOME;
-        case ARTICLE: return TO_LIBRARY;
+        case ARTICLE:
+            if (doba_lib::articleBack()) return STAY;   // back along a followed link
+            return TO_LIBRARY;
         case SETUP:   return TO_HOME;
         case SETUP_NAME: return TO_SETUP;
         case POINTS:  return TO_HOME;

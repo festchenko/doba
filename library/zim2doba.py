@@ -45,6 +45,29 @@ BLOCKS = {"p": "P", "li": "B", "dd": "P", "blockquote": "P", "h2": "H", "h3": "S
           "h4": "S", "h5": "S", "h6": "S", "pre": "P"}
 VOID = {"br", "img", "hr", "meta", "link", "input", "wbr", "source", "area", "col"}
 
+# Links inside article text: \x01 visible text \x02 target title \x03. The
+# target is the ZIM path made title-like ("Water_purification" -> "Water
+# purification"); the device folds it and looks it up in the book's index.
+LINK_A, LINK_B, LINK_C = "\x01", "\x02", "\x03"
+
+
+def link_target(href):
+    """A title-like target for an in-book link, or None (external, anchors, files)."""
+    if not href or href.startswith(("#", "http:", "https:", "//", "mailto:", "javascript:")):
+        return None
+    from urllib.parse import unquote
+    h = unquote(href.split("#", 1)[0].split("?", 1)[0])
+    while h.startswith(("./", "../")):
+        h = h[2:] if h.startswith("./") else h[3:]
+    if h.startswith("A/"):
+        h = h[2:]
+    if not h or "/" in h or h.startswith(("File:", "Special:", "Help:", "Category:", "Файл:", "Категория:")):
+        return None
+    t = " ".join(h.replace("_", " ").split())
+    if not t or any(c in t for c in (LINK_A, LINK_B, LINK_C, "\n")):
+        return None
+    return t[:120]
+
 
 class Cleaner(HTMLParser):
     def __init__(self):
@@ -55,10 +78,12 @@ class Cleaner(HTMLParser):
         self.kind = None
         self.buf = []
         self.skip_section = False
+        self.links = []          # open <a>: target or None, per nesting level
 
     def _flush(self):
         if self.kind:
             text = " ".join("".join(self.buf).split())
+            text = tidy_links(text) if self.kind in ("P", "B") else strip_links(text)
             if text:
                 if self.kind == "H" or self.kind == "S":
                     self.skip_section = fold(text).decode() in SKIP_SECTIONS
@@ -84,6 +109,14 @@ class Cleaner(HTMLParser):
         if tag in BLOCKS:
             self._flush()
             self.kind = BLOCKS[tag]
+        if tag == "a":
+            t = link_target(dict(attrs).get("href"))
+            # Not nested, and only inside a block that's being kept.
+            if t and self.kind and not any(self.links):
+                self.buf.append(LINK_A)
+                self.links.append(t)
+            else:
+                self.links.append(None)
 
     def handle_endtag(self, tag):
         if tag in VOID:
@@ -95,6 +128,10 @@ class Cleaner(HTMLParser):
                 self.skip -= 1
             if t == tag:
                 break
+        if tag == "a" and self.links:
+            t = self.links.pop()
+            if t and self.kind:
+                self.buf.append(LINK_B + t + LINK_C)
         if not self.skip and tag in BLOCKS:
             self._flush()
 
@@ -105,6 +142,32 @@ class Cleaner(HTMLParser):
     def close(self):
         super().close()
         self._flush()
+
+
+_LINK_RE = re.compile("\x01([^\x01\x02\x03]*)\x02([^\x01\x02\x03]*)\x03")
+
+
+def strip_links(text):
+    text = _LINK_RE.sub(lambda m: m.group(1), text)
+    return " ".join(text.replace(LINK_A, "").replace(LINK_B, "").replace(LINK_C, "").split())
+
+
+def tidy_links(text):
+    """Well-formed links only, their visible text trimmed and non-empty."""
+    out, pos = [], 0
+    for m in _LINK_RE.finditer(text):
+        out.append(m.string[pos:m.start()])
+        vis, tgt = m.group(1).strip(), m.group(2)
+        lead = " " if m.group(1)[:1] == " " else ""
+        tail = " " if m.group(1)[-1:] == " " else ""
+        out.append(lead + (LINK_A + vis + LINK_B + tgt + LINK_C if vis else "") + tail)
+        pos = m.end()
+    out.append(text[pos:])
+    s = "".join(out)
+    # Stray markers (a link cut by a block boundary) go.
+    s = re.sub("\x01(?![^\x01\x02\x03]*\x02[^\x01\x02\x03]*\x03)", "", s)
+    s = re.sub("\x02[^\x01\x03]*$", "", s)
+    return " ".join(s.split())
 
 
 def to_text(title, html):
@@ -169,6 +232,8 @@ def main():
     ap.add_argument("zim")
     ap.add_argument("out")
     ap.add_argument("--name", help="shown on the device (default: the ZIM's title)")
+    ap.add_argument("--source", help='shown under every article, e.g. "Wikipedia EN · CC BY-SA" '
+                    "(default: the ZIM's creator and source URL)")
     ap.add_argument("--chunk-mb", type=int, default=512)
     ap.add_argument("--jobs", type=int, default=os.cpu_count())
     ap.add_argument("--limit", type=int, default=0, help="first N entries only (testing)")
@@ -235,9 +300,19 @@ def main():
         f.write(HDR.pack(b"DOBAIX1\0", len(records), REC.size, chunk + 1, b"\0" * 12))
         for key, title, ch, flags, off, ln in records:
             f.write(REC.pack(key, title, ch, flags, off, ln, 0))
+    source = a.source
+    if not source:
+        meta = {}
+        for k in ("Creator", "Source", "Publisher"):
+            try:
+                meta[k] = bytes(Archive(a.zim).get_metadata(k)).decode("utf-8", "ignore").strip()
+            except Exception:
+                pass
+        source = " · ".join(x for x in (meta.get("Creator"), meta.get("Source")) if x) or os.path.basename(a.zim)
+    source = " ".join(source.split())[:60]
     with open(os.path.join(a.out, "info.txt"), "w", encoding="utf-8") as f:
         f.write(f"name={name}\nlang={lang}\narticles={arts}\nredirects={linked}\n"
-                f"source={os.path.basename(a.zim)}\n")
+                f"source={source}\nfile={os.path.basename(a.zim)}\n")
     size = sum(os.path.getsize(os.path.join(a.out, x)) for x in os.listdir(a.out))
     print(f"done: {arts} articles + {linked} redirects, {chunk + 1} chunks, "
           f"{size / 1e6:.1f} MB, {time.time() - t0:.0f}s -> {a.out}")

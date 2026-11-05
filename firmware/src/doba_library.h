@@ -12,6 +12,8 @@
 // doba_fold), title[56] (display, UTF-8), u16 chunk, u16 flags, u32 offset,
 // u32 length, u32 reserved. Article text, inflated, is UTF-8 lines whose first
 // byte is the kind: T title, H section, S subsection, P paragraph, B bullet.
+// P and B lines may carry links: \x01 visible text \x02 target title \x03.
+// info.txt may name the source: source=Wikipedia EN · CC BY-SA.
 
 #include <cstddef>
 #include <cstdint>
@@ -26,7 +28,9 @@ void rescan();
 void renderSearch(kbd::Keyboard& k, uint8_t* fb);
 bool tapSearch(kbd::Keyboard& k, int x, int y);   // true: an article was opened
 void renderArticle(uint8_t* fb);
-void tapArticle(int x, int y);
+void tapArticle(int x, int y);       // a link opens its article; else pages
+bool articleBack();                  // back along followed links; false at the first
+void leaveArticle();                 // forget the link history
 
 // Title folding, identical to library/zim2doba.py fold(): lower case, accents
 // and ё dropped, punctuation to single spaces. out gets at most cap-1 bytes.

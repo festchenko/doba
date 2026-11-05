@@ -24,7 +24,7 @@ LONG = " ".join(["Water must be made safe before drinking: boil it for at least 
 PAGES = [
     ("Water_purification", "Water purification", f"""<html><body><h1>Water purification</h1>
 <table class="infobox"><tr><td>INFOBOX JUNK</td></tr></table>
-<p><b>Water purification</b> is the process of removing contaminants.<sup>[1]</sup></p>
+<p><b>Water purification</b> is the process of removing contaminants; see also <a href="./Knots">knots</a> and <a href="Tourniquet">a tourniquet</a>.<sup>[1]</sup></p>
 <h2>Methods</h2><p>{LONG}</p>
 <ul><li>Boiling kills pathogens.</li><li>Chlorine tablets work in 30 minutes.</li></ul>
 <h3>Improvised filters</h3><p>Sand, charcoal and gravel in layers.</p>
