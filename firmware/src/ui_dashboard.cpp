@@ -3381,6 +3381,14 @@ static void runConsoleLine(char* line) {
         if (arg) milspec::setMilsSystem(atoi(arg));
         Serial.printf("[mils] %d\n", milspec::milsSystem());
         screen = SCREEN_MAP; noteActivity();
+    } else if (!strcasecmp(cmd, "dem")) {    // DOBA: ground under the fix, from /doba/dem
+        const RideState st = g_state.snapshot();
+        float v;
+        bool wet;
+        if (doba_dem::ground(st.latitude, st.longitude, v, wet))
+            Serial.printf("[dem] %s %.1f\n", wet ? "water" : "land", v);
+        else
+            Serial.println("[dem] none");
     } else if (!strcasecmp(cmd, "topo")) {   // DOBA: topo layer diagnostics
         const topo::Stats t = topo::stats();
         Serial.printf("[topo] active=%d mpp=%.2f decoded=%lu hits=%lu missing=%lu packs=%lu\n",

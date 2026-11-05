@@ -134,14 +134,21 @@ bool sample(FileInfo& f, int i, int j, float& out) {
     return true;
 }
 
+constexpr int WATER_BASE = -10000;   // dempack.py: sea cells = WATER_BASE - depth
+inline bool isWater(float v) { return v <= WATER_BASE + 0.5f; }
+
 double g_lastLat = 999, g_lastLon = 999;
-float g_lastM = 0;
-bool g_lastOk = false;
+float g_lastV = 0;
+bool g_lastOk = false, g_lastWater = false;
 
 }  // namespace
 
-bool height(double lat, double lon, float& m) {
-    if (fabs(lat - g_lastLat) < 2e-6 && fabs(lon - g_lastLon) < 2e-6) { m = g_lastM; return g_lastOk; }
+bool ground(double lat, double lon, float& value, bool& water) {
+    if (fabs(lat - g_lastLat) < 2e-6 && fabs(lon - g_lastLon) < 2e-6) {
+        value = g_lastV;
+        water = g_lastWater;
+        return g_lastOk;
+    }
     g_lastLat = lat; g_lastLon = lon; g_lastOk = false;
     const int la = (int)floor(lat), lo = (int)floor(lon);
     FileInfo* f = fileFor(la, lo);
@@ -150,13 +157,36 @@ bool height(double lat, double lon, float& m) {
     const double fi = (la + 1 - lat) * f->n - 0.5, fj = (lon - lo) * f->n - 0.5;
     const int i0 = (int)floor(fi), j0 = (int)floor(fj);
     const float di = (float)(fi - i0), dj = (float)(fj - j0);
-    float a, b, c, d;
-    if (!sample(*f, i0, j0, a) || !sample(*f, i0, j0 + 1, b) || !sample(*f, i0 + 1, j0, c) ||
-        !sample(*f, i0 + 1, j0 + 1, d))
+    float s[4];
+    if (!sample(*f, i0, j0, s[0]) || !sample(*f, i0, j0 + 1, s[1]) || !sample(*f, i0 + 1, j0, s[2]) ||
+        !sample(*f, i0 + 1, j0 + 1, s[3]))
         return false;
-    g_lastM = m = (a * (1 - dj) + b * dj) * (1 - di) + (c * (1 - dj) + d * dj) * di;
+    const float w[4] = {(1 - di) * (1 - dj), (1 - di) * dj, di * (1 - dj), di * dj};
+    // Land or water: what the nearest sample is. Then blend only its own kind,
+    // so a shore never averages a height with a depth.
+    int nearest = 0;
+    for (int k = 1; k < 4; ++k) if (w[k] > w[nearest]) nearest = k;
+    const bool wet = isWater(s[nearest]);
+    float acc = 0, wsum = 0;
+    for (int k = 0; k < 4; ++k) {
+        if (isWater(s[k]) != wet) continue;
+        acc += w[k] * (wet ? (WATER_BASE - s[k]) : s[k]);
+        wsum += w[k];
+    }
+    g_lastV = value = acc / wsum;
+    g_lastWater = water = wet;
     g_lastOk = true;
     return true;
+}
+
+bool height(double lat, double lon, float& m) {
+    bool water;
+    return ground(lat, lon, m, water) && !water;
+}
+
+bool depth(double lat, double lon, float& m) {
+    bool water;
+    return ground(lat, lon, m, water) && water;
 }
 
 void rescan() {

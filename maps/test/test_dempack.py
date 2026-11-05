@@ -31,3 +31,16 @@ def test_a_degree_is_about_a_megabyte_or_less():
 def test_names():
     assert dempack.name_for(52, 6) == "N52E006.dem"
     assert dempack.name_for(-3, -70) == "S03W070.dem"
+
+
+def test_water_is_coded_apart_from_land_below_sea_level():
+    h = np.full((1200, 1200), 3.0, dtype=np.float32)
+    h[:, :400] = -6.0                         # a polder: land below sea level
+    h[:, 800:] = 0.0                          # sea level (Copernicus over sea)
+    b = np.full_like(h, np.nan)
+    b[:, 800:] = -23.4                        # EMODnet depth there
+    n = dempack.merge_water(h, b)
+    assert n == 1200 * 400
+    data = dempack.encode(h, 52, 4)
+    assert dempack.decode_sample(data, 10, 10) == -6                 # polder stays a height
+    assert dempack.decode_sample(data, 10, 1000) == dempack.WATER_BASE - 23

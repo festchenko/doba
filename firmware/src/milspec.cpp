@@ -1,6 +1,7 @@
 // DOBA: military-style overlay for the topo map — see milspec.h.
 #include "milspec.h"
 #include "doba_points.h"
+#include "doba_dem.h"
 
 #include <Preferences.h>
 #include <cmath>
@@ -265,7 +266,10 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     char row[64];
     // DOBA: ground height from the DEM when the card has it, else GPS.
     const float alt = s.baroValid ? s.baroAltM : s.mapElevationValid ? s.mapElevationM : s.altitudeM;
-    if (fix) snprintf(row, sizeof row, "ALT %4dm  %s  SAT %d", (int)lroundf(alt), az, s.satellites);
+    float dep;
+    if (fix && doba_dem::depth(s.latitude, s.longitude, dep))   // DOBA: on water
+        snprintf(row, sizeof row, "DPT %4dm  %s  SAT %d", (int)lroundf(dep), az, s.satellites);
+    else if (fix) snprintf(row, sizeof row, "ALT %4dm  %s  SAT %d", (int)lroundf(alt), az, s.satellites);
     else     snprintf(row, sizeof row, "NO FIX  SAT %d", s.satellites);
     ui::text(&Mono_M, x0, top + 122, row, fb, EPD_DRAW_ALIGN_LEFT, 0x00);
     (void)map;

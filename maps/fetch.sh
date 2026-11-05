@@ -94,6 +94,10 @@ for ((la = lat0; la <= lat1; la++)); do
   done
 done
 
+# --- sea depths (EMODnet Bathymetry DTM 2024, European seas) --------------------
+echo "== downloading sea depths (EMODnet)"
+python3 bathy.py --bbox "$BBOX" --out "$BUILD/bathy" || echo "!! some depth cells failed; rerun to retry"
+
 echo
 echo "== ready. Next:"
 echo "python3 render.py --mbtiles $MBT --dem $BUILD/dem --bbox $BBOX --zoom $ZOOM --out $BUILD/tiles/$NAME"

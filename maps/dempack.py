@@ -27,6 +27,10 @@ File layout (little-endian):
 
 Sample (i, j) is the height at lat = south + 1 - (i + 0.5) / n,
 lon = west + (j + 0.5) / n.
+
+Water: with --bathy (bathy.py, EMODnet), sea cells hold WATER_BASE - depth,
+i.e. -10000 at the surface, -10023 for 23 m of water. Land below sea level
+(polders) keeps its own negative height, so the device can tell them apart.
 """
 import argparse
 import math
@@ -38,6 +42,7 @@ import zlib
 import numpy as np
 
 MAGIC = b"DOBADEM1"
+WATER_BASE = -10000
 HEADER = struct.Struct("<8shhHHHHhh8s")
 assert HEADER.size == 32
 
@@ -74,6 +79,13 @@ def encode(heights, lat, lon, block=100):
     return bytes(out)
 
 
+def merge_water(hts, b):
+    """Sea cells (EMODnet says below LAT, Copernicus says sea level) -> WATER_BASE - depth."""
+    water = ~np.isnan(b) & (b < -0.5) & (hts <= 0.5)
+    hts[water] = WATER_BASE + np.maximum(b[water], -20000)
+    return int(water.sum())
+
+
 def decode_sample(data, i, j):
     """One sample, the way the firmware reads it (for tests)."""
     _, lat, lon, n, block, nb, _, _, _, _ = HEADER.unpack_from(data, 0)
@@ -89,6 +101,7 @@ def main():
     ap.add_argument("--dem", required=True, help="directory of Copernicus GLO-30 GeoTIFFs")
     ap.add_argument("--bbox", required=True, help="west,south,east,north")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--bathy", help="directory of bathy.py cells (sea depths)")
     ap.add_argument("--arcsec", type=int, default=3, choices=(1, 2, 3, 4, 6),
                     help="sample spacing (3 = ~90 m, ~1 MB/degree)")
     a = ap.parse_args()
@@ -98,6 +111,12 @@ def main():
         sys.exit(f"no DEM GeoTIFFs under {a.dem}")
     w, s, e, n_ = (float(x) for x in a.bbox.split(","))
     os.makedirs(a.out, exist_ok=True)
+    bathy = None
+    if a.bathy:
+        from bathy import Bathy
+        bathy = Bathy(a.bathy)
+        if not bathy.available():
+            bathy = None
     n = 3600 // a.arcsec
     total = 0
     for lat in range(math.floor(s), math.ceil(n_)):
@@ -111,8 +130,15 @@ def main():
             step = 300   # rows at a time keeps memory flat
             for r in range(0, n, step):
                 hts[r:r + step] = dem.sample(lons[r:r + step], lats[r:r + step])
+            if bathy is not None:
+                b = np.empty_like(hts)
+                for r in range(0, n, step):
+                    b[r:r + step] = bathy.sample(lons[r:r + step], lats[r:r + step])
+                water = merge_water(hts, b)
+                if water:
+                    print(f"   {name_for(lat, lon)}: {water} water cells")
             if not hts.any():
-                continue   # open sea: no file; the device reads "unknown"
+                continue   # open sea with no depths: no file; the device reads "unknown"
             data = encode(hts, lat, lon)
             with open(path, "wb") as f:
                 f.write(data)

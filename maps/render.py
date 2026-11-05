@@ -385,7 +385,34 @@ def relief(cv, dem):
     return out
 
 
-def render_metatile(src, dem, z, mx0, my0, n):
+def sea(cv, bathy):
+    """Depth grid (m, positive; NaN on land) every 4 canvas px, smoothed."""
+    step = 4 * SS
+    lon, lat = cv.canvas_lonlat(step)
+    d = -bathy.sample(lon, lat)
+    if np.isnan(d).all() or np.nanmax(d) <= 0:
+        return None
+    filled = np.where(np.isnan(d), 0.0, np.maximum(d, 0.0)).astype(np.float32)
+    return step, gaussian_filter(filled, 0.8)
+
+
+def isobaths(cv, depth):
+    """[(bold, depth, pts)] for this zoom's isobath levels."""
+    step, d = depth
+    levels = S.size_for_zoom(S.BATHY_LEVELS, cv.z) or ()
+    out = []
+    for lv in levels:
+        if lv > d.max():
+            continue
+        for c in find_contours(d, lv):
+            pts = c[:, ::-1] * step
+            if len(pts) < 3:
+                continue
+            out.append((lv in S.BATHY_BOLD, lv, [tuple(p) for p in pts]))
+    return out
+
+
+def render_metatile(src, dem, z, mx0, my0, n, bathy=None):
     cv = Canvas(z, mx0, my0, n)
     feats = collect_features(src, cv)
 
@@ -415,8 +442,16 @@ def render_metatile(src, dem, z, mx0, my0, n):
     rel = relief(cv, dem) if dem is not None else {}
 
     # 3. water areas (mask edge = shoreline without tile seams) -------------
-    if z >= S.WATER_MIN_ZOOM and feats.get("water"):
-        wmask = fill_mask(cv, feats["water"])
+    depth = sea(cv, bathy) if bathy is not None else None
+    seamask = None
+    if depth is not None:
+        step, d = depth
+        img = Image.fromarray(((d > S.SEA_FROM_DEPTH_M) * 255).astype(np.uint8), "L")
+        seamask = np.asarray(img.resize((cv.size, cv.size), Image.BILINEAR)) > 127
+    if z >= S.WATER_MIN_ZOOM and (feats.get("water") or seamask is not None):
+        wmask = fill_mask(cv, feats["water"]) if feats.get("water") else np.zeros((cv.size, cv.size), bool)
+        if seamask is not None:
+            wmask = wmask | seamask
         apply_fill(cv, wmask, S.WATER_FILL)
         if z >= 9:
             apply_edge(cv, wmask, S.WATER_EDGE, 1.0)
@@ -433,6 +468,17 @@ def render_metatile(src, dem, z, mx0, my0, n):
     for is_index, pts in rel.get("contours", []):
         st = S.CONTOUR_INDEX if is_index else S.CONTOUR
         cv.line(pts, st["width"], st["level"])
+
+    # 5b. isobaths ----------------------------------------------------------
+    bathy_labels = []
+    if depth is not None:
+        for bold, lv, pts in isobaths(cv, depth):
+            st = S.ISOBATH_BOLD if bold else S.ISOBATH
+            cv.line(pts, st["width"], st["level"], st["dash"])
+            if z >= S.ISOBATH_LABEL["min_zoom"]:
+                every = S.ISOBATH_LABEL["every_px"] * SS
+                for k in range(len(pts) // 2, len(pts), max(1, int(every / (4 * SS)))):
+                    bathy_labels.append((pts[k], str(lv)))
 
     # 6. waterways ------------------------------------------------------------
     for tx, ty, ext, f in feats.get("waterway", []):
@@ -540,6 +586,9 @@ def render_metatile(src, dem, z, mx0, my0, n):
                                      (x + m, y + m * 0.7)], fill=0)
 
     if z >= S.WATER_NAME["min_zoom"]:
+        fnt_b = font(S.FONT_ITALIC, S.ISOBATH_LABEL["font"])
+        for (x, y), text in bathy_labels:
+            cv.place_label(x, y, text, fnt_b, level=S.DARK)
         for tx, ty, ext, f in feats.get("water_name", []):
             name = f["properties"].get("name")
             if not name:
@@ -562,6 +611,12 @@ def render_job(args):
     dem = Dem(opts["dem"]) if opts.get("dem") else None
     if dem is not None and not dem.available():
         dem = None
+    bathy = None
+    if opts.get("bathy"):
+        from bathy import Bathy
+        bathy = Bathy(opts["bathy"])
+        if not bathy.available():
+            bathy = None
     bbox, zmin, zmax = opts["bbox"], opts["zmin"], opts["zmax"]
     if job == "base":
         cz, cx, cy = BASE_CELL_Z, 0, 0
@@ -591,7 +646,7 @@ def render_job(args):
             continue
         for my in range((y0 // n) * n, y1 + 1, n):
             for mx in range((x0 // n) * n, x1 + 1, n):
-                tiles = render_metatile(src, dem, z, mx, my, n)
+                tiles = render_metatile(src, dem, z, mx, my, n, bathy)
                 for (x, y), lv in tiles.items():
                     if x0 <= x <= x1 and y0 <= y <= y1:
                         writer.add(z, x, y, lv)
@@ -606,6 +661,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--mbtiles", required=True)
     ap.add_argument("--dem", help="directory with Copernicus GLO-30 .tif files")
+    ap.add_argument("--bathy", help="directory of bathy.py cells (sea depths, isobaths)")
     ap.add_argument("--bbox", required=True, help="west,south,east,north")
     ap.add_argument("--zoom", default="8-16", help="e.g. 8-16")
     ap.add_argument("--out", required=True)
@@ -614,7 +670,7 @@ def main():
 
     bbox = tuple(float(v) for v in a.bbox.split(","))
     zmin, zmax = (int(v) for v in a.zoom.split("-"))
-    opts = {"mbtiles": a.mbtiles, "dem": a.dem, "bbox": bbox,
+    opts = {"mbtiles": a.mbtiles, "dem": a.dem, "bathy": a.bathy, "bbox": bbox,
             "zmin": zmin, "zmax": zmax, "out": a.out}
 
     jobs = []

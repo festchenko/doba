@@ -180,3 +180,28 @@ def test_a_manual_pdf_becomes_chapters_found_by_their_own_words(doba, tmp_path):
     since = doba.log_seq()
     doba.tap(200, TOP + 146 + 29)
     doba.wait_log(r"\[lib\] open 'Shelter'", since=since)
+
+
+def test_on_water_the_card_gives_depth_not_height(doba):
+    """dempack --bathy codes sea as WATER_BASE - depth; the device reads it as
+    depth, and land below sea level (polders) still as height."""
+    sys.path.insert(0, os.path.join(HERE, "..", "..", "..", "maps"))
+    import numpy as np
+    import dempack
+    n = 1200
+    h = np.full((n, n), 5.0, dtype=np.float32)
+    h[:, :400] = -6.0
+    h[:, 800:] = 0.0
+    b = np.full_like(h, np.nan)
+    b[:, 800:] = -23.0
+    dempack.merge_water(h, b)
+    os.makedirs(os.path.join(doba.sd, "doba", "dem"), exist_ok=True)
+    with open(os.path.join(doba.sd, "doba", "dem", "N52E004.dem"), "wb") as f:
+        f.write(dempack.encode(h, 52, 4))
+    boot(doba)
+    for lon, want in [(4.9, r"\[dem\] water 23\.0"), (4.1, r"\[dem\] land -6\.0"), (4.5, r"\[dem\] land 5\.0")]:
+        doba.gps(52.5, lon)
+        time.sleep(1.5)
+        since = doba.log_seq()
+        doba.console("dem", 500)
+        doba.wait_log(want, since=since)

@@ -475,7 +475,11 @@ void renderPoints(const RideState& s, uint8_t* fb) {
     if (have) milgeo::mgrs(lat, lon, m, sizeof m);
     ui::text(ui::font(ui::F_BODY_H), 14, TOP + 76, have ? m : "NO FIX YET", fb, EPD_DRAW_ALIGN_LEFT, INK);
     char ll[64];
-    if (have) snprintf(ll, sizeof ll, "%c%.5f %c%.5f  ALT %dm  SAT %d", lat >= 0 ? 'N' : 'S', fabs(lat),
+    float dep;
+    if (have && doba_dem::depth(lat, lon, dep))   // on water: depth under you (EMODnet)
+        snprintf(ll, sizeof ll, "%c%.5f %c%.5f  DEPTH %dm  SAT %d", lat >= 0 ? 'N' : 'S', fabs(lat),
+                 lon >= 0 ? 'E' : 'W', fabs(lon), (int)lroundf(dep), s.satellites);
+    else if (have) snprintf(ll, sizeof ll, "%c%.5f %c%.5f  ALT %dm  SAT %d", lat >= 0 ? 'N' : 'S', fabs(lat),
                        lon >= 0 ? 'E' : 'W', fabs(lon), (int)lroundf(groundAlt(s)), s.satellites);
     else snprintf(ll, sizeof ll, "waiting for satellites · SAT %d", s.satellites);
     ui::text(ui::font(ui::F_SMALL), 14, TOP + 116, ll, fb, EPD_DRAW_ALIGN_LEFT, INK);
@@ -618,7 +622,12 @@ void renderPoint(const RideState& s, uint8_t* fb) {
         ui::text(ui::font(ui::F_TITLE), tx, dialY + 88, ds, fb, EPD_DRAW_ALIGN_LEFT, INK);
         // Height of the point (DEM) and the climb to it.
         float pz;
-        if (doba_dem::height(p->lat, p->lon, pz)) {
+        bool wet = false;
+        if (doba_dem::ground(p->lat, p->lon, pz, wet) && wet) {
+            char hz[48];
+            snprintf(hz, sizeof hz, "DEPTH %dm", (int)lroundf(pz));
+            ui::text(ui::font(ui::F_SMALL), tx, dialY + 126, hz, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        } else if (doba_dem::height(p->lat, p->lon, pz)) {
             char hz[48];
             const int dz = (int)lroundf(pz - groundAlt(s));
             snprintf(hz, sizeof hz, "HEIGHT %dm  (%+dm)", (int)lroundf(pz), dz);

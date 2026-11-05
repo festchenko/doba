@@ -20,4 +20,4 @@ void formatDistance(double, char* out, size_t n) { if (n) out[0] = 0; }
 }
 
 #include "doba_dem.h"
-namespace doba_dem { bool height(double, double, float&) { return false; } void rescan() {} }
+namespace doba_dem { bool height(double, double, float&) { return false; } bool depth(double, double, float&) { return false; } bool ground(double, double, float&, bool&) { return false; } void rescan() {} }

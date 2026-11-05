@@ -10,9 +10,9 @@ REGION="${1:?usage: make-region.sh <region>   (see regions/*.env)}"
 source "regions/${REGION}.env"
 BUILD="${DOBA_BUILD:-build}"
 ./fetch.sh "$REGION"
-python3 render.py --mbtiles "$BUILD/$NAME.mbtiles" --dem "$BUILD/dem" --jobs "${RENDER_JOBS:-6}" \
+python3 render.py --mbtiles "$BUILD/$NAME.mbtiles" --dem "$BUILD/dem" --bathy "$BUILD/bathy" --jobs "${RENDER_JOBS:-6}" \
   --bbox "$BBOX" --zoom "$ZOOM" --out "$BUILD/tiles/$NAME"
-python3 dempack.py --dem "$BUILD/dem" --bbox "$BBOX" --out "$BUILD/dem-pack"
+python3 dempack.py --dem "$BUILD/dem" --bathy "$BUILD/bathy" --bbox "$BBOX" --out "$BUILD/dem-pack"
 IFS=, read -r W S E N <<< "$BBOX"
 CLAT=$(python3 -c "print(($S+$N)/2)"); CLON=$(python3 -c "print(($W+$E)/2)")
 python3 preview.py "$BUILD/tiles/$NAME" --at "$CLAT,$CLON" --zoom 10,12,14,16 \

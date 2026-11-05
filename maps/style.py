@@ -77,6 +77,18 @@ CONTOUR_INDEX = {"level": DARK, "width": 1.4}
 DEM_SMOOTH_M = 45  # smoothing radius; Copernicus is a surface model (trees!)
 CONTOUR_MIN_LOOP_PX = 60  # drop closed contour rings shorter than this
 
+# --- sea depths (EMODnet, bathy.py) -------------------------------------------
+# zoom -> isobath depths (m); every one in BATHY_BOLD is drawn heavier
+BATHY_LEVELS = {6: (200, 1000, 2000), 8: (50, 100, 200, 500, 1000, 2000),
+                10: (10, 20, 50, 100, 200, 500, 1000, 2000),
+                12: (5, 10, 20, 30, 50, 100, 200, 500, 1000, 2000),
+                14: (2, 5, 10, 15, 20, 30, 50, 100, 200, 500, 1000)}
+BATHY_BOLD = (10, 50, 100, 500, 1000)
+ISOBATH = {"level": DARK, "width": 1.0, "dash": (5, 3)}
+ISOBATH_BOLD = {"level": DARK, "width": 1.5, "dash": (9, 3)}
+ISOBATH_LABEL = {"min_zoom": 11, "font": 10, "every_px": 420}
+SEA_FROM_DEPTH_M = 2.0   # deeper than this is sea, even without OSM ocean polygons
+
 # --- linear water ----------------------------------------------------------
 # class -> (min_zoom, width)
 WATERWAYS = {
