@@ -241,3 +241,34 @@ def test_library_sections_open_their_guides_and_emergency_buttons_jump(doba, boo
     since = doba.log_seq()
     doba.tap(270, TOP + 120 + 50)                           # START HERE card
     doba.wait_log(r"\[lib\] open 'Water purification'", since=since)
+
+
+def test_a_figure_in_a_manual_is_shown_as_a_picture_in_its_article(doba, tmp_path):
+    """docs2doba renders a PDF figure (vector drawing) to <book>/img/*.dgi and
+    puts it in the text; the article draws it from the card."""
+    pymupdf = pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
+    src = tmp_path / "in"
+    src.mkdir()
+    doc = pymupdf.open()
+    p = doc.new_page()
+    p.insert_text((72, 90), "Square knot", fontsize=18)
+    p.insert_text((72, 130), "Tie right over left, then left over right.", fontsize=10)
+    p.draw_circle((300, 300), 80, color=(0, 0, 0), width=4)
+    p.draw_line((180, 300), (420, 300), color=(0, 0, 0), width=4)
+    p.insert_text((72, 420), "Figure 1. The knot.", fontsize=10)
+    doc.save(str(src / "Knots (US Army).pdf"))
+    out = os.path.join(doba.sd, "doba", "lib", "manuals")
+    subprocess.run([sys.executable, os.path.join(LIB, "docs2doba.py"), str(src), out, "--name", "Manuals",
+                    "--titles-from-filenames"], check=True, capture_output=True)
+    assert os.listdir(os.path.join(out, "img"))
+    lib = os.path.join(doba.sd, "doba", "lib")
+    with open(os.path.join(lib, "sections.txt"), "w") as f:
+        f.write("X|KNOT|knots|manuals|Knots (US Army)\nS|k|KNOTS|knots|manuals\n")
+    boot(doba)
+    doba.console("screen library", 800)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(96, TOP + 92 + 28 + 54)
+    doba.wait_log(r"\[lib\] open 'Knots \(US Army\)'", since=since)
+    doba.wait_log(r"\[lib\] picture \d+ \d+x\d+", since=since)

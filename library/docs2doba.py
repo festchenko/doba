@@ -27,9 +27,117 @@ from dobafold import KEY_BYTES, fold
 from zim2doba import HDR, LINK_A, LINK_B, LINK_C, REC, to_text, utf8_cut
 
 MAX_ARTICLE = 1_400_000          # bytes of text; the device holds 1.5 MB inflated
-KINDS = set("THSPB")
+KINDS = set("THSPBI")
 TITLES_FROM_FILENAMES = False    # --titles-from-filenames: the file name is the title
 ALIASES = []                     # (article title, [other titles]) gathered by the readers
+IMAGES = []                      # (name, .dgi bytes): pictures for <out>/img/
+IMAGE_NAMES = {}                 # .dgi bytes -> name (the same picture is stored once)
+WITH_IMAGES = True               # --no-images turns them off
+IMG_W, IMG_MAX_H = 484, 640      # device column width, tallest picture on a page
+
+
+# --- pictures --------------------------------------------------------------------
+
+def to_dgi(img):
+    """A PIL greyscale image -> 'name w h' of a stored .dgi: 4 e-ink greys,
+    Floyd-Steinberg dithered, packed two pixels a byte, zlib."""
+    from PIL import Image, ImageOps
+    img = img.convert("L")
+    w, h = img.size
+    k = min(1.0, IMG_W / w, IMG_MAX_H / h)
+    if k < 1.0:
+        img = img.resize((max(1, int(w * k)), max(1, int(h * k))), Image.LANCZOS)
+    img = ImageOps.autocontrast(img, cutoff=0.5)
+    pal = Image.new("P", (1, 1))
+    pal.putpalette([0, 0, 0, 85, 85, 85, 170, 170, 170, 255, 255, 255] + [255] * (252 * 3))
+    q = img.convert("RGB").quantize(palette=pal, dither=Image.Dither.FLOYDSTEINBERG)
+    w, h = q.size
+    data = q.tobytes()
+    grey = bytes([0, 5, 10, 15]) + bytes(252)
+    rows = []
+    for r in range(h):
+        row = data[r * w:(r + 1) * w].translate(grey)
+        if w & 1:
+            row += b"\x0f"
+        rows.append(bytes((a << 4) | b for a, b in zip(row[0::2], row[1::2])))
+    blob = b"DGI1" + struct.pack("<HH", w, h) + zlib.compress(b"".join(rows), 9)
+    name = IMAGE_NAMES.get(blob)
+    if not name:
+        name = f"{len(IMAGES):05d}"
+        IMAGE_NAMES[blob] = name
+        IMAGES.append((name, blob))
+    return f"{name} {w} {h}"
+
+
+def _merge(rects, pad):
+    """Union rectangles that touch (within pad) until none do."""
+    rects = [r for r in rects]
+    changed = True
+    while changed:
+        changed = False
+        out = []
+        for r in rects:
+            for i, o in enumerate(out):
+                if (r.x0 - pad < o.x1 and o.x0 - pad < r.x1 and r.y0 - pad < o.y1 and o.y0 - pad < r.y1):
+                    out[i] = o | r
+                    changed = True
+                    break
+            else:
+                out.append(r)
+        rects = out
+    return rects
+
+
+def page_figures(page, logos):
+    """Figure areas on a PDF page: placed pictures plus clusters of vector
+    drawing, without page frames, rules and repeated logos."""
+    import pymupdf
+    pr = page.rect
+    top, bottom = pr.y0 + pr.height * 0.06, pr.y1 - pr.height * 0.05
+    found = []
+    for info in page.get_image_info(xrefs=True):
+        r = pymupdf.Rect(info["bbox"]) & pr
+        if r.is_empty or r.width < 40 or r.height < 30 or info.get("xref") in logos:
+            continue
+        found.append(r)
+    lines = []
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        drawings = []
+    for d in drawings:
+        r = pymupdf.Rect(d["rect"]) & pr
+        if r.is_empty and not (r.width or r.height):
+            continue
+        if r.width > pr.width * 0.6 and r.height > pr.height * 0.5:
+            continue                                    # a frame around the page
+        if r.height < 3 and r.width > pr.width * 0.45:
+            continue                                    # a full-width rule
+        if r.y1 < top or r.y0 > bottom:
+            continue                                    # running head / foot
+        lines.append(r)
+    texts = [pymupdf.Rect(b["bbox"]) for b in page.get_text("dict", flags=0)["blocks"] if b.get("type") == 0]
+    for r in _merge(lines, 6):
+        if r.width < 60 or r.height < 40:
+            continue
+        # A frame round one paragraph (WARNING, NOTE) stays text.
+        inner = [t for t in texts if (t & r).get_area() > t.get_area() * 0.5]
+        if len(inner) <= 2 and sum(t.get_area() for t in inner) > r.get_area() * 0.2 \
+                and not any((f & r).get_area() > 0 for f in found):
+            continue
+        found.append(r)
+    figs = [r for r in _merge(found, 4) if r.get_area() < pr.get_area() * 0.85]
+    return figs
+
+
+def render_figure(page, r):
+    import pymupdf
+    from PIL import Image
+    zoom = min(IMG_W / r.width, 2.5)
+    if r.height * zoom > IMG_MAX_H:
+        zoom = IMG_MAX_H / r.height
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=r, colorspace=pymupdf.csGRAY, alpha=False)
+    return Image.frombytes("L", (pix.width, pix.height), pix.samples)
 
 
 # --- text helpers ----------------------------------------------------------------
@@ -41,7 +149,38 @@ def clean(s):
     return " ".join(s.split())
 
 
+def merge_broken(lines):
+    """A paragraph cut by a page turn (no full stop, the next starts in lower
+    case) is one paragraph again; pictures that fell in between follow it."""
+    out = []
+    i = 0
+    while i < len(lines):
+        kind, t = lines[i]
+        if kind == "P":
+            j = i + 1
+            pics = []
+            while True:
+                k = j
+                while k < len(lines) and lines[k][0] == "I":
+                    k += 1
+                if (k < len(lines) and lines[k][0] == "P" and t and t.rstrip()[-1:] not in ".!?:;)\"”"
+                        and lines[k][1][:1].islower()):
+                    pics += lines[j:k]
+                    t = t[:-1] + lines[k][1] if t.endswith("-") and t[-2:-1].isalpha() else t + " " + lines[k][1]
+                    j = k + 1
+                else:
+                    break
+            out.append(("P", t))
+            out += pics
+            i = j
+            continue
+        out.append((kind, t))
+        i += 1
+    return out
+
+
 def lines_to_text(title, lines):
+    lines = merge_broken([(k, clean(t)) for k, t in lines])
     out = ["T" + clean(title)]
     for kind, t in lines:
         t = clean(t)
@@ -174,6 +313,180 @@ def short_title(title):
     return cut or t[:28]
 
 
+def page_blocks(page):
+    """(size, text, bbox, [(size, chars)]) for each paragraph of a PDF page, in
+    reading order. A two-column page whose lines run across the gutter (old
+    scans with an OCR layer) is rebuilt column by column from its words."""
+    import pymupdf
+    words = page.get_text("words")
+    gut = find_gutter(words, page.rect)
+    if gut is not None:
+        spans = [(pymupdf.Rect(sp["bbox"]), sp["size"])
+                 for b in page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT)["blocks"] if b.get("type") == 0
+                 for l in b["lines"] for sp in l["spans"]]
+        return blocks_from_words(words, gut, page.rect, spans)
+    out = []
+    d = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_TEXT)
+    for b in d["blocks"]:
+        if b.get("type") != 0:
+            continue
+        for l in b["lines"]:
+            for sp in l["spans"]:
+                sp["text"] = "".join(c["c"] for c in sp.get("chars", []))
+        spans = [sp for l in b["lines"] for sp in l["spans"] if sp["text"].strip()]
+        if not spans:
+            continue
+        out.append((max(sp["size"] for sp in spans), block_text(b), b["bbox"],
+                    [(round(sp["size"]), len(sp["text"])) for sp in spans]))
+    return out
+
+
+def find_gutter(words, pr):
+    """x of an empty vertical band near the middle with text on both sides
+    of it on most lines, or None."""
+    body = [w for w in words if pr.height * 0.07 < w[1] < pr.height * 0.93]
+    if len(body) < 80:
+        return None
+    lo, hi = int(pr.width * 0.38), int(pr.width * 0.62)
+    cover = [0] * (int(pr.width) + 2)
+    for w in body:
+        for x in range(max(0, int(w[0])), min(len(cover), int(w[2]) + 1)):
+            cover[x] += 1
+    best, run, start = None, 0, 0
+    for x in range(lo, hi):
+        if cover[x] <= len(body) * 0.01:
+            if run == 0:
+                start = x
+            run += 1
+            if run >= 8 and (best is None or run > best[1]):
+                best = (start, run)
+        else:
+            run = 0
+    if not best:
+        return None
+    g = best[0] + best[1] / 2
+    left = sum(1 for w in body if w[2] < g)
+    right = sum(1 for w in body if w[0] > g)
+    if min(left, right) < len(body) * 0.25:
+        return None
+    # Only worth it when the text layer mixes the columns: OCR paragraphs
+    # (blocks) holding words from both sides.
+    crossing = {w[5] for w in body if w[2] < g} & {w[5] for w in body if w[0] > g}
+    return g if crossing else None
+
+
+def blocks_from_words(words, gut, pr, spans=()):
+    """Columns read in bands: a full-width line (a heading, a wide figure
+    caption) ends the band above it; each band is left column, then right."""
+    cross = sorted((w for w in words if w[0] < gut < w[2]), key=lambda w: w[1])
+    cuts = []
+    for w in cross:
+        if cuts and w[1] <= cuts[-1][1] + 2:
+            cuts[-1] = (cuts[-1][0], max(cuts[-1][1], w[3]))
+        else:
+            cuts.append((w[1], w[3]))
+    out = []
+    top = -1e9
+    for y0, y1 in cuts + [(1e9, 1e9)]:
+        band = [w for w in words if top <= (w[1] + w[3]) / 2 < y0 and not (w[0] < gut < w[2])]
+        out += _columns(band, gut, spans)
+        full = [w for w in words if y0 - 2 <= (w[1] + w[3]) / 2 <= y1 + 2]
+        if full and y0 < 1e9:
+            out += _columns(full, 1e9, spans)          # one "column": the whole line
+        top = y1 + 2
+    return out
+
+
+def _columns(words, gut, spans):
+    out = []
+    for side in (0, 1):
+        ws = [w for w in words if (w[2] < gut if side == 0 else w[0] > gut)]
+        ws.sort(key=lambda w: (round(w[1]), w[0]))
+        lines = []
+        for w in ws:
+            h = w[3] - w[1]
+            if lines and abs(w[1] - lines[-1][0]) < h * 0.5:
+                lines[-1][1].append(w)
+            else:
+                lines.append([w[1], [w]])
+        para, prev = [], None
+        def flush():
+            if not para:
+                return
+            x0 = min(w[0] for l in para for w in l); y0 = min(w[1] for l in para for w in l)
+            x1 = max(w[2] for l in para for w in l); y1 = max(w[3] for l in para for w in l)
+            def wsize(w):
+                cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
+                for r, sz in spans:
+                    if r.x0 <= cx <= r.x1 and r.y0 <= cy <= r.y1:
+                        return sz
+                return (w[3] - w[1]) / 1.2
+            hs = sorted(wsize(w) for l in para for w in l)
+            size = hs[len(hs) // 2]
+            text = ""
+            for l in para:
+                t = " ".join(w[4] for w in sorted(l, key=lambda w: w[0]))
+                if text.endswith("-") and t[:1].islower() and len(text) > 1 and text[-2].isalpha():
+                    text = text[:-1] + t
+                else:
+                    text = (text + " " + t) if text else t
+            out.append((size, text, (x0, y0, x1, y1), [(round(size), len(text))]))
+        for y, l in lines:
+            h = max(w[3] - w[1] for w in l)
+            if prev is not None and (y - prev[0] > h * 1.9 or abs(h - prev[1]) > h * 0.3):
+                flush()
+                para = []
+            para.append(l)
+            prev = (y, h)
+        flush()
+    return out
+
+
+def line_text(line):
+    """A PDF line's spans joined as printed: a space only where there is a gap
+    (letter-spaced headings come one letter a span)."""
+    out, prev = "", None
+    for sp in line["spans"]:
+        t = sp["text"]
+        if not t:
+            continue
+        if prev is not None:
+            gap = sp["bbox"][0] - prev["bbox"][2]
+            if gap > sp["size"] * 0.25 and not out.endswith(" ") and not t.startswith(" "):
+                out += " "
+        out += t
+        prev = sp
+    # L e t t e r - s p a c e d words written with real spaces: the gaps
+    # between glyphs say where the words end.
+    if re.fullmatch(r"(?:\S {1,2}){3,}\S", out.strip()):
+        glyphs = [c for sp in line["spans"] for c in sp.get("chars", []) if c["c"].strip()]
+        if len(glyphs) >= 4:
+            gaps = sorted(b["bbox"][0] - a["bbox"][2] for a, b in zip(glyphs, glyphs[1:]))
+            m = gaps[len(gaps) // 2]
+            out = glyphs[0]["c"]
+            for a, b in zip(glyphs, glyphs[1:]):
+                if b["bbox"][0] - a["bbox"][2] > m * 1.8 + 0.8:
+                    out += " "
+                out += b["c"]
+        else:
+            out = out.replace(" ", "")
+    return out
+
+
+def block_text(b):
+    """Lines of a block as one paragraph; words hyphenated across lines rejoined."""
+    out = ""
+    for l in b["lines"]:
+        t = line_text(l).strip()
+        if not t:
+            continue
+        if out.endswith("-") and t[:1].islower() and len(out) > 1 and out[-2].isalpha():
+            out = out[:-1] + t
+        else:
+            out = (out + " " + t) if out else t
+    return out
+
+
 def heading_marks(pages, body):
     """Chapters from the print itself when the bookmarks don't give them: the
     largest heading size that starts between 8 and 80 sections."""
@@ -205,29 +518,69 @@ def read_pdf(path, title):
     # Body size: the commonest span size; bigger, bold-ish lines are headings.
     sizes = {}
     pages = []
+    # A picture on many pages is a logo or a page ornament, not a figure.
+    seen_on = {}
+    if WITH_IMAGES:
+        for page in doc:
+            for x in {i[0] for i in page.get_images()}:
+                seen_on[x] = seen_on.get(x, 0) + 1
+    logos = {x for x, n in seen_on.items() if n > 3}
     for page in doc:
-        d = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT)
+        figs = page_figures(page, logos) if WITH_IMAGES else []
         blocks = []
-        for b in d["blocks"]:
-            if b.get("type") != 0:
+        for size, text, bbox, stats in page_blocks(page):
+            for k, n in stats:
+                sizes[k] = sizes.get(k, 0) + n
+            b = {"bbox": bbox}
+            br = pymupdf.Rect(b["bbox"])
+            inside = False
+            for i, f in enumerate(figs):
+                ov = (br & f).get_area() if not (br & f).is_empty else 0
+                if br.get_area() and ov / br.get_area() > 0.5 and len(text) < 300:
+                    figs[i] = f | br                    # labels belong to the picture
+                    inside = True
+                    break
+            if not inside:
+                blocks.append((size, text, b["bbox"]))
+        # Pictures go into the text flow before the first block below their top.
+        for f in sorted(figs, key=lambda r: r.y0):
+            try:
+                ref = to_dgi(render_figure(page, f))
+            except Exception as e:
+                print(f"   picture skipped on page {page.number + 1}: {e}", file=sys.stderr)
                 continue
-            spans = [s for l in b["lines"] for s in l["spans"] if s["text"].strip()]
-            if not spans:
-                continue
-            text = " ".join(" ".join(s["text"] for s in l["spans"]) for l in b["lines"])
-            size = max(s["size"] for s in spans)
-            for s in spans:
-                sizes[round(s["size"])] = sizes.get(round(s["size"]), 0) + len(s["text"])
-            blocks.append((size, text, b["bbox"]))
+            # (in its own column: the block must also lie under it)
+            at = next((i for i, bl in enumerate(blocks) if bl[0] != -1 and bl[2][1] >= f.y0
+                       and bl[2][0] < f.x1 and bl[2][2] > f.x0), None)
+            if at is None:
+                at = next((i for i, bl in enumerate(blocks) if bl[0] != -1 and bl[2][1] >= f.y0), len(blocks))
+            blocks.insert(at, (-1, ref, tuple(f)))
         pages.append((page.rect.height, blocks))
     body = max(sizes, key=sizes.get) if sizes else 10
+    # Running heads and feet: the same short line (page numbers aside) on many pages.
+    def norm(t):
+        return re.sub(r"[\d\-–.]+", "#", clean(t).lower())
+    rep = {}
+    for _, blocks in pages:
+        for size, text, bbox in blocks:
+            if size != -1 and len(text) < 90:
+                k = norm(text)
+                rep[k] = rep.get(k, 0) + 1
+    running = {k for k, n in rep.items() if n >= max(4, len(pages) // 8)} if len(pages) >= 12 else set()
 
     def page_lines(pno):
         h, blocks = pages[pno]
         out = []
         for size, text, bbox in blocks:
+            if size == -1:
+                out.append(("I", text))
+                continue
             t = clean(text)
-            if not t:
+            if not t or (len(t) < 90 and norm(t) in running):
+                continue
+            # A page foot or head with its page number ("2-1", "Ladders 2-1").
+            if (bbox[1] > h * 0.88 or bbox[3] < h * 0.09) and len(t) < 80 and \
+                    re.search(r"(^|\s)(\d+-\d+|[A-Z]-\d+|\d+)(\s|$)", t):
                 continue
             # Running heads/feet and bare page numbers.
             if (bbox[1] < h * 0.06 or bbox[3] > h * 0.95) and len(t) < 80:
@@ -251,7 +604,10 @@ def read_pdf(path, title):
     marks = []
     if toc:
         top = min(l for l, _, _ in toc)
-        marks = [m for m in toc if m[0] <= top + 1]
+        # Chapters: the top level; its sections only when there are too few chapters.
+        marks = [m for m in toc if m[0] <= top]
+        if len(marks) < 3:
+            marks = [m for m in toc if m[0] <= top + 1]
         marks = sorted({(p, t, l) for l, t, p in marks})
     if len(marks) < 3:
         marks = heading_marks(pages, body)
@@ -301,6 +657,11 @@ READERS = {".pdf": read_pdf, ".epub": read_epub, ".html": read_html, ".htm": rea
 
 def write_book(out, name, source, articles, aliases=()):
     os.makedirs(out, exist_ok=True)
+    if IMAGES:
+        os.makedirs(os.path.join(out, "img"), exist_ok=True)
+        for nm, blob in IMAGES:
+            with open(os.path.join(out, "img", nm + ".dgi"), "wb") as f:
+                f.write(blob)
     records, pos = [], 0
     where = {}
     with open(os.path.join(out, "a0000.dta"), "wb") as f:
@@ -338,8 +699,10 @@ def main():
     ap.add_argument("--source", default="Own files", help="shown under every article")
     ap.add_argument("--titles-from-filenames", action="store_true",
                     help="use each file's name as its title (fetch_gov.py names them)")
+    ap.add_argument("--no-images", action="store_true", help="text only")
     a = ap.parse_args()
-    global TITLES_FROM_FILENAMES
+    global TITLES_FROM_FILENAMES, WITH_IMAGES
+    WITH_IMAGES = not a.no_images
     TITLES_FROM_FILENAMES = a.titles_from_filenames
     files = [a.src] if os.path.isfile(a.src) else sorted(
         os.path.join(d, f) for d, _, fs in os.walk(a.src) for f in fs if not f.startswith("."))
@@ -373,7 +736,7 @@ def main():
         sys.exit("nothing readable found")
     aliases = [(renamed.get(t, t), o) for t, o in ALIASES]
     n, size = write_book(a.out, a.name, " ".join(a.source.split())[:60], articles, aliases)
-    print(f"done: {n} articles, {size / 1e6:.1f} MB -> {a.out}")
+    print(f"done: {n} articles, {len(IMAGES)} pictures, {size / 1e6:.1f} MB -> {a.out}")
 
 
 if __name__ == "__main__":

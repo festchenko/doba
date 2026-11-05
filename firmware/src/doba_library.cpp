@@ -254,9 +254,28 @@ const EpdFont* fontFor(uint8_t kind) {
     return (kind == 'T' || kind == 'H') ? ui::font(ui::F_BODY_H)
          : kind == 'S' ? ui::font(ui::F_KEY) : kind == 'F' ? ui::font(ui::F_TINY) : ui::font(ui::F_BODY);
 }
+// Article typography: one column with even margins, a little air between
+// lines and paragraphs, headings set apart from what came before.
+constexpr int MARGIN = 26, PARA_GAP = 14;
 int lineHeight(uint8_t kind) {
-    return kind == 'T' ? 46 : kind == 'H' ? 42 : kind == 'S' ? 36 : kind == 'F' ? 34 : 30;
+    return kind == 'T' ? 48 : kind == 'H' ? 46 : kind == 'S' ? 38 : kind == 'F' ? 32 : 34;
 }
+int baselineOf(uint8_t kind) { return kind == 'H' ? 14 : kind == 'T' ? 10 : 9; }
+
+// A picture line: "I<name> <w> <h>"; the pixels are in <book>/img/<name>.dgi.
+constexpr int IMG_PAD = 10, IMG_MAX_H = 640;
+bool imageLine(const char* s, size_t n, char* name, size_t cap, int& w, int& h) {
+    char tmp[64];
+    if (n >= sizeof tmp) return false;
+    memcpy(tmp, s, n);
+    tmp[n] = 0;
+    char nm[32];
+    if (sscanf(tmp, "%31s %d %d", nm, &w, &h) != 3 || w <= 0 || h <= 0) return false;
+    if (h > IMG_MAX_H) h = IMG_MAX_H;
+    snprintf(name, cap, "%s", nm);
+    return true;
+}
+int heightOf(const struct Line& l);
 
 int widthOf(const EpdFont* f, const char* s, size_t n) {
     char tmp[512];
@@ -277,15 +296,76 @@ void addLine(uint32_t off, uint16_t len, uint8_t kind) {
     g_lines[g_lineCount++] = {off, len, kind};
 }
 
+bool firstLineOf(const Line& l) { return l.off > 0 && (uint8_t)g_text[l.off - 1] == l.kind; }
+bool lastLineOf(const Line& l) { return l.off + l.len >= g_textLen || g_text[l.off + l.len] == '\n'; }
+int topGap(const Line& l) {
+    if (!firstLineOf(l)) return 0;
+    return l.kind == 'H' ? 20 : l.kind == 'S' ? 12 : l.kind == 'F' ? 10 : 0;
+}
+
+int heightOf(const Line& l) {
+    if (l.kind == 'G') return PARA_GAP;
+    if (l.kind == 'I') {
+        char nm[32];
+        int w, h;
+        return imageLine(g_text + l.off, l.len, nm, sizeof nm, w, h) ? h + 2 * IMG_PAD : 0;
+    }
+    return topGap(l) + lineHeight(l.kind);
+}
+
+// Draws <book>/img/<name>.dgi centred at y: "DGI1", u16 w, u16 h, then zlib of
+// 4-bit greys (0 black .. 15 white), two pixels a byte, rows padded to bytes.
+void drawImage(const char* name, int y, int maxH, uint8_t* fb) {
+    char path[128];
+    snprintf(path, sizeof path, "%s/%s/img/%s.dgi", kRoot, g_books[g_book].dir, name);
+    sdLock();
+    File f = SD.open(path, FILE_READ);
+    const size_t zlen = f ? f.size() : 0;
+    uint8_t* z = zlen > 8 ? (uint8_t*)heap_caps_malloc(zlen, MALLOC_CAP_SPIRAM) : nullptr;
+    bool ok = z && f.read(z, zlen) == zlen;
+    if (f) f.close();
+    sdUnlock();
+    if (!ok || memcmp(z, "DGI1", 4) != 0) {
+        if (z) heap_caps_free(z);
+        epd_fill_rect({W / 2 - 60, y, 120, 2}, INK, fb);   // missing: a mark, not a hole
+        Serial.printf("[lib] picture %s missing\n", name);
+        return;
+    }
+    const int w = z[4] | (z[5] << 8), h = z[6] | (z[7] << 8);
+    const size_t stride = (size_t)(w + 1) / 2, need = stride * h;
+    uint8_t* px = (uint8_t*)heap_caps_malloc(need + 1, MALLOC_CAP_SPIRAM);
+    size_t got = 0;
+    ok = px && inflateTo(z + 8, zlen - 8, (char*)px, need, &got) && got >= need;
+    heap_caps_free(z);
+    if (ok) {
+        const int x0 = (W - w) / 2;
+        const int rows = h < maxH ? h : maxH;
+        for (int r = 0; r < rows; ++r) {
+            const uint8_t* row = px + stride * r;
+            for (int c = 0; c < w; ++c) {
+                const uint8_t v = (c & 1) ? (row[c >> 1] & 0x0F) : (row[c >> 1] >> 4);
+                if (v != 15) epd_draw_pixel(x0 + c, y + r, v * 17, fb);   // white is the paper
+            }
+        }
+    }
+    if (ok) Serial.printf("[lib] picture %s %dx%d\n", name, w, h);
+    if (px) heap_caps_free(px);
+}
+
 void layout() {
     g_lineCount = 0;
-    const int maxW = W - 2 * 18;
+    const int maxW = W - 2 * MARGIN;
     size_t i = 0;
     while (i < g_textLen) {
         size_t e = i;
         while (e < g_textLen && g_text[e] != '\n') ++e;
         const uint8_t kind = (uint8_t)g_text[i];
         const size_t start = i + 1;
+        if (kind == 'I') {   // a picture: one line, its own height
+            if (e > start) addLine((uint32_t)start, (uint16_t)(e - start), 'I');
+            i = e + 1;
+            continue;
+        }
         const EpdFont* f = fontFor(kind);
         const int bulletW = kind == 'B' ? 26 : 0;
         const int spaceW = widthOf(f, "a a", 3) - widthOf(f, "aa", 2);
@@ -294,7 +374,25 @@ void layout() {
         while (p < e) {
             size_t we = p;
             while (we < e && g_text[we] != ' ') ++we;
-            const int ww = widthOf(f, g_text + p, we - p);
+            int ww = widthOf(f, g_text + p, we - p);
+            // A word wider than the column (a URL, a run of letters) is cut.
+            if (ww > maxW - bulletW) {
+                if (p != ls) { addLine((uint32_t)ls, (uint16_t)(p - 1 - ls), kind); ls = p; lw = 0; }
+                size_t cut = p;
+                while (cut < we) {
+                    size_t nx = cut + 1;
+                    while (nx < we && ((uint8_t)g_text[nx] & 0xC0) == 0x80) ++nx;
+                    if (widthOf(f, g_text + p, nx - p) > maxW - bulletW && cut > p) break;
+                    cut = nx;
+                }
+                if (cut < we) {
+                    addLine((uint32_t)p, (uint16_t)(cut - p), kind);
+                    ls = p = cut;
+                    lw = 0;
+                    continue;
+                }
+                ww = widthOf(f, g_text + p, we - p);
+            }
             const int add = (p == ls ? 0 : spaceW) + ww;
             if (p != ls && lw + add > maxW - bulletW) {
                 addLine((uint32_t)ls, (uint16_t)(p - 1 - ls), kind);
@@ -318,7 +416,7 @@ void layout() {
     int y = bodyTop, k = 0;
     g_pageStarts[g_pageCount++] = 0;
     for (k = 0; k < g_lineCount; ++k) {
-        const int h = g_lines[k].kind == 'G' ? 10 : lineHeight(g_lines[k].kind);
+        const int h = heightOf(g_lines[k]);
         if (y + h > bodyBottom && g_pageCount < MAX_PAGES) {
             g_pageStarts[g_pageCount++] = k;
             y = bodyTop;
@@ -760,7 +858,20 @@ void renderArticle(uint8_t* fb) {
         snprintf(crumb, sizeof crumb, "%s  >  %s", g_secs[g_sec].name, g_title);
     else
         snprintf(crumb, sizeof crumb, "%s", g_title);
-    ui::text(ui::font(ui::F_SMALL), 14, TOP + 32, crumb, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    // Never under the page counter: cut at a character, mark the cut.
+    const EpdFont* cf = ui::font(ui::F_SMALL);
+    const int room = W - 14 - ui::textWidth(ui::font(ui::F_TINY), pg) - 20 - 14;
+    if (ui::textWidth(cf, crumb) > room) {
+        size_t n = strlen(crumb);
+        while (n > 0) {
+            do { --n; } while (n > 0 && ((uint8_t)crumb[n] & 0xC0) == 0x80);
+            crumb[n] = 0;
+            char t[KEY + 48];
+            snprintf(t, sizeof t, "%s...", crumb);
+            if (ui::textWidth(cf, t) <= room) { snprintf(crumb, sizeof crumb, "%s", t); break; }
+        }
+    }
+    ui::text(cf, 14, TOP + 32, crumb, fb, EPD_DRAW_ALIGN_LEFT, INK);
     // Rule doubles as a progress bar: thick for the read part.
     epd_fill_rect({0, TOP + 44, W, 2}, INK, fb);
     epd_fill_rect({0, TOP + 42, W * (g_page + 1) / g_pageCount, 6}, INK, fb);
@@ -775,22 +886,35 @@ void renderArticle(uint8_t* fb) {
         while (li < g_linkCount && g_links[li].end <= g_lines[first].off) ++li;
     for (int k = first; k < last; ++k) {
         const Line& l = g_lines[k];
-        if (l.kind == 'G') { y += 10; continue; }
+        if (l.kind == 'G') { y += PARA_GAP; continue; }
+        if (l.kind == 'I') {
+            char nm[32];
+            int iw, ih;
+            if (imageLine(g_text + l.off, l.len, nm, sizeof nm, iw, ih)) {
+                drawImage(nm, y + IMG_PAD, ih, fb);
+                y += ih + 2 * IMG_PAD;
+            }
+            continue;
+        }
+        y += topGap(l);
         const int h = lineHeight(l.kind);
         size_t n = l.len < sizeof buf - 1 ? l.len : sizeof buf - 1;
         memcpy(buf, g_text + l.off, n);
         buf[n] = 0;
-        int x = 18;
+        int x = MARGIN;
         // First line of a bullet gets the bullet; continuation lines indent.
         if (l.kind == 'B') {
-            const bool firstOfItem = l.off > 0 && g_text[l.off - 1] == 'B';
-            if (firstOfItem) epd_fill_rect({20, y + h / 2 - 6, 8, 8}, INK, fb);
-            x += 26;
+            const char c0 = g_text[l.off];
+            const bool numbered = c0 == '(' || ((c0 >= '0' && c0 <= '9') || (c0 >= 'a' && c0 <= 'z'))
+                                  && l.len > 1 && (g_text[l.off + 1] == ')' || g_text[l.off + 1] == '.');
+            if (firstLineOf(l) && !numbered)   // "(1)", "a." carry their own label
+                epd_fill_rect({MARGIN + 2, y + h - baselineOf('B') - 14, 8, 8}, INK, fb);
+            x += 24;
         }
         const EpdFont* f = fontFor(l.kind);
-        ui::text(f, x, y + h - 8, buf, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        if (l.kind == 'H') epd_fill_rect({18, y + h - 2, W - 36, 2}, INK, fb);
-        if (l.kind == 'F') epd_fill_rect({18, y + 2, W - 36, 1}, INK, fb);
+        ui::text(f, x, y + h - baselineOf(l.kind), buf, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        if (l.kind == 'H' && lastLineOf(l)) epd_fill_rect({MARGIN, y + h - 4, W - 2 * MARGIN, 2}, INK, fb);
+        if (l.kind == 'F' && firstLineOf(l)) epd_fill_rect({MARGIN, y - 4, 60, 1}, INK, fb);
         // Links on this line: underlined, and remembered for taps.
         const uint32_t ls = l.off, le = l.off + l.len;
         for (int j = li; j < g_linkCount && g_links[j].start < le; ++j) {
