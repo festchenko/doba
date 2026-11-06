@@ -15,7 +15,6 @@ MIRROR="https://download.kiwix.org/zim"
 # kiwix dir | file prefix | book id on the card | name on the device | source line
 BOOKS=(
   "wikipedia|wikipedia_en_all_nopic_|wiki_en|Wikipedia EN|Wikipedia EN · CC BY-SA"
-  "wikipedia|wikipedia_ru_all_nopic_|wiki_ru|Википедия RU|Википедия · CC BY-SA"
   "wikipedia|wikipedia_uk_all_nopic_|wiki_uk|Вікіпедія UA|Вікіпедія · CC BY-SA"
   "other|mdwiki_en_all_maxi_|med_en|WikiMed EN|WikiProject Medicine · CC BY-SA"
   "other|zimgit-medicine_en_|medicine|Medicine (field)|zimgit · public sources"

@@ -1,7 +1,7 @@
 # Doba library sections. library/sections.py resolves each guide against the
 # books on the card and keeps the first candidate it finds.
 # Book ids: med_en (WikiMed), medicine, disaster, water, food, knots (zimgit),
-# gov (US Gov field library), manuals, mine (personal), wiki_en, wiki_uk, wiki_ru.
+# gov (US Gov field library), manuals, mine (personal), wiki_en, wiki_uk.
 
 emergency BLEEDING     | bleed  | med_en:Bleeding ; gov:ATP 4-02.11 — Chapter 4* ; wiki_en:Bleeding ; wiki_en:Tourniquet
 emergency NOT BREATHING| breath | med_en:Cardiopulmonary resuscitation ; wiki_en:Cardiopulmonary resuscitation ; gov:ATP 4-02.11 — Chapter 5*
@@ -155,7 +155,7 @@ section comms | COMMS | comms | gov,manuals,mine,wiki_en
   - Meshtastic            | the radio Doba speaks                 | wiki_en:Meshtastic
   - Amateur radio         | emergency nets                        | wiki_en:Amateur radio emergency communications
 
-section reference | REFERENCE | books | wiki_en,wiki_uk,wiki_ru,shelf_en,shelf_ru,manuals,mine,gov
+section reference | REFERENCE | books | wiki_en,wiki_uk,shelf_en,shelf_ru,manuals,mine,gov
   * Survival skills       | the overview                          | wiki_en:Survival skills
   - Wilderness medicine   | care far from help                    | med_en:Wilderness medical emergency ; wiki_en:Wilderness medical emergency
   - Disaster preparedness | getting ready at home                 | gov:Are You Ready* ; wiki_en:Emergency management
