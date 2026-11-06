@@ -1,4 +1,5 @@
 #include "ble_sensors.h"
+#include "stealth.h"
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -765,7 +766,7 @@ void task(void*) {
         uint32_t hunted = huntStartMs ? millis() - huntStartMs : 0;
         // scanAlways means the user is sitting on a Sensors screen watching the
         // list fill in — never duty-cycle that.
-        bool lookNow = wantScan && !scanHeld &&
+        bool lookNow = !stealth::active() && wantScan && !scanHeld &&
                        (scanAlways || hunted < 60000 || (hunted / 5000) % 6 == 0);
 
         bool pendingConnect = false;
@@ -783,7 +784,7 @@ void task(void*) {
         }
 
         // Connecting while a scan runs is unreliable; stop it first.
-        for (int k = 0; k < KIND_COUNT; ++k) {
+        for (int k = 0; k < KIND_COUNT && !stealth::active(); ++k) {
             if (sensors[k].found && !sensors[k].connected) {
                 if (scan->isScanning()) scan->stop();
                 connectSensor((SensorKind)k);
@@ -1090,6 +1091,12 @@ void forget(const char* addr) {
         sensors[k].found = false;
     }
     Serial.printf("[ble] forgot %s\n", addr);
+}
+
+// DOBA stealth: drop every sensor link; the task stops scanning on its own.
+void applyStealth() {
+    if (!stealth::active()) return;
+    for (int k = 0; k < KIND_COUNT; ++k) disconnect(k);
 }
 
 }  // namespace ble_sensors

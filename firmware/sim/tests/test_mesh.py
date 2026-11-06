@@ -860,3 +860,21 @@ def test_doba_starts_on_the_eu_868_band(monkeypatch):
         assert abs(m.state().freq_hz - 869525000) < 100
     finally:
         dev.stop()
+
+
+def test_stealth_holds_every_transmission_and_sends_the_queue_when_it_ends(mesh):
+    """DOBA stealth: nothing goes on the air — not a queued message, not a
+    NodeInfo, not an ack — while the receiver keeps listening (LISTEN). What
+    was queued waits, and goes out once stealth ends."""
+    mesh.dev.lora(busy=True)                     # hold the outbox
+    assert mesh.send("held in stealth").WhichOneof("body") == "mesh_queued"
+    mesh.dev.console("stealth listen", 800)
+    mesh.drain()                                 # a frame already on the air finishes
+    mesh.sent()                                  # forget what went before
+    mesh.dev.lora(busy=False)
+    mesh.dev_sleep(8000)
+    assert mesh.sent() == [], "the device transmitted in stealth"
+    assert mesh.dev.lora()["mode"] != "sleep", "LISTEN must keep the receiver on"
+    mesh.dev.console("stealth off", 800)
+    mesh.dev_wait(lambda: any(is_port(h, M.PORT_TEXT) and h["data"]["payload"] == b"held in stealth"
+                              for h in mesh.sent(since=0)), "the held message after stealth")

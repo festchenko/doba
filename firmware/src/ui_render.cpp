@@ -1,4 +1,5 @@
 #include "ui_render.h"
+#include "stealth.h"
 #include "doba_topo_bg.h"
 #include "milgeo.h"    // DOBA
 #include "milspec.h"   // DOBA
@@ -177,6 +178,17 @@ void drawBolt(int cx, int cy, uint8_t color, uint8_t* fb) {
 // below as statusBarOtp() for reference.
 void statusBarOtp(const RideState& s, uint8_t* fb, const char* title);
 
+// DOBA: a crossed-out eye left of the clock while stealth is on.
+static int stealthMark(int rightEdge, int cy, uint8_t fg, uint8_t* fb) {
+    if (!stealth::active()) return rightEdge;
+    const int cx = rightEdge - 18;
+    epd_draw_circle(cx, cy, 11, fg, fb);
+    epd_draw_circle(cx, cy, 10, fg, fb);
+    epd_fill_circle(cx, cy, 4, fg, fb);
+    for (int t = -1; t <= 1; ++t) epd_draw_line(cx - 15, cy + 13 + t, cx + 15, cy - 13 + t, fg, fb);
+    return rightEdge - 40;
+}
+
 void statusBarBack(const RideState& s, uint8_t* fb, const char* title) {
     const int W = epd_rotated_display_width();
     const int H = STATUS_H;
@@ -198,6 +210,7 @@ void statusBarBack(const RideState& s, uint8_t* fb, const char* title) {
     if (s.batteryPercent == 0) snprintf(right, sizeof right, "%s  --%%", clock);
     else snprintf(right, sizeof right, "%s  %u%%%s", clock, s.batteryPercent, s.charging ? "+" : "");
     text(&Arial_L, W - 14, base, right, fb, EPD_DRAW_ALIGN_RIGHT, FG);
+    stealthMark(W - 14 - textWidth(&Arial_L, right) - 6, H / 2, FG, fb);
 }
 
 void statusBar(const RideState& s, uint8_t* fb, const char* title) {
@@ -246,6 +259,7 @@ void statusBar(const RideState& s, uint8_t* fb, const char* title) {
     if (s.batteryPercent == 0) snprintf(bat, sizeof(bat), "BAT --%%");
     else snprintf(bat, sizeof(bat), "BAT %u%%%s", s.batteryPercent, s.charging ? "+" : "");
     text(&Arial_B, W - 14, base, bat, fb, EPD_DRAW_ALIGN_RIGHT, FG);
+    stealthMark(W - 14 - textWidth(&Arial_B, bat) - 6, H / 2, FG, fb);
 }
 
 void statusBarOtp(const RideState& s, uint8_t* fb, const char* title) {

@@ -1,4 +1,5 @@
 #include "ble_server.h"
+#include "stealth.h"
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -824,6 +825,12 @@ void recountPhoneBonds() {
 // replace, so changing one byte means starting over) and starts advertising.
 // Name goes in the scan response: flags + a 128-bit UUID + our 6-byte
 // manufacturer field already take 27 of the 31 advertising bytes.
+// DOBA: no advertising in stealth — the device must not be findable.
+void advertise() {
+    if (stealth::active()) { NimBLEDevice::stopAdvertising(); return; }
+    NimBLEDevice::startAdvertising();
+}
+
 void applyAdvertising() {
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
     adv->reset();
@@ -834,7 +841,7 @@ void applyAdvertising() {
     adv->enableScanResponse(true);
     adv->setName("OpenTrailPaper");
     advDirty = false;
-    NimBLEDevice::startAdvertising();
+    advertise();
 }
 
 // Keep a name the panel's fonts can draw: iPhones default to
@@ -1553,7 +1560,7 @@ class ServerCb : public NimBLEServerCallbacks {
         if (info.getConnHandle() != linkHandle) {
             if (!linkUp && !unpairPending) {
                 if (advDirty) applyAdvertising();
-                else NimBLEDevice::startAdvertising();
+                else advertise();
             }
             return;
         }
@@ -1617,7 +1624,7 @@ class ServerCb : public NimBLEServerCallbacks {
         // fresh advertisement if the pairing state changed on this link.
         if (unpairPending) return;   // serviceUnpair re-advertises when done
         if (advDirty) applyAdvertising();
-        else NimBLEDevice::startAdvertising();
+        else advertise();
     }
 };
 
@@ -3069,7 +3076,7 @@ void task(void*) {
         // connected, in case a disconnect ever slips past onDisconnect.
         if (!linkUp && !unpairPending) {
             NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-            if (adv && !adv->isAdvertising()) NimBLEDevice::startAdvertising();
+            if (adv && !adv->isAdvertising() && !stealth::active()) advertise();
         }
 
         RideState s = g_state.snapshot();
@@ -3103,6 +3110,20 @@ void task(void*) {
         if (phoneConnected && !phone_link::active()) statusChr->notify();
 
 
+    }
+}
+
+// DOBA stealth: stop advertising and drop every link now; leaving stealth
+// makes the device findable again.
+void applyStealth() {
+    NimBLEServer* srv = NimBLEDevice::getServer();
+    if (stealth::active()) {
+        NimBLEDevice::stopAdvertising();
+        if (srv)
+            for (uint16_t h : srv->getPeerDevices()) srv->disconnect(h);
+        diag::log("ble: stealth — advertising stopped, links dropped");
+    } else if (!linkUp) {
+        advertise();
     }
 }
 

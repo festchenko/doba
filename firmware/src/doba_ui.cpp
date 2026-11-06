@@ -1,5 +1,6 @@
 // DOBA: main screen, comms and library pages — see doba_ui.h.
 #include "doba_ui.h"
+#include "stealth.h"
 #include "doba_topo_bg.h"
 
 #include <Arduino.h>
@@ -90,10 +91,14 @@ void clockOf(uint32_t utc, char* out, size_t n) {
 
 struct Tile { EpdRect r; const char* title; Go go; };
 void sosSubtitle(char* out, size_t n);
+void renderStealthBar(uint8_t* fb);
 void sunSubtitle(const RideState& s, char* out, size_t n);
 constexpr int TILE_GAP = 10;
 constexpr int TILE_W = (W - 3 * TILE_GAP) / 2;
-constexpr int TILE_H = (H - TOP - 5 * TILE_GAP) / 4;
+constexpr int STEALTH_H = 82;
+constexpr int TILE_H = (H - TOP - STEALTH_H - 6 * TILE_GAP) / 4;
+const EpdRect kStealthBar = {TILE_GAP, H - TILE_GAP - STEALTH_H, W - 2 * TILE_GAP, STEALTH_H};
+uint32_t g_stealthOffAsk = 0;   // first tap on a lit stealth bar: ask again
 
 EpdRect tileRect(int col, int row) {
     return {TILE_GAP + col * (TILE_W + TILE_GAP), TOP + TILE_GAP + row * (TILE_H + TILE_GAP),
@@ -134,7 +139,8 @@ void renderHome(const RideState& s, uint8_t* fb) {
                 break;
             case TO_LIBRARY: snprintf(sub, sizeof sub, "%d book%s on card", doba_lib::count(), doba_lib::count() == 1 ? "" : "s"); break;
             case TO_COMMS:
-                if (!mesh_service::enabled()) snprintf(sub, sizeof sub, "radio off");
+                if (stealth::active()) snprintf(sub, sizeof sub, stealth::listen() ? "stealth · listening" : "stealth · radio off");
+                else if (!mesh_service::enabled()) snprintf(sub, sizeof sub, "radio off");
                 else snprintf(sub, sizeof sub, "%d new · %d nodes", mesh_service::unreadCount(),
                               mesh_service::nodeCount());
                 break;
@@ -161,9 +167,38 @@ void renderHome(const RideState& s, uint8_t* fb) {
                      EPD_DRAW_ALIGN_CENTER, PAPER);
         }
     }
+    renderStealthBar(fb);
+}
+
+// The stealth bar: one tap hides the device; going loud again takes a second
+// tap within a few seconds, so a brush of the screen cannot give you away.
+void renderStealthBar(uint8_t* fb) {
+    const EpdRect r = kStealthBar;
+    const bool on = stealth::active();
+    const bool asking = on && g_stealthOffAsk && millis() - g_stealthOffAsk < 5000;
+    if (on) epd_fill_rect(r, INK, fb); else frame(r, 3, fb);
+    const uint8_t fg = on ? PAPER : INK;
+    // an eye, crossed out when hidden
+    const int ex = r.x + 52, ey = r.y + r.height / 2;
+    for (int t = 0; t < 3; ++t) {
+        epd_draw_circle(ex, ey, 14 + t, fg, fb);
+    }
+    epd_fill_circle(ex, ey, 6, fg, fb);
+    if (on) for (int t = -2; t <= 2; ++t) epd_draw_line(ex - 24, ey + 20 + t, ex + 24, ey - 20 + t, fg, fb);
+    ui::text(ui::font(ui::F_TITLE), r.x + 96, r.y + 40, on ? "STEALTH ON" : "STEALTH", fb, EPD_DRAW_ALIGN_LEFT, fg);
+    const char* sub = asking ? "tap again to go loud" :
+                      on ? (stealth::listen() ? "silent, still listening" : "radio, BT, light off")
+                         : "tap to go silent";
+    ui::text(ui::font(ui::F_SMALL), r.x + 96, r.y + r.height - 14, sub, fb, EPD_DRAW_ALIGN_LEFT, fg);
 }
 
 Go tapHome(int x, int y) {
+    if (hit(kStealthBar, x, y)) {
+        if (!stealth::active()) { stealth::set(true); g_stealthOffAsk = 0; }
+        else if (g_stealthOffAsk && millis() - g_stealthOffAsk < 5000) { stealth::set(false); g_stealthOffAsk = 0; }
+        else g_stealthOffAsk = millis();
+        return STAY;
+    }
     for (const Tile& t : kTiles)
         if (hit(t.r, x, y)) return t.go;
     return STAY;
@@ -404,10 +439,10 @@ constexpr int kRegions = sizeof(kRegionCycle) / sizeof(kRegionCycle[0]);
 kbd::Keyboard g_nameKbd;
 
 // The layout, top to bottom: section headers and rows.
-enum SetupRow { R_RADIO, R_REGION, R_PRESET, R_NAME, R_LIGHT, R_TZ, R_MILS, R_MORE, R_COUNT };
-constexpr int SROW_H = 84, SEC_H = 38;
+enum SetupRow { R_STEALTH, R_RADIO, R_REGION, R_PRESET, R_NAME, R_LIGHT, R_TZ, R_MILS, R_MORE, R_COUNT };
+constexpr int SROW_H = 78, SEC_H = 34;
 int setupRowY(int r) {
-    // RADIO: 4 rows · DISPLAY: 2 · NAVIGATION: 2
+    // RADIO: 5 rows (stealth first) · DISPLAY: 2 · NAVIGATION: 2
     const int sec = r < R_LIGHT ? 1 : r < R_MILS ? 2 : 3;
     return TOP + 4 + sec * SEC_H + r * SROW_H;
 }
@@ -420,15 +455,24 @@ int setupRowAt(int y) {
 void renderSetup(const RideState& s, uint8_t* fb) {
     (void)s;
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
-    section(setupRowY(R_RADIO) - SEC_H, "RADIO  (MESHTASTIC LORA)", fb);
+    section(setupRowY(R_STEALTH) - SEC_H, "RADIO  (MESHTASTIC LORA)", fb);
     section(setupRowY(R_LIGHT) - SEC_H, "DISPLAY", fb);
     section(setupRowY(R_MILS) - SEC_H, "NAVIGATION", fb);
     char v[48], hint[48];
     for (int r = 0; r < R_COUNT; ++r) {
         const int y = setupRowY(r);
         switch (r) {
+            case R_STEALTH: {
+                static const char* const kS[] = {"OFF", "LISTEN", "SILENT"};
+                const int st = !stealth::active() ? 0 : stealth::listen() ? 1 : 2;
+                caption(y, SROW_H, "STEALTH", st == 0 ? "nothing hidden" : st == 1 ? "no transmit, still hears" :
+                        "radio, BT, light all off", fb);
+                segments(y, SROW_H, kS, 3, st, fb);
+                break;
+            }
             case R_RADIO:
-                caption(y, SROW_H, "RADIO", mesh_service::enabled() ? "on: messages + nodes" : "off: saves battery", fb);
+                caption(y, SROW_H, "RADIO", stealth::active() ? "held by stealth" :
+                        mesh_service::enabled() ? "on: messages + nodes" : "off: saves battery", fb);
                 toggle(y, SROW_H, mesh_service::enabled(), fb);
                 break;
             case R_REGION: {
@@ -489,10 +533,7 @@ void renderSetup(const RideState& s, uint8_t* fb) {
                 break;
             }
         }
-        if (r != R_NAME && r != R_TZ && r != R_MORE && r != R_PRESET)
-            epd_fill_rect({16, y + SROW_H - 1, W - 32, 1}, INK, fb);
-        else
-            epd_fill_rect({16, y + SROW_H - 1, W - 32, 1}, INK, fb);
+        epd_fill_rect({16, y + SROW_H - 1, W - 32, 1}, INK, fb);
     }
     char f[64];
     snprintf(f, sizeof f, "%d nodes heard · settings save at once", mesh_service::nodeCount());
@@ -503,7 +544,14 @@ Go tapSetup(int x, int y) {
     const int r = setupRowAt(y);
     if (r < 0) return STAY;
     switch (r) {
+        case R_STEALTH: {
+            const int i = segmentHit(x, 3);
+            if (i == 0) stealth::set(false);
+            else if (i > 0) { stealth::setListen(i == 1); stealth::set(true); }
+            break;
+        }
         case R_RADIO:
+            if (stealth::active()) break;   // stealth owns the radio until it ends
             if (toggleHit(x)) mesh_service::setEnabled(x >= CTRL_X + CTRL_W - 75);
             break;
         case R_REGION: {
@@ -930,6 +978,8 @@ void sosMessage(const RideState& s, char* out, size_t n) {
 }
 
 void sosSend(const RideState& s) {
+    // Calling for help is the one thing that ends stealth by itself.
+    if (stealth::active()) stealth::set(false);
     if (!mesh_service::enabled()) mesh_service::setEnabled(true);
     char msg[200];
     sosMessage(s, msg, sizeof msg);
@@ -958,6 +1008,7 @@ void renderSos(const RideState& s, uint8_t* fb) {
         ui::text(ui::font(ui::F_SMALL), W / 2, kSosBtn.y + 180, armed ? "TAP AGAIN TO SEND" : "tap, then tap again", fb,
                  EPD_DRAW_ALIGN_CENTER, PAPER);
         ui::text(ui::font(ui::F_TINY), W / 2, kSosBtn.y + kSosBtn.height + 50,
+                 stealth::active() ? "STEALTH IS ON: sending ends it and reveals you" :
                  mesh_service::enabled() ? "radio is on" : "radio is off: it will be turned on", fb, EPD_DRAW_ALIGN_CENTER, INK);
         ui::text(ui::font(ui::F_TINY), W / 2, kSosBtn.y + kSosBtn.height + 80,
                  "Anyone on the channel within range sees it.", fb, EPD_DRAW_ALIGN_CENTER, INK);

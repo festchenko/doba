@@ -84,6 +84,7 @@ int getCandidates(Candidate* out, int maxOut);
 void pairCandidate(const char* addr);   // saves for every kind it advertises
 void forget(const char* addr);          // clear one paired address
 void forgetAll();
+void applyStealth();                  // DOBA: drop sensor links in stealth
 
 // True while a paired-but-missing sensor is being hunted — a scan is running or
 // a connect attempt is in flight. power_mgmt keeps the radio out of sleep for

@@ -109,7 +109,7 @@ def test_settings_change_the_band_on_the_device(doba):
     doba.console("screen setup", 800)
     time.sleep(0.6)
     # Rows sit under section headers: RADIO row at TOP+4+38, 84 px each.
-    doba.tap(500, TOP + 4 + 38 + 42)                        # RADIO: the ON half
+    doba.tap(500, TOP + 4 + 34 + 78 + 39)                   # RADIO: the ON half
 
     def freq(ok):
         end = time.time() + 8
@@ -120,7 +120,7 @@ def test_settings_change_the_band_on_the_device(doba):
             time.sleep(0.2)
         raise AssertionError(doba.lora())
     freq(lambda f: abs(f - 869.525) < 1e-3)
-    doba.tap(500, TOP + 4 + 38 + 84 + 42)                   # BAND: ">" EU_868 -> UA_868
+    doba.tap(500, TOP + 4 + 34 + 2 * 78 + 39)               # BAND: ">" EU_868 -> UA_868
     freq(lambda f: 868.0 <= f <= 868.6)
 
 
@@ -290,3 +290,33 @@ def test_a_picture_in_a_zim_article_reaches_the_screen_from_its_shard(doba, book
     since = doba.log_seq()
     doba.tap(96, TOP + 92 + 28 + 54)
     doba.wait_log(r"\[lib\] picture [0-9a-f]{10} 480x320", since=since)
+
+
+def test_stealth_from_the_home_bar_goes_silent_and_needs_two_taps_to_end(doba):
+    """One tap on HOME's stealth bar: no transmit, no BT advertising, no light.
+    SILENT also puts the LoRa radio to sleep; ending stealth takes two taps
+    and brings the radio back as it was."""
+    boot(doba)
+    since = doba.log_seq()
+    doba.console("stealth", 800)
+    before = doba.wait_log(r"\[stealth\] state off radio=\d", since=since)[-1]
+    since = doba.log_seq()
+    doba.tap(270, 960 - 10 - 41)                          # STEALTH bar
+    doba.wait_log(r"\[stealth\] on \(listening\)", since=since)
+    doba.wait_log(r"ble: stealth", since=since)
+    since = doba.log_seq()
+    doba.console("stealth silent", 800)
+    doba.wait_log(r"\[stealth\] state silent radio=0", since=since)
+    since = doba.log_seq()
+    doba.console("screen home", 800)
+    time.sleep(0.6)
+    doba.tap(270, 960 - 10 - 41)                          # one tap only asks
+    time.sleep(1.0)
+    doba.console("stealth", 800)
+    doba.wait_log(r"\[stealth\] state silent", since=since)
+    doba.tap(270, 960 - 10 - 41)                          # the second ends it
+    doba.wait_log(r"\[stealth\] off", since=since)
+    time.sleep(1.0)                                       # the mesh task applies it
+    since = doba.log_seq()
+    doba.console("stealth", 800)
+    doba.wait_log(r"\[stealth\] state off radio=" + before, since=since)   # as it was

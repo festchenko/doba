@@ -24,7 +24,8 @@
 #include "ui_render.h"
 #include "map_view.h"
 #include "topo_layer.h"   // DOBA
-#include "doba_ui.h"      // DOBA
+#include "doba_ui.h"
+#include "stealth.h"      // DOBA
 #include "milspec.h"      // DOBA
 #include "doba_points.h" // DOBA
 #include "doba_dem.h"    // DOBA
@@ -902,6 +903,7 @@ void toggleRide() {
 
 // Side-key short-press: step the backlight Off -> Low -> Med -> Bright -> Off.
 void cycleBacklight() {
+    if (stealth::active()) return;   // DOBA: no light in stealth, not even by the side key
     int next = (settings::backlight() + 1) & 3;
     settings::setBacklight(next);
     applyBacklight(next);
@@ -3424,6 +3426,12 @@ static void runConsoleLine(char* line) {
         if (arg) milspec::setMilsSystem(atoi(arg));
         Serial.printf("[mils] %d\n", milspec::milsSystem());
         screen = SCREEN_MAP; noteActivity();
+    } else if (!strcasecmp(cmd, "stealth")) {   // DOBA: stealth on|off|listen|silent
+        if (arg && !strcasecmp(arg, "off")) stealth::set(false);
+        else if (arg && !strcasecmp(arg, "silent")) { stealth::setListen(false); stealth::set(true); }
+        else if (arg && (!strcasecmp(arg, "listen") || !strcasecmp(arg, "on"))) { stealth::setListen(true); stealth::set(true); }
+        Serial.printf("[stealth] state %s radio=%d\n", !stealth::active() ? "off" : stealth::listen() ? "listen" : "silent",
+                      mesh_service::enabled() ? 1 : 0);
     } else if (!strcasecmp(cmd, "dem")) {    // DOBA: ground under the fix, from /doba/dem
         const RideState st = g_state.snapshot();
         float v;
@@ -3857,6 +3865,15 @@ void task(void*) {
         {
             static uint32_t sosPaint = 0;
             if (doba_ui::tick(g_state.snapshot())) forceDraw = true;
+            // DOBA stealth: the light goes dark the moment it starts.
+            static int8_t wasStealth = -1;
+            const bool st = stealth::active();
+            if (st != (wasStealth == 1)) {
+                if (st) applyBacklight(0);
+                else if (wasStealth == 1) applyBacklight(settings::backlight());
+                wasStealth = st ? 1 : 0;
+                forceDraw = true;
+            }
             if (screen == SCREEN_SOS && doba_ui::sosActive() && millis() - sosPaint > 30000) {
                 sosPaint = millis();
                 forceDraw = true;

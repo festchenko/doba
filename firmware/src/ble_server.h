@@ -18,6 +18,9 @@ void task(void* arg);
 
 // Mirror a device-side settings edit (FTP/tz/units/backlight) to the phone.
 void pushSettingsToPhone();
+
+// DOBA: apply stealth::active() — stop advertising and drop links, or resume.
+void applyStealth();
 // Notify the phone of the device's map-layer mask ([0xE0][u16]) after an edit
 // on the device's MAP LAYERS screen.
 void pushMapLayersToPhone();

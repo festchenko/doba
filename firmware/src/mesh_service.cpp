@@ -1,4 +1,5 @@
 #include "mesh_service.h"
+#include "stealth.h"
 
 #include <Arduino.h>
 #include <esp_heap_caps.h>
@@ -1038,6 +1039,8 @@ void serviceOutbox() {
     const bool have = outboxCount > 0;
     give();
     if (!have) return;
+    // DOBA stealth: nothing goes on air; the queue waits for stealth to end.
+    if (!stealth::transmitAllowed()) return;
     if (millis() - lastTxEndMs < MIN_TX_GAP_MS) return;
 
     // Listen before transmitting. A LongFast packet occupies the channel for a
