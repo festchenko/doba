@@ -511,7 +511,7 @@ bool openArticle(const Result& r) {
 //   X|LABEL|icon|book|Article title       an EMERGENCY button (up to 3)
 // Without the file the sections are still there, searching every book.
 
-constexpr int MAX_SECTIONS = 12, MAX_ENTRIES = 480, MAX_EMERGENCY = 3;
+constexpr int MAX_SECTIONS = 15, MAX_ENTRIES = 480, MAX_EMERGENCY = 3;
 struct Section { char id[16]; char name[24]; doba_icons::Icon icon; uint32_t books; int first, n, starts; };
 struct Entry { int8_t sec, book; bool start; char label[48]; char desc[80]; char title[KEY + 1]; };
 struct Emergency { char label[20]; doba_icons::Icon icon; int8_t book; char title[KEY + 1]; };
@@ -531,7 +531,8 @@ int bookIndex(const char* dir) {
 void defaultSections() {
     static const struct { const char* id; const char* name; const char* icon; } kDef[] = {
         {"firstaid", "FIRST AID", "firstaid"}, {"water", "WATER", "water"},   {"fire", "FIRE", "fire"},
-        {"shelter", "SHELTER", "shelter"},     {"food", "FOOD", "food"},      {"nav", "NAVIGATION", "nav"},
+        {"shelter", "SHELTER", "shelter"},     {"food", "FOOD", "food"},      {"grow", "GROWING", "grow"},
+        {"power", "POWER", "power"},           {"nav", "NAVIGATION", "nav"},
         {"hazards", "HAZARDS", "hazard"},      {"weather", "WEATHER", "weather"}, {"tools", "TOOLS", "tools"},
         {"knots", "KNOTS", "knots"},           {"comms", "COMMS", "comms"},   {"reference", "REFERENCE", "books"},
     };
@@ -635,9 +636,11 @@ View g_searchFrom = V_HOME;
 const EpdRect kSearchBar = {14, TOP + 12, W - 28, 66};
 constexpr int EM_Y = TOP + 92, EM_H = 108;
 int gridTop() { return g_emergCount ? EM_Y + 28 + EM_H + 16 : TOP + 96; }
+int gridRows() { return g_secCount > 12 ? 5 : 4; }
 EpdRect cellRect(int i) {
+    const int rows = gridRows();
     const int top = gridTop(), gap = 8, cw = (W - 28 - 2 * gap) / 3;
-    const int ch = (H - 12 - top - 3 * gap) / 4;
+    const int ch = (H - 12 - top - (rows - 1) * gap) / rows;
     return {14 + (i % 3) * (cw + gap), top + (i / 3) * (ch + gap), cw, ch};
 }
 EpdRect emergRect(int i) {
@@ -666,10 +669,10 @@ void renderHome(uint8_t* fb) {
         }
     }
     // The sections.
-    for (int i = 0; i < g_secCount && i < 12; ++i) {
+    for (int i = 0; i < g_secCount; ++i) {
         const EpdRect r = cellRect(i);
         frame(r, 2, fb);
-        const int isz = r.height > 150 ? 70 : 58;
+        const int isz = r.height > 150 ? 70 : r.height > 125 ? 58 : 50;
         doba_icons::draw(g_secs[i].icon, r.x + r.width / 2, r.y + r.height / 2 - 16, isz, INK, PAPER, fb);
         const EpdFont* f = ui::font(ui::F_SMALL);
         if (ui::textWidth(f, g_secs[i].name) > r.width - 12) f = ui::font(ui::F_TINY);
@@ -978,7 +981,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
             if (hit(kSearchBar, x, y)) { g_scope = -1; g_searchFrom = V_HOME; g_view = V_SEARCH; k.clear(); return false; }
             for (int i = 0; i < g_emergCount; ++i)
                 if (hit(emergRect(i), x, y)) return openEntry(g_emerg[i].book, g_emerg[i].title);
-            for (int i = 0; i < g_secCount && i < 12; ++i)
+            for (int i = 0; i < g_secCount; ++i)
                 if (hit(cellRect(i), x, y)) { g_sec = i; g_secPage = 0; g_view = V_SECTION; return false; }
             return false;
         case V_SECTION: {

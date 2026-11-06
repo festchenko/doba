@@ -138,6 +138,35 @@ void draw(Icon icon, int cx, int cy, int s, uint8_t ink, uint8_t paper, uint8_t*
             disc(cx, bot - t * 3, t / 2 + 1);
             break;
         }
+        case I_GROW: {
+            // a sprout: stem from a soil line, two leaves opening
+            const int ground = cy + h - t * 2;
+            rect(cx - h, ground, 2 * h, t);                                   // soil
+            rect(cx - h + t * 2, ground + t * 2, h / 2, t / 2 + 1);           // furrows
+            rect(cx + t, ground + t * 2, h / 2, t / 2 + 1);
+            line(cx, ground, cx, cy - s / 10, t);                             // stem
+            for (int side = -1; side <= 1; side += 2) {                       // leaves: discs along a curve
+                const float bx = cx, by = cy - s / 10.0f;
+                const float tx = cx + side * s * 0.42f, ty = cy - s * 0.42f;
+                const int n = 16;
+                for (int k = 0; k <= n; ++k) {
+                    const float u = (float)k / n;
+                    const float px = bx + (tx - bx) * u, py = by + (ty - by) * u + s * 0.10f * sinf(u * (float)M_PI);
+                    const int r = (int)(s * 0.11f * sinf(u * (float)M_PI)) + 1;
+                    disc((int)px, (int)py, r);
+                }
+            }
+            break;
+        }
+        case I_POWER: {
+            // a battery on its side, a bolt cut out of it
+            const int bw = s * 3 / 4, bh = s / 2;
+            rect(cx - bw / 2, cy - bh / 2, bw, bh);
+            rect(cx + bw / 2, cy - bh / 6, t + 1, bh / 3);                    // terminal
+            tri(cx + s / 12, cy - bh / 2 + t, cx - s / 6, cy + s / 24, cx + s / 48, cy + s / 24, false);
+            tri(cx - s / 48, cy - s / 24, cx + s / 6, cy - s / 24, cx - s / 12, cy + bh / 2 - t, false);
+            break;
+        }
         case I_WEATHER: {
             const int cyc = cy - s / 8;
             disc(cx - s / 6, cyc + s / 12, s / 6);
@@ -260,7 +289,7 @@ Icon byName(const char* n) {
         {"navigation", I_NAV}, {"hazard", I_HAZARD}, {"weather", I_WEATHER}, {"cold", I_COLD},
         {"tools", I_TOOLS}, {"knots", I_KNOTS}, {"comms", I_COMMS}, {"books", I_BOOKS},
         {"shelf", I_SHELF}, {"files", I_FILES}, {"search", I_SEARCH}, {"bleed", I_BLEED},
-        {"breath", I_BREATH},
+        {"breath", I_BREATH}, {"grow", I_GROW}, {"garden", I_GROW}, {"power", I_POWER},
     };
     for (const auto& m : kMap)
         if (!strcmp(n, m.name)) return m.icon;

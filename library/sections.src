@@ -83,6 +83,46 @@ section food | FOOD | food | food,gov,manuals,mine,wiki_en
   - Home canning          | the USDA guide                        | gov:Complete Guide to Home Canning* ; wiki_en:Home canning
   - Botulism              | the canning danger                    | med_en:Botulism ; wiki_en:Botulism
 
+section grow | GROWING | grow | garden_se,appropedia,food,gov,manuals,mine,wiki_en,wiki_uk
+  * Vegetable garden      | where, when, what to plant first       | appropedia:Vegetable garden* ; wiki_en:Vegetable farming ; wiki_en:Kitchen garden
+  * Seed saving           | keep seeds for next year               | appropedia:Seed saving* ; wiki_en:Seed saving
+  - Potato                | the most food per square metre         | wiki_en:Potato ; wiki_uk:Картопля
+  - Beans                 | protein that fixes its own nitrogen    | wiki_en:Phaseolus vulgaris ; wiki_en:Bean
+  - Squash                | easy, stores all winter                | wiki_en:Squash (plant) ; wiki_en:Cucurbita
+  - Leafy greens          | fast harvests                          | wiki_en:Leaf vegetable
+  - Three Sisters         | maize, beans, squash together          | wiki_en:Three Sisters (agriculture)
+  - Compost               | turning waste into soil                | appropedia:Composting* ; wiki_en:Compost
+  - Soil                  | reading and improving it               | wiki_en:Soil fertility ; wiki_en:Soil
+  - Crop rotation         | keep the soil healthy                  | wiki_en:Crop rotation
+  - Companion planting    | plants that help each other            | wiki_en:Companion planting
+  - Plant diseases        | blight, rot, mildew                    | wiki_en:Late blight ; wiki_en:Plant pathology
+  - Garden pests          | without bought poison                  | wiki_en:Integrated pest management ; wiki_en:Pest (organism)
+  - Watering              | drip, mulch, rain                      | wiki_en:Drip irrigation ; wiki_en:Mulch
+  - Greenhouse            | a longer season                        | wiki_en:Greenhouse ; wiki_en:Cold frame
+  - Sprouting             | fresh food in days                     | wiki_en:Sprouting
+  - Mushrooms             | growing them on logs                   | wiki_en:Fungiculture
+  - Chickens              | eggs, meat, pest control               | wiki_en:Chicken ; wiki_en:Poultry farming
+  - Rabbits               | meat from little feed                  | wiki_en:Domestic rabbit
+  - Beekeeping            | honey and pollination                  | wiki_en:Beekeeping
+  - Fruit trees           | planting and pruning                   | wiki_en:Fruit tree pruning ; wiki_en:Fruit tree
+  - Permaculture          | a garden that runs itself              | appropedia:Permaculture* ; wiki_en:Permaculture
+  - Gardening Q&A         | answers from growers                   | garden_se:Gardening* ; garden_se:How*
+
+section power | POWER | power | appropedia,diy_se,ifixit,gov,manuals,mine,wiki_en
+  * Solar panel           | sizing a small off-grid kit            | appropedia:Solar* ; wiki_en:Solar panel
+  * Batteries             | lead-acid, lithium: care and safety    | wiki_en:Lead–acid battery ; wiki_en:Lithium iron phosphate battery
+  - Charge controller     | between panel and battery              | wiki_en:Charge controller
+  - Inverter              | 12 V to mains                          | wiki_en:Power inverter
+  - Off-grid power        | putting it together                    | wiki_en:Off-the-grid ; appropedia:Off-grid*
+  - Generator             | running one safely                     | wiki_en:Engine-generator ; gov:Carbon Monoxide*
+  - Wood gas              | running an engine on wood              | wiki_en:Wood gas
+  - Wind turbine          | small wind power                       | wiki_en:Small wind turbine
+  - Micro hydro           | power from a stream                    | wiki_en:Micro hydro
+  - Car battery           | jump-starting, charging, using         | wiki_en:Automotive battery ; wiki_en:Jump start (vehicle)
+  - Multimeter            | measuring volts and amps               | wiki_en:Multimeter
+  - Ohm's law             | the one formula you need               | wiki_en:Ohm's law
+  - Electrical safety     | what kills and how not to              | wiki_en:Electrical injury ; med_en:Electrical injury
+
 section nav | NAVIGATION | nav | gov,manuals,mine,wiki_en
   * Map reading           | the army land navigation manual       | gov:FM 3-25.26* ; gov:TC 3-25.26* ; wiki_en:Map reading*
   - Compass               | taking and following a bearing        | wiki_en:Compass

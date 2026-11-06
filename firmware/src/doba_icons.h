@@ -27,6 +27,8 @@ enum Icon : uint8_t {
     I_PLANT,      // leaf
     I_SHELF,      // books on a shelf
     I_FILES,      // folder
+    I_GROW,       // sprout over the soil line
+    I_POWER,      // battery with a bolt
 };
 
 // Draw `icon` centred on (cx, cy), fitting a size x size box, in `ink` on `paper`.

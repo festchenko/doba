@@ -27,6 +27,7 @@ BOOKS=(
   "stack_exchange|chemistry.stackexchange.com_en_all_|chem_se|Chemistry Q&A|Chemistry SE · CC BY-SA"
   "stack_exchange|diy.stackexchange.com_en_all_|diy_se|DIY Q&A|DIY SE · CC BY-SA"
   "stack_exchange|woodworking.stackexchange.com_en_all_|wood_se|Woodworking Q&A|Woodworking SE · CC BY-SA"
+  "stack_exchange|gardening.stackexchange.com_en_all_|garden_se|Gardening Q&A|Gardening SE · CC BY-SA"
   "gutenberg|gutenberg_en_all_|shelf_en|Gutenberg EN|Project Gutenberg · public domain"
   "gutenberg|gutenberg_ru_all_|shelf_ru|Gutenberg RU|Project Gutenberg · public domain"
 )
