@@ -289,4 +289,4 @@ def test_a_picture_in_a_zim_article_reaches_the_screen_from_its_shard(doba, book
     time.sleep(0.8)
     since = doba.log_seq()
     doba.tap(96, TOP + 92 + 28 + 54)
-    doba.wait_log(r"\[lib\] picture [0-9a-f]{10} 300x200", since=since)
+    doba.wait_log(r"\[lib\] picture [0-9a-f]{10} 480x320", since=since)
