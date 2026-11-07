@@ -34,7 +34,7 @@ PLACES = {
     "Kherson": (46.635, 32.616),
 }
 
-PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Doba sim</title>
+PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Doba sim</title>
 <style>
  body{background:#1b1d1f;color:#ddd;font:14px -apple-system,system-ui,sans-serif;margin:0;display:flex;gap:24px;padding:20px}
  #dev{background:#2a2c2e;padding:18px;border-radius:22px;box-shadow:0 8px 30px #0008}
@@ -46,6 +46,10 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Doba sim</titl
  #log{white-space:pre-wrap;font:11px ui-monospace,monospace;background:#111;padding:8px;height:260px;overflow:auto;border-radius:6px}
  input{background:#111;color:#eee;border:1px solid #444;border-radius:6px;padding:7px;font:12px ui-monospace,monospace;width:300px}
  #st{font:12px ui-monospace,monospace;color:#9a9}
+ @media (max-width:700px){ /* a phone: the panel fills the width, the rest below it */
+  body{flex-direction:column;padding:8px;gap:12px} #dev{padding:8px;border-radius:14px}
+  #panel{width:100%;height:auto;aspect-ratio:540/960} #side{max-width:none} input{width:70%}
+  button{padding:12px 14px} }
 </style></head><body>
 <div id="dev"><img id="panel" src="/panel.png">
  <div class="btns"><button onclick="key('home')">HOME</button><button onclick="key('boot')">BOOT</button>
@@ -155,7 +159,7 @@ class Viewer:
         return open(self.shot, "rb").read()
 
 
-def serve(v, port):
+def serve(v, port, host="127.0.0.1"):
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -211,7 +215,7 @@ def serve(v, port):
                         print("radio:", e)
             self.send(b"ok", "text/plain")
 
-    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+    srv = ThreadingHTTPServer((host, port), H)
     print(f"Doba sim: http://127.0.0.1:{port}")
     srv.serve_forever()
 
@@ -222,6 +226,8 @@ def main():
     ap.add_argument("--region", default="netherlands", help="tiles/<region> becomes the card's map")
     ap.add_argument("--dir", default=os.path.expanduser("~/.doba-sim"))
     ap.add_argument("--port", type=int, default=8090)
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="0.0.0.0 to open it from a phone on the same Wi-Fi")
     a = ap.parse_args()
     os.makedirs(a.dir, exist_ok=True)
     v = Viewer(a)
@@ -231,7 +237,7 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     signal.signal(signal.SIGHUP, lambda *_: sys.exit(0))   # Terminal window closed
     try:
-        serve(v, a.port)
+        serve(v, a.port, a.host)
     except KeyboardInterrupt:
         pass
 

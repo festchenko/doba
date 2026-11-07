@@ -12,6 +12,12 @@
 #include "epd_compat.h"
 #include "sd_bus.h"
 #include "ui_render.h"
+#include <Preferences.h>
+#ifdef VFONT
+#include "vfont.h"
+#include "fonts/vf/literata_450.h"
+#include "fonts/vf/literata_700.h"
+#endif
 
 #ifdef OTP_SIM
 #include <zlib.h>
@@ -76,6 +82,12 @@ constexpr int HISTORY = 16;
 Visit g_history[HISTORY];
 int g_historyCount = 0;
 Result g_current = {};
+// The contents list of the open article: its headings, as line indices.
+bool g_toc = false;                                    // the contents list is up
+int g_tocPage = 0;
+constexpr int MAX_TOC = 512, TOC_ROW = 60;
+int* g_toc_lines = nullptr;
+int g_tocCount = 0;
 
 uint32_t rd32(const uint8_t* p) {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
@@ -250,17 +262,49 @@ bool inflateTo(const uint8_t* src, size_t len, char* dst, size_t cap, size_t* ou
 
 // --- article layout ------------------------------------------------------------
 
+// Article typography. Reading is the one place the device is not "tactical":
+// a book face (Literata, made for reading on screens), ragged right, generous
+// leading, ~45 characters a line. Three text sizes; everything scales with the
+// body's cap height.
+constexpr int N_SIZES = 3;
+constexpr float kCap[N_SIZES] = {14.f, 16.f, 19.f};   // body cap height, px
+const char* const kSizeName[N_SIZES] = {"TEXT: SMALL", "TEXT: MEDIUM", "TEXT: LARGE"};
+int g_size = -1;                                       // -1: not read from NVS yet
+int textSize() {
+    if (g_size < 0) {
+        Preferences p;
+        p.begin("doba", true);
+        g_size = p.getUChar("txtSize", 1);
+        p.end();
+        if (g_size >= N_SIZES) g_size = 1;
+    }
+    return g_size;
+}
+// cap height of a kind, as a multiple of the body's
+float capOf(uint8_t kind) {
+    return kind == 'T' ? 1.42f : kind == 'H' ? 1.22f : kind == 'S' ? 1.06f : kind == 'F' ? 0.84f : 1.f;
+}
 const EpdFont* fontFor(uint8_t kind) {
+#ifdef VFONT
+    const float c = kCap[textSize()] * capOf(kind);
+    const bool bold = kind == 'T' || kind == 'H' || kind == 'S';
+    return vf_face_cap(bold ? &Literata_700 : &Literata_450, c);
+#else
     return (kind == 'T' || kind == 'H') ? ui::font(ui::F_BODY_H)
          : kind == 'S' ? ui::font(ui::F_KEY) : kind == 'F' ? ui::font(ui::F_TINY) : ui::font(ui::F_BODY);
+#endif
 }
-// Article typography: one column with even margins, a little air between
-// lines and paragraphs, headings set apart from what came before.
-constexpr int MARGIN = 26, PARA_GAP = 14;
+constexpr int MARGIN = 30, BULLET_IN = 26;
+int capPx(uint8_t kind) { return (int)(kCap[textSize()] * capOf(kind) + 0.5f); }
+// Leading: 2.2 caps for running text (about 1.5 em), tighter for headings.
 int lineHeight(uint8_t kind) {
-    return kind == 'T' ? 48 : kind == 'H' ? 46 : kind == 'S' ? 38 : kind == 'F' ? 32 : 34;
+    const float k = kind == 'T' || kind == 'H' ? 1.95f : kind == 'S' ? 2.05f : kind == 'F' ? 2.15f : 2.25f;
+    return (int)(kCap[textSize()] * capOf(kind) * k + 0.5f);
 }
-int baselineOf(uint8_t kind) { return kind == 'H' ? 14 : kind == 'T' ? 10 : 9; }
+// Baseline's height above the bottom of the line box: room for descenders,
+// the rest of the leading above the caps.
+int baselineOf(uint8_t kind) { return (int)((lineHeight(kind) - capPx(kind)) * 0.40f + 0.5f); }
+int paraGap() { return (int)(kCap[textSize()] * 0.8f + 0.5f); }
 
 // A picture line: "I<name> <w> <h>"; the pixels are in <book>/img/<name>.dgi.
 constexpr int IMG_PAD = 10, IMG_MAX_H = 640;
@@ -300,17 +344,25 @@ bool firstLineOf(const Line& l) { return l.off > 0 && (uint8_t)g_text[l.off - 1]
 bool lastLineOf(const Line& l) { return l.off + l.len >= g_textLen || g_text[l.off + l.len] == '\n'; }
 int topGap(const Line& l) {
     if (!firstLineOf(l)) return 0;
-    return l.kind == 'H' ? 20 : l.kind == 'S' ? 12 : l.kind == 'F' ? 10 : 0;
+    const float c = kCap[textSize()];
+    return (int)(l.kind == 'T' ? c * 0.6f : l.kind == 'H' ? c * 1.4f : l.kind == 'S' ? c * 0.9f
+                 : l.kind == 'F' ? c * 0.5f : 0);
+}
+
+// Air under a heading's last line, so it binds to the text it introduces.
+int afterGap(const Line& l) {
+    if ((l.kind != 'T' && l.kind != 'H' && l.kind != 'S') || !lastLineOf(l)) return 0;
+    return (int)(kCap[textSize()] * (l.kind == 'S' ? 0.3f : 0.5f));
 }
 
 int heightOf(const Line& l) {
-    if (l.kind == 'G') return PARA_GAP;
+    if (l.kind == 'G') return paraGap();
     if (l.kind == 'I') {
         char nm[32];
         int w, h;
         return imageLine(g_text + l.off, l.len, nm, sizeof nm, w, h) ? h + 2 * IMG_PAD : 0;
     }
-    return topGap(l) + lineHeight(l.kind);
+    return topGap(l) + lineHeight(l.kind) + afterGap(l);
 }
 
 // Draws <book>/img/<name>.dgi centred at y: "DGI1", u16 w, u16 h, then zlib of
@@ -355,6 +407,7 @@ void drawImage(const char* name, int y, int maxH, uint8_t* fb) {
     if (px) heap_caps_free(px);
 }
 
+void buildToc();
 void layout() {
     g_lineCount = 0;
     const int maxW = W - 2 * MARGIN;
@@ -370,7 +423,7 @@ void layout() {
             continue;
         }
         const EpdFont* f = fontFor(kind);
-        const int bulletW = kind == 'B' ? 26 : 0;
+        const int bulletW = kind == 'B' ? BULLET_IN : 0;
         const int spaceW = widthOf(f, "a a", 3) - widthOf(f, "aa", 2);
         size_t ls = start, p = start;
         int lw = 0;
@@ -415,7 +468,7 @@ void layout() {
     if (!g_pageStarts)
         g_pageStarts = (int*)heap_caps_malloc(MAX_PAGES * sizeof(int), MALLOC_CAP_SPIRAM);
     if (!g_pageStarts) return;
-    const int bodyTop = TOP + 60, bodyBottom = H - FOOT_H - 6;
+    const int bodyTop = TOP + 66, bodyBottom = H - FOOT_H - 6;
     int y = bodyTop, k = 0;
     g_pageStarts[g_pageCount++] = 0;
     for (k = 0; k < g_lineCount; ++k) {
@@ -426,6 +479,7 @@ void layout() {
         }
         y += h;
     }
+    buildToc();
 }
 
 // \x01 visible \x02 target \x03 -> visible, and a Link. In place: the text
@@ -494,6 +548,7 @@ bool openArticle(const Result& r) {
     g_text[g_textLen] = 0;
     snprintf(g_title, sizeof g_title, "%s", r.title);
     g_current = r;
+    g_toc = false;
     layout();
     g_page = 0;
     Serial.printf("[lib] open '%s' pages=%d links=%d\n", g_title, g_pageCount, g_linkCount);
@@ -850,23 +905,122 @@ void fold(const char* in, char* out, size_t cap) {
     out[n] = 0;
 }
 
+// --- article chrome: header, footer, contents ----------------------------------
+namespace {
+
+constexpr int BODY_TOP = TOP + 66;
+const EpdRect kSizeBtn = {W - 86, TOP + 6, 78, 42};   // "Aa": the text size
+
+int pageOfLine(int k) {
+    int lo = 0, hi = g_pageCount - 1;
+    while (lo < hi) {
+        const int mid = (lo + hi + 1) / 2;
+        if (g_pageStarts[mid] <= k) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+}
+void buildToc() {
+    g_tocCount = 0;
+    if (!g_toc_lines) g_toc_lines = (int*)heap_caps_malloc(MAX_TOC * sizeof(int), MALLOC_CAP_SPIRAM);
+    if (!g_toc_lines) return;
+    for (int k = 0; k < g_lineCount && g_tocCount < MAX_TOC; ++k) {
+        const Line& l = g_lines[k];
+        if ((l.kind == 'H' || l.kind == 'S') && (l.off == 0 || g_text[l.off - 1] == (char)l.kind))
+            g_toc_lines[g_tocCount++] = k;
+    }
+}
+int tocRowsPerPage() { return (H - FOOT_H - BODY_TOP - 8) / TOC_ROW; }
+int tocPages() { const int r = tocRowsPerPage(); return g_tocCount ? (g_tocCount + r - 1) / r : 1; }
+
+// A heading's whole text (it may wrap over lines), cut with "..." to fit maxW.
+void headingText(const Line& l, const EpdFont* f, int maxW, char* out, size_t cap) {
+    size_t e = l.off;
+    while (e < g_textLen && g_text[e] != '\n') ++e;
+    size_t n = e - l.off < cap - 4 ? e - l.off : cap - 4;
+    memcpy(out, g_text + l.off, n);
+    out[n] = 0;
+    if (ui::textWidth(f, out) <= maxW) return;
+    while (n > 0) {
+        do { --n; } while (n > 0 && ((uint8_t)out[n] & 0xC0) == 0x80);
+        memcpy(out + n, "...", 4);
+        if (ui::textWidth(f, out) <= maxW) return;
+    }
+}
+
+// Two arrows and a middle, the same on every reading screen.
+void footer(const char* left, const char* mid, const char* midSub, const char* right, uint8_t* fb) {
+    const int fy = H - FOOT_H;
+    epd_fill_rect({0, fy, W, 2}, INK, fb);
+    const EpdFont* k = ui::font(ui::F_KEY);
+    if (left) {
+        epd_fill_triangle(26, fy + 39, 44, fy + 27, 44, fy + 51, INK, fb);
+        ui::text(k, 56, fy + 50, left, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    }
+    if (right && strcmp(right, "END") != 0) {
+        epd_fill_triangle(W - 26, fy + 39, W - 44, fy + 27, W - 44, fy + 51, INK, fb);
+    }
+    if (right) {
+        ui::text(k, strcmp(right, "END") ? W - 56 : W * 5 / 6, fy + 50, right, fb,
+                 strcmp(right, "END") ? EPD_DRAW_ALIGN_RIGHT : EPD_DRAW_ALIGN_CENTER, INK);
+    }
+    epd_fill_rect({W / 3, fy + 14, 1, FOOT_H - 28}, INK, fb);
+    epd_fill_rect({W * 2 / 3, fy + 14, 1, FOOT_H - 28}, INK, fb);
+    ui::text(ui::font(ui::F_LABEL), W / 2, fy + (midSub ? 36 : 46), mid, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    if (midSub) ui::text(ui::font(ui::F_TINY), W / 2, fy + 60, midSub, fb, EPD_DRAW_ALIGN_CENTER, INK);
+}
+
+void renderToc(uint8_t* fb) {
+    ui::text(ui::font(ui::F_LABEL), 14, TOP + 34, "CONTENTS", fb, EPD_DRAW_ALIGN_LEFT, INK);
+    epd_fill_rect({0, TOP + 52, W, 2}, INK, fb);
+    const int per = tocRowsPerPage();
+    if (g_tocPage >= tocPages()) g_tocPage = tocPages() - 1;
+    int cur = -1;   // the part being read: the last heading at or before this page
+    for (int i = 0; i < g_tocCount; ++i)
+        if (pageOfLine(g_toc_lines[i]) <= g_page) cur = i;
+    const EpdFont* f = ui::font(ui::F_SMALL);
+#ifdef VFONT
+    const EpdFont* fh = vf_face_cap(&Literata_700, 15.f);
+    const EpdFont* fs = vf_face_cap(&Literata_450, 15.f);
+#else
+    const EpdFont* fh = ui::font(ui::F_LABEL);
+    const EpdFont* fs = ui::font(ui::F_SMALL);
+#endif
+    char buf[160], pn[12];
+    int y = BODY_TOP - 8;
+    for (int i = g_tocPage * per; i < g_tocCount && i < (g_tocPage + 1) * per; ++i) {
+        const Line& l = g_lines[g_toc_lines[i]];
+        const int in = l.kind == 'S' ? 22 : 0;
+        snprintf(pn, sizeof pn, "%d", pageOfLine(g_toc_lines[i]) + 1);
+        const int pw = ui::textWidth(f, pn);
+        const EpdFont* tf = l.kind == 'S' ? fs : fh;
+        headingText(l, tf, W - 2 * MARGIN - in - pw - 24, buf, sizeof buf);
+        if (i == cur) epd_fill_rect({0, y + 8, 8, TOC_ROW - 16}, INK, fb);   // you are here
+        ui::text(tf, MARGIN + in, y + TOC_ROW / 2 + 8, buf, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(f, W - MARGIN, y + TOC_ROW / 2 + 8, pn, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        epd_fill_rect({MARGIN + in, y + TOC_ROW - 1, W - 2 * MARGIN - in, 1}, INK, fb);
+        y += TOC_ROW;
+    }
+    char mid[24];
+    snprintf(mid, sizeof mid, "%d / %d", g_tocPage + 1, tocPages());
+    footer(g_tocPage > 0 ? "UP" : nullptr, "CLOSE", mid, g_tocPage + 1 < tocPages() ? "DOWN" : nullptr, fb);
+}
+
+}  // namespace
+
 void renderArticle(uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     g_hotCount = 0;
     if (!g_text || !g_pageStarts || g_pageCount == 0) return;
-    // Header: the title, small, and the page counter.
-    char pg[24];
-    snprintf(pg, sizeof pg, "%d/%d", g_page + 1, g_pageCount);
-    ui::text(ui::font(ui::F_TINY), W - 14, TOP + 30, pg, fb, EPD_DRAW_ALIGN_RIGHT, INK);
-    // Breadcrumb: the section it was opened from, then the title.
+    if (g_toc) { renderToc(fb); return; }
+    // Header: where this came from, and the text size button.
     char crumb[KEY + 40];
     if (g_view == V_SECTION || (g_view == V_SEARCH && g_searchFrom == V_SECTION))
         snprintf(crumb, sizeof crumb, "%s  >  %s", g_secs[g_sec].name, g_title);
     else
         snprintf(crumb, sizeof crumb, "%s", g_title);
-    // Never under the page counter: cut at a character, mark the cut.
+    // Never under the button: cut at a character, mark the cut.
     const EpdFont* cf = ui::font(ui::F_SMALL);
-    const int room = W - 14 - ui::textWidth(ui::font(ui::F_TINY), pg) - 20 - 14;
+    const int room = kSizeBtn.x - 14 - 12;
     if (ui::textWidth(cf, crumb) > room) {
         size_t n = strlen(crumb);
         while (n > 0) {
@@ -877,14 +1031,21 @@ void renderArticle(uint8_t* fb) {
             if (ui::textWidth(cf, t) <= room) { snprintf(crumb, sizeof crumb, "%s", t); break; }
         }
     }
-    ui::text(cf, 14, TOP + 32, crumb, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(cf, 14, TOP + 34, crumb, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    frame(kSizeBtn, 2, fb);
+#ifdef VFONT
+    ui::text(vf_face_cap(&Literata_700, 12.f), kSizeBtn.x + 22, kSizeBtn.y + 30, "A", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    ui::text(vf_face_cap(&Literata_700, 21.f), kSizeBtn.x + 50, kSizeBtn.y + 32, "A", fb, EPD_DRAW_ALIGN_CENTER, INK);
+#else
+    ui::text(ui::font(ui::F_LABEL), kSizeBtn.x + kSizeBtn.width / 2, kSizeBtn.y + 30, "Aa", fb, EPD_DRAW_ALIGN_CENTER, INK);
+#endif
     // Rule doubles as a progress bar: thick for the read part.
-    epd_fill_rect({0, TOP + 44, W, 2}, INK, fb);
-    epd_fill_rect({0, TOP + 42, W * (g_page + 1) / g_pageCount, 6}, INK, fb);
+    epd_fill_rect({0, TOP + 54, W, 2}, INK, fb);
+    epd_fill_rect({0, TOP + 52, W * (g_page + 1) / g_pageCount, 6}, INK, fb);
 
     const int first = g_pageStarts[g_page];
     const int last = g_page + 1 < g_pageCount ? g_pageStarts[g_page + 1] : g_lineCount;
-    int y = TOP + 60;
+    int y = BODY_TOP;
     char buf[512];
     // Links are in text order, like the lines: start the scan where this page does.
     int li = 0;
@@ -892,7 +1053,7 @@ void renderArticle(uint8_t* fb) {
         while (li < g_linkCount && g_links[li].end <= g_lines[first].off) ++li;
     for (int k = first; k < last; ++k) {
         const Line& l = g_lines[k];
-        if (l.kind == 'G') { y += PARA_GAP; continue; }
+        if (l.kind == 'G') { y += paraGap(); continue; }
         if (l.kind == 'I') {
             char nm[32];
             int iw, ih;
@@ -914,12 +1075,11 @@ void renderArticle(uint8_t* fb) {
             const bool numbered = c0 == '(' || ((c0 >= '0' && c0 <= '9') || (c0 >= 'a' && c0 <= 'z'))
                                   && l.len > 1 && (g_text[l.off + 1] == ')' || g_text[l.off + 1] == '.');
             if (firstLineOf(l) && !numbered)   // "(1)", "a." carry their own label
-                epd_fill_rect({MARGIN + 2, y + h - baselineOf('B') - 14, 8, 8}, INK, fb);
-            x += 24;
+                epd_fill_rect({MARGIN + 3, y + h - baselineOf('B') - (int)(capPx('B') * 0.36f) - 3, 7, 7}, INK, fb);
+            x += BULLET_IN;
         }
         const EpdFont* f = fontFor(l.kind);
         ui::text(f, x, y + h - baselineOf(l.kind), buf, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        if (l.kind == 'H' && lastLineOf(l)) epd_fill_rect({MARGIN, y + h - 4, W - 2 * MARGIN, 2}, INK, fb);
         if (l.kind == 'F' && firstLineOf(l)) epd_fill_rect({MARGIN, y - 4, 60, 1}, INK, fb);
         // Links on this line: underlined, and remembered for taps.
         const uint32_t ls = l.off, le = l.off + l.len;
@@ -934,19 +1094,17 @@ void renderArticle(uint8_t* fb) {
                 g_hot[g_hotCount++] = {(int16_t)x0, (int16_t)y, (int16_t)x1, (int16_t)(y + h), j};
         }
         while (li < g_linkCount && g_links[li].end <= le) ++li;
-        y += h;
+        y += h + afterGap(l);
     }
-    // Footer: PREV / NEXT, the history depth, a one-off note.
-    const int fy = H - FOOT_H;
-    epd_fill_rect({0, fy, W, 2}, INK, fb);
-    epd_fill_rect({W / 2, fy, 2, FOOT_H}, INK, fb);
-    ui::text(ui::font(ui::F_KEY), W / 4, fy + 50, g_page > 0 ? "< PREV" : "", fb, EPD_DRAW_ALIGN_CENTER, INK);
-    ui::text(ui::font(ui::F_KEY), W * 3 / 4, fy + 50, g_page + 1 < g_pageCount ? "NEXT >" : "END", fb,
-             EPD_DRAW_ALIGN_CENTER, INK);
+    // Footer: back a page, where you are (tap: contents), on a page.
+    char pg[24];
+    snprintf(pg, sizeof pg, "%d / %d", g_page + 1, g_pageCount);
+    footer(g_page > 0 ? "PREV" : nullptr, pg, g_tocCount ? "CONTENTS" : nullptr,
+           g_page + 1 < g_pageCount ? "NEXT" : "END", fb);
     if (g_note) {
         const int tw = ui::textWidth(ui::font(ui::F_SMALL), g_note) + 24;
-        epd_fill_rect({(W - tw) / 2, fy - 50, tw, 42}, INK, fb);
-        ui::text(ui::font(ui::F_SMALL), W / 2, fy - 20, g_note, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+        epd_fill_rect({(W - tw) / 2, H - FOOT_H - 50, tw, 42}, INK, fb);
+        ui::text(ui::font(ui::F_SMALL), W / 2, H - FOOT_H - 20, g_note, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
         g_note = nullptr;
     }
 }
@@ -1104,10 +1262,51 @@ void follow(int link) {
 
 }  // namespace
 
+// Bigger or smaller text, staying on the same words.
+void cycleSize() {
+    const uint32_t at = g_lineCount && g_page < g_pageCount ? g_lines[g_pageStarts[g_page]].off : 0;
+    g_size = (textSize() + 1) % N_SIZES;
+    Preferences p;
+    p.begin("doba", false);
+    p.putUChar("txtSize", (uint8_t)g_size);
+    p.end();
+    layout();
+    g_page = 0;
+    for (int k = 0; k < g_lineCount; ++k)
+        if (g_lines[k].off >= at && g_lines[k].kind != 'G') { g_page = pageOfLine(k); break; }
+    g_note = kSizeName[g_size];
+    Serial.printf("[lib] text size %d pages=%d\n", g_size, g_pageCount);
+}
+
 void tapArticle(int x, int y) {
-    if (y >= H - FOOT_H) {            // the footer pages
-        if (x >= W / 2) { if (g_page + 1 < g_pageCount) ++g_page; }
-        else if (g_page > 0) --g_page;
+    if (g_toc) {
+        if (y >= H - FOOT_H) {
+            if (x < W / 3) { if (g_tocPage > 0) --g_tocPage; }
+            else if (x >= W * 2 / 3) { if (g_tocPage + 1 < tocPages()) ++g_tocPage; }
+            else g_toc = false;
+            return;
+        }
+        const int row = (y - (BODY_TOP - 8)) / TOC_ROW;
+        const int i = g_tocPage * tocRowsPerPage() + row;
+        if (y >= BODY_TOP - 8 && row < tocRowsPerPage() && i < g_tocCount) {
+            g_page = pageOfLine(g_toc_lines[i]);
+            g_toc = false;
+            Serial.printf("[lib] contents -> page %d\n", g_page + 1);
+        }
+        return;
+    }
+    if (hit({kSizeBtn.x - 8, TOP, kSizeBtn.width + 16, kSizeBtn.height + 14}, x, y)) { cycleSize(); return; }
+    if (y >= H - FOOT_H) {            // the footer: back, contents, on
+        if (x < W / 3) { if (g_page > 0) --g_page; }
+        else if (x >= W * 2 / 3) { if (g_page + 1 < g_pageCount) ++g_page; }
+        else if (g_tocCount) {
+            g_toc = true;
+            int cur = 0;
+            for (int i = 0; i < g_tocCount; ++i)
+                if (pageOfLine(g_toc_lines[i]) <= g_page) cur = i;
+            g_tocPage = cur / tocRowsPerPage();
+            Serial.printf("[lib] contents %d\n", g_tocCount);
+        }
         return;
     }
     // A link, with a finger's slack round it; the nearest wins.
@@ -1122,11 +1321,13 @@ void tapArticle(int x, int y) {
         if (d < bestD) { bestD = d; best = h.link; }
     }
     if (best >= 0) { follow(best); return; }
-    if (x > W * 2 / 5) { if (g_page + 1 < g_pageCount) ++g_page; }
+    // Anywhere else on the page: the left third goes back, the rest on — a book.
+    if (x > W / 3) { if (g_page + 1 < g_pageCount) ++g_page; }
     else if (g_page > 0) --g_page;
 }
 
 bool articleBack() {
+    if (g_toc) { g_toc = false; return true; }
     while (g_historyCount > 0) {
         const Visit v = g_history[--g_historyCount];
         g_book = v.book;
@@ -1138,6 +1339,6 @@ bool articleBack() {
     return false;
 }
 
-void leaveArticle() { g_historyCount = 0; }
+void leaveArticle() { g_historyCount = 0; g_toc = false; }
 
 }  // namespace doba_lib

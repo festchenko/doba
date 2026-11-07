@@ -265,6 +265,68 @@ void draw(Icon icon, int cx, int cy, int s, uint8_t ink, uint8_t paper, uint8_t*
             ring(cx - s / 10, cy - s / 10, s * 3 / 10, t);
             line(cx + s / 8, cy + s / 8, cx + h - t, cy + h - t, t + 2);
             break;
+        case I_MAP: {
+            // three folded panels, the middle one shaded back, a pin on top
+            const int top = cy - s * 3 / 10, bot = cy + s * 3 / 10, pw = s / 3;
+            for (int k = 0; k < 3; ++k) {
+                const int x0 = cx - h + k * pw, sk = (k & 1) ? t : -t;
+                tri(x0, top + sk, x0 + pw, top - sk, x0, bot + sk);
+                tri(x0 + pw, top - sk, x0 + pw, bot - sk, x0, bot + sk);
+            }
+            rect(cx - h + pw + t / 2, top + t * 2, pw - t, s * 6 / 10 - t * 4, false);
+            for (int y = top + t * 3; y < bot - t * 2; y += t * 2)            // hatch: the panel turned away
+                rect(cx - h + pw + t, y, pw - t * 2, t / 2 + 1);
+            disc(cx + s / 6, cy - s / 8, s / 7);                               // pin
+            tri(cx + s / 6 - s / 8, cy - s / 10, cx + s / 6 + s / 8, cy - s / 10, cx + s / 6, cy + s / 6);
+            disc(cx + s / 6, cy - s / 8, s / 16, false);
+            break;
+        }
+        case I_POS: {
+            ring(cx, cy, s * 3 / 10, t);
+            rect(cx - t / 2, cy - h, t, s / 4);                                // ticks
+            rect(cx - t / 2, cy + h - s / 4, t, s / 4);
+            rect(cx - h, cy - t / 2, s / 4, t);
+            rect(cx + h - s / 4, cy - t / 2, s / 4, t);
+            disc(cx, cy, t + 1);
+            break;
+        }
+        case I_SOS: {
+            // a beacon: dome on a base, rays out of it
+            const int base = cy + h - t * 2;
+            rect(cx - s * 3 / 10, base - t, s * 6 / 10, t * 2);
+            disc(cx, base - t - s / 6, s / 5);
+            rect(cx - s / 5, base - t - s / 6, s * 2 / 5, s / 6);
+            rect(cx - t / 2, base - t - s / 4, t, s / 8, false);               // the lamp's shine
+            line(cx, cy - h, cx, cy - h + s / 7, t);
+            line(cx - h, cy - s / 10, cx - h + s / 7, cy - s / 20, t);
+            line(cx + h, cy - s / 10, cx + h - s / 7, cy - s / 20, t);
+            line(cx - h + s / 10, cy - h + s / 10, cx - s / 4, cy - s / 4, t);
+            line(cx + h - s / 10, cy - h + s / 10, cx + s / 4, cy - s / 4, t);
+            break;
+        }
+        case I_SUN: {
+            const int hy = cy + s / 6;                                          // horizon
+            disc(cx, hy, s / 4);
+            rect(cx - h, hy, s, s / 2, false);
+            for (int a = 0; a <= 180; a += 30) {
+                const float r = a * (float)M_PI / 180.0f;
+                line(cx + cosf(r) * s * 0.34f, hy - sinf(r) * s * 0.34f,
+                     cx + cosf(r) * s * 0.48f, hy - sinf(r) * s * 0.48f, t);
+            }
+            rect(cx - h, hy + t, s, t);
+            rect(cx - s / 4, hy + t * 3, s / 2, t / 2 + 1);
+            break;
+        }
+        case I_GEAR: {
+            const int r = s * 3 / 10;
+            for (int k = 0; k < 8; ++k) {
+                const float a = k * (float)M_PI / 4;
+                line(cx + cosf(a) * r, cy + sinf(a) * r, cx + cosf(a) * (h - t / 2), cy + sinf(a) * (h - t / 2), t * 2);
+            }
+            disc(cx, cy, r);
+            disc(cx, cy, s / 8, false);
+            break;
+        }
         case I_BREATH: {
             // lungs: two lobes and a trachea
             line(cx, cy - h + t, cx, cy - s / 10, t);
@@ -290,6 +352,7 @@ Icon byName(const char* n) {
         {"tools", I_TOOLS}, {"knots", I_KNOTS}, {"comms", I_COMMS}, {"books", I_BOOKS},
         {"shelf", I_SHELF}, {"files", I_FILES}, {"search", I_SEARCH}, {"bleed", I_BLEED},
         {"breath", I_BREATH}, {"grow", I_GROW}, {"garden", I_GROW}, {"power", I_POWER},
+        {"map", I_MAP}, {"position", I_POS}, {"sos", I_SOS}, {"sun", I_SUN}, {"settings", I_GEAR},
     };
     for (const auto& m : kMap)
         if (!strcmp(n, m.name)) return m.icon;

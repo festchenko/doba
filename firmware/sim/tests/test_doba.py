@@ -79,7 +79,7 @@ def test_an_article_link_opens_its_article_and_back_returns(doba, book):
     doba.wait_log(r"\[lib\] open 'Water purification' pages=\d+ links=2", since=since)
     time.sleep(0.6)
     since = doba.log_seq()
-    doba.tap(50, 243)                                       # "knots", underlined
+    doba.tap(420, 239)                                      # "knots", underlined
     doba.wait_log(r"\[lib\] open 'Knots'", since=since)
     time.sleep(0.6)
     since = doba.log_seq()
@@ -326,3 +326,32 @@ def test_stealth_from_the_home_bar_goes_silent_and_needs_two_taps_to_end(doba):
     since = doba.log_seq()
     doba.console("stealth", 800)
     doba.wait_log(r"\[stealth\] state off radio=" + before, since=since)   # as it was
+
+
+def test_reader_text_size_and_contents(doba, book):
+    """Aa steps the text size (and keeps it); the page counter opens the contents."""
+    shutil.copytree(book, os.path.join(doba.sd, "doba", "lib", "field"))
+    boot(doba)
+    doba.console("screen library", 800)
+    time.sleep(0.6)
+    doba.tap(270, TOP + 45)
+    time.sleep(0.6)
+    for c in "wat":
+        doba.tap(*key(c))
+        time.sleep(0.2)
+    time.sleep(0.6)
+    since = doba.log_seq()
+    doba.tap(200, RES_TOP + 30)
+    doba.wait_log(r"\[lib\] open 'Water purification'", since=since)
+    time.sleep(0.6)
+    since = doba.log_seq()
+    doba.tap(500, TOP + 26)                                 # Aa
+    doba.wait_log(r"\[lib\] text size 2 pages=\d+", since=since)
+    time.sleep(0.6)
+    since = doba.log_seq()
+    doba.tap(270, 960 - 38)                                 # "1 / n  CONTENTS"
+    doba.wait_log(r"\[lib\] contents [1-9]", since=since)
+    time.sleep(0.6)
+    since = doba.log_seq()
+    doba.tap(200, TOP + 66 - 8 + 30)                        # the first heading
+    doba.wait_log(r"\[lib\] contents -> page \d+", since=since)
