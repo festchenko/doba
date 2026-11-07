@@ -282,14 +282,19 @@ def test_a_figure_in_a_manual_is_shown_as_a_picture_in_its_article(doba, tmp_pat
     doba.wait_log(r"\[lib\] picture \d+ \d+x\d+", since=since)
 
 
-def test_a_picture_in_a_zim_article_reaches_the_screen_from_its_shard(doba, book):
-    """zim2doba stores ZIM pictures as img/<2 chars>/<name>.dgi; icons stay out."""
+def test_a_picture_in_a_zim_article_reaches_the_screen_from_its_pack(doba, book):
+    """zim2doba packs ZIM pictures into img/NN.dgp + img/index.dgx (not a file
+    each: a cluster apiece on the card); icons stay out."""
+    import struct
     lib = os.path.join(doba.sd, "doba", "lib")
     shutil.copytree(book, os.path.join(lib, "field"))
-    pics = [f for _, _, fs in os.walk(os.path.join(lib, "field", "img")) for f in fs]
-    if not pics:
+    ix = os.path.join(lib, "field", "img", "index.dgx")
+    if not os.path.exists(ix):
         pytest.skip("no Pillow for the converter")
-    assert len(pics) == 1
+    with open(ix, "rb") as f:
+        assert f.read(4) == b"DGX1"
+        assert struct.unpack("<I", f.read(4))[0] == 1
+    assert not [f for f in os.listdir(os.path.join(lib, "field", "img")) if f.endswith(".dgi")]
     with open(os.path.join(lib, "sections.txt"), "w") as f:
         f.write("X|KNOTS|knots|field|Knots\nS|k|KNOTS|knots|field\n")
     boot(doba)

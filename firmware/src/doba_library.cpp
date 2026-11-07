@@ -367,18 +367,65 @@ int heightOf(const Line& l) {
 
 // Draws <book>/img/<name>.dgi centred at y: "DGI1", u16 w, u16 h, then zlib of
 // 4-bit greys (0 black .. 15 white), two pixels a byte, rows padded to bytes.
+// A picture's bytes from the book's packs: img/index.dgx (sorted: name[10],
+// u16 pack, u32 offset, u32 length after "DGX1" u32 count), img/NN.dgp.
+// Big books keep their pictures this way — millions of small files would cost
+// a cluster each on the card. Caller holds the SD lock.
+uint8_t* fromPack(const char* name, size_t& len) {
+    char path[128];
+    snprintf(path, sizeof path, "%s/%s/img/index.dgx", kRoot, g_books[g_book].dir);
+    File ix = SD.open(path, FILE_READ);
+    if (!ix) return nullptr;
+    uint8_t hdr[8];
+    if (ix.read(hdr, 8) != 8 || memcmp(hdr, "DGX1", 4) != 0) { ix.close(); return nullptr; }
+    uint32_t lo = 0, hi = hdr[4] | hdr[5] << 8 | hdr[6] << 16 | (uint32_t)hdr[7] << 24;
+    char key[10];
+    memset(key, 0, sizeof key);
+    memcpy(key, name, strnlen(name, 10));
+    uint8_t rec[20];
+    bool found = false;
+    while (lo < hi) {
+        const uint32_t mid = (lo + hi) / 2;
+        ix.seek(8 + (size_t)mid * 20);
+        if (ix.read(rec, 20) != 20) break;
+        const int c = memcmp(rec, key, 10);
+        if (c == 0) { found = true; break; }
+        if (c < 0) lo = mid + 1; else hi = mid;
+    }
+    ix.close();
+    if (!found) return nullptr;
+    const unsigned pack = rec[10] | rec[11] << 8;
+    const uint32_t off = rec[12] | rec[13] << 8 | rec[14] << 16 | (uint32_t)rec[15] << 24;
+    len = rec[16] | rec[17] << 8 | rec[18] << 16 | (uint32_t)rec[19] << 24;
+    if (len < 9 || len > 4u << 20) return nullptr;
+    snprintf(path, sizeof path, "%s/%s/img/%02u.dgp", kRoot, g_books[g_book].dir, pack);
+    File f = SD.open(path, FILE_READ);
+    if (!f) return nullptr;
+    uint8_t* z = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    const bool ok = z && f.seek(off) && f.read(z, len) == len;
+    f.close();
+    if (!ok && z) { heap_caps_free(z); z = nullptr; }
+    return z;
+}
+
 void drawImage(const char* name, int y, int maxH, uint8_t* fb) {
     char path[128];
-    if (strlen(name) >= 8)   // big books shard their pictures: img/ab/abcdef0123.dgi
-        snprintf(path, sizeof path, "%s/%s/img/%.2s/%s.dgi", kRoot, g_books[g_book].dir, name, name);
-    else
-        snprintf(path, sizeof path, "%s/%s/img/%s.dgi", kRoot, g_books[g_book].dir, name);
     sdLock();
-    File f = SD.open(path, FILE_READ);
-    const size_t zlen = f ? f.size() : 0;
-    uint8_t* z = zlen > 8 ? (uint8_t*)heap_caps_malloc(zlen, MALLOC_CAP_SPIRAM) : nullptr;
-    bool ok = z && f.read(z, zlen) == zlen;
-    if (f) f.close();
+    size_t zlen = 0;
+    uint8_t* z = fromPack(name, zlen);
+    bool ok = z != nullptr;
+    if (!z) {
+        // loose files: small books, and big ones converted before the packs
+        if (strlen(name) >= 8)   // sharded: img/ab/abcdef0123.dgi
+            snprintf(path, sizeof path, "%s/%s/img/%.2s/%s.dgi", kRoot, g_books[g_book].dir, name, name);
+        else
+            snprintf(path, sizeof path, "%s/%s/img/%s.dgi", kRoot, g_books[g_book].dir, name);
+        File f = SD.open(path, FILE_READ);
+        zlen = f ? f.size() : 0;
+        z = zlen > 8 ? (uint8_t*)heap_caps_malloc(zlen, MALLOC_CAP_SPIRAM) : nullptr;
+        ok = z && f.read(z, zlen) == zlen;
+        if (f) f.close();
+    }
     sdUnlock();
     if (!ok || memcmp(z, "DGI1", 4) != 0) {
         if (z) heap_caps_free(z);

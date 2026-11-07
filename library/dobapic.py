@@ -63,3 +63,52 @@ def save(book_dir, name, blob):
     with open(tmp, "wb") as f:
         f.write(blob)
     os.replace(tmp, p)
+
+
+class Packer:
+    """Pictures packed into a few big files instead of one file each.
+
+    Millions of 5-20 KB files cost a whole cluster apiece (128 KB on a 1 TB
+    exFAT SSD, 32 KB on the device's FAT32 card) plus a ._ twin on macOS:
+    several times the pictures themselves. Packs: <book>/img/NN.dgp (up to
+    1 GB each, blobs back to back) and <book>/img/index.dgx, sorted by name:
+    "DGX1", u32 count, then count x (name[10] ASCII, u16 pack, u32 offset,
+    u32 length). The device binary-searches the index.
+    """
+    REC = struct.Struct("<10sHII")
+    LIMIT = 1 << 30
+
+    def __init__(self, book_dir):
+        self.dir = os.path.join(book_dir, "img")
+        os.makedirs(self.dir, exist_ok=True)
+        self.where = {}
+        self.pack, self.f, self.pos = -1, None, 0
+        self._next()
+
+    def _next(self):
+        if self.f:
+            self.f.close()
+        self.pack += 1
+        self.f = open(os.path.join(self.dir, "%02d.dgp" % self.pack), "wb")
+        self.pos = 0
+
+    def __contains__(self, name):
+        return name in self.where
+
+    def add(self, name, blob):
+        if name in self.where:
+            return
+        if self.pos + len(blob) > self.LIMIT:
+            self._next()
+        self.f.write(blob)
+        self.where[name] = (self.pack, self.pos, len(blob))
+        self.pos += len(blob)
+
+    def close(self):
+        self.f.close()
+        with open(os.path.join(self.dir, "index.dgx"), "wb") as f:
+            f.write(b"DGX1" + struct.pack("<I", len(self.where)))
+            for name in sorted(self.where):
+                pk, off, ln = self.where[name]
+                f.write(self.REC.pack(name.encode("ascii"), pk, off, ln))
+        return len(self.where)

@@ -227,6 +227,7 @@ def utf8_cut(s, n):
 _ARCHIVE = None
 _OUT = None          # book folder for pictures, or None: text only
 _PICS = {}           # zim path -> "name w h" | None, this worker's memory
+_NEW = []            # (name, blob) encoded for the article in hand: sent to the packer
 
 
 def _init(path, out=None):
@@ -261,20 +262,15 @@ def _picture_for(article_path):
             if not item.mimetype.startswith("image/") or "svg" in item.mimetype:
                 break
             name = dobapic.hashed_name(cand)
-            dest = dobapic.path_for(_OUT, name)
             try:
-                if os.path.exists(dest):
-                    with open(dest, "rb") as f:
-                        w, h = struct.unpack("<HH", f.read(8)[4:8])
-                else:
-                    import io
-                    from PIL import Image
-                    img = Image.open(io.BytesIO(bytes(item.content)))
-                    img.load()
-                    if img.width < 60 or img.height < 60:
-                        break
-                    blob, w, h = dobapic.encode(img)
-                    dobapic.save(_OUT, name, blob)
+                import io
+                from PIL import Image
+                img = Image.open(io.BytesIO(bytes(item.content)))
+                img.load()
+                if img.width < 60 or img.height < 60:
+                    break
+                blob, w, h = dobapic.encode(img)
+                _NEW.append((name, blob))   # the main process packs it (once)
                 ref = f"{name} {w} {h}"
             except Exception:
                 ref = None
@@ -306,10 +302,12 @@ def _work(idx):
         return None
     html = bytes(item.content).decode("utf-8", "replace")
     title = e.title or path.rsplit("/", 1)[-1].replace("_", " ")
+    _NEW.clear()
     text = to_text(title, html, _picture_for(path) if _OUT else None)
+    pics = list(_NEW)
     if len(text) < len(title) + 40:     # empty stubs, disambiguation shells
-        return None
-    return ("A", path, title, zlib.compress(text.encode("utf-8"), 9))
+        return ("P", pics) if pics else None   # its pictures may be cited again
+    return ("A", path, title, zlib.compress(text.encode("utf-8"), 9), pics)
 
 
 def main():
@@ -359,6 +357,7 @@ def main():
         except ImportError:
             print("  (no Pillow: pictures skipped — pip install pillow)")
             pics = None
+    packer = dobapic.Packer(a.out) if pics else None
     with mp.Pool(a.jobs, initializer=_init, initargs=(a.zim, pics)) as pool:
         for r in pool.imap(_work, range(total), chunksize=64):
             done += 1
@@ -366,8 +365,13 @@ def main():
                 pass
             elif r[0] == "R":
                 redirects.append((r[1], r[2]))
+            elif r[0] == "P":
+                for nm, blob in r[1]:
+                    packer.add(nm, blob)
             else:
-                _, path, title, z = r
+                _, path, title, z, new = r
+                for nm, blob in new:
+                    packer.add(nm, blob)
                 if chunk_pos + len(z) > limit:
                     chunk += 1
                     open_chunk()
@@ -380,6 +384,9 @@ def main():
                 rate = done / max(time.time() - t0, 1e-6)
                 print(f"  {done}/{total} entries, {arts} articles, {rate:.0f}/s", flush=True)
     chunk_f.close()
+    npics = packer.close() if packer else 0
+    if packer:
+        print(f"  {npics} pictures packed", flush=True)
 
     linked = 0
     for title, target in redirects:
@@ -405,9 +412,9 @@ def main():
         source = " · ".join(x for x in (meta.get("Creator"), meta.get("Source")) if x) or os.path.basename(a.zim)
     source = " ".join(source.split())[:60]
     with open(os.path.join(a.out, "info.txt"), "w", encoding="utf-8") as f:
-        f.write(f"name={name}\nlang={lang}\narticles={arts}\nredirects={linked}\n"
+        f.write(f"name={name}\nlang={lang}\narticles={arts}\nredirects={linked}\npictures={npics}\n"
                 f"source={source}\nfile={os.path.basename(a.zim)}\n")
-    size = sum(os.path.getsize(os.path.join(a.out, x)) for x in os.listdir(a.out))
+    size = sum(os.path.getsize(os.path.join(d, x)) for d, _, fs in os.walk(a.out) for x in fs)
     print(f"done: {arts} articles + {linked} redirects, {chunk + 1} chunks, "
           f"{size / 1e6:.1f} MB, {time.time() - t0:.0f}s -> {a.out}")
 
