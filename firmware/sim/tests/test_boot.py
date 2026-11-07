@@ -24,10 +24,10 @@ def test_doba_boots_to_home_and_the_home_key_toggles_the_map(monkeypatch, tmp_pa
         g = dev.screenshot(str(tmp_path / "home.png"))
         assert open(g, "rb").read(8) == b"\x89PNG\r\n\x1a\n"
         time.sleep(0.45)
-        dev.button("home")
+        dev.console("screen map", wait_ms=600)
         dev.wait_status(lambda s: s["screen"] == "map", timeout=3)
         time.sleep(0.45)
-        dev.button("home")
+        dev.button("home")                       # HOME from the map: the main screen
         dev.wait_status(lambda s: s["screen"] == "other", timeout=3)
         out = dev.console("screen comms", wait_ms=800)
         assert dev.status()["screen"] == "other", out

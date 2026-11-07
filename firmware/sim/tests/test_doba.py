@@ -83,7 +83,7 @@ def test_an_article_link_opens_its_article_and_back_returns(doba, book):
     doba.wait_log(r"\[lib\] open 'Knots'", since=since)
     time.sleep(0.6)
     since = doba.log_seq()
-    doba.button("home")                                     # back along the link
+    doba.tap(50, 30)                                        # BACK: back along the link
     doba.wait_log(r"\[lib\] open 'Water purification'", since=since)
 
 
@@ -242,7 +242,7 @@ def test_library_sections_open_their_guides_and_emergency_buttons_jump(doba, boo
     doba.tap(96, TOP + 92 + 28 + 54)                        # BLEEDING
     doba.wait_log(r"\[lib\] open 'Tourniquet'", since=since)
     time.sleep(0.6)
-    doba.button("home")                                     # back to the sections
+    doba.tap(50, 30)                                        # BACK: to the sections
     time.sleep(0.8)
     doba.tap(96, TOP + 92 + 28 + 108 + 16 + 70)             # WATER, first cell
     time.sleep(0.8)
@@ -362,3 +362,16 @@ def test_reader_text_size_and_contents(doba, book):
     since = doba.log_seq()
     doba.tap(200, TOP + 66 - 8 + 30)                        # the first heading
     doba.wait_log(r"\[lib\] contents -> page \d+", since=since)
+
+
+def test_the_home_key_goes_home_from_anywhere(doba):
+    """HOME is the main screen, from a sub-page and from the map, in one press."""
+    boot(doba)
+    for where in ("setup", "map", "comms", "library"):
+        doba.console("screen " + where, 800)
+        time.sleep(0.8)
+        since = doba.log_seq()
+        doba.button("home")
+        doba.wait_log(r"\[ui\] home key", since=since)
+        time.sleep(0.6)
+        doba.wait_status(lambda s: s["screen"] == "other", timeout=3)

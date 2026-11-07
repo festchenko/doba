@@ -3978,14 +3978,14 @@ void task(void*) {
                 // The carousel: every page in configured order, the map
                 // among them wherever the rider put it. With the default
                 // config this is exactly the old dash <-> map swap.
-                // DOBA: Home is home — the main screen; from there, the map.
-                if (screen == SCREEN_DASH || screen == SCREEN_MAP) {
-                    screen = SCREEN_HOME;
-                } else if (screen == SCREEN_HOME) {
-                    screen = SCREEN_MAP;
-                } else {
-                    goBack();
-                }
+                // DOBA: Home is home — the main screen, from anywhere, at once.
+                // Back is the BACK corner of the status bar.
+                if (routes::navPending()) routes::dismissNav();
+                powerOverlay = false;
+                if (screen == SCREEN_ARTICLE) doba_lib::leaveArticle();
+                Serial.printf("[ui] home key from %d\n", (int)screen);
+                screen = SCREEN_HOME;
+                forceDraw = true;
             }
         }
 
