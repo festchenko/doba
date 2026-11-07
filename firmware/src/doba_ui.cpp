@@ -422,7 +422,7 @@ void segments(int y, int h, const char* const* labels, int n, int sel, uint8_t* 
         // One size for the whole control: the smaller one if any label needs it.
         const EpdFont* lf = ui::font(ui::F_SMALL);
         for (int j = 0; j < n; ++j)
-            if (ui::textWidth(ui::font(ui::F_SMALL), labels[j]) > sw - 12) lf = ui::font(ui::F_TINY);
+            if (ui::textWidth(ui::font(ui::F_SMALL), labels[j]) > w / n - 12) lf = ui::font(ui::F_TINY);
         ui::text(lf, sx + sw / 2, top + CTRL_H / 2 + (lf == ui::font(ui::F_TINY) ? 6 : 9), labels[i], fb, EPD_DRAW_ALIGN_CENTER,
                  i == sel ? PAPER : INK);
     }
