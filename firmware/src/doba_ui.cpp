@@ -7,6 +7,7 @@
 #include "tz_auto.h"
 
 #include <Arduino.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -36,7 +37,6 @@ constexpr uint8_t INK = 0x00, PAPER = 0xFF;
 
 kbd::Keyboard g_compose;   // the message being written
 kbd::Keyboard g_search;    // the library query
-int g_commsScroll = 0;     // messages skipped from the newest
 
 void frame(const EpdRect& r, int t, uint8_t* fb) {
     for (int i = 0; i < t; ++i)
@@ -214,143 +214,6 @@ Go tapHome(int x, int y) {
     }
     for (const Tile& t : kTiles)
         if (hit(t.r, x, y)) return t.go;
-    return STAY;
-}
-
-// --- COMMS -------------------------------------------------------------------
-
-const EpdRect kWrite = {12, H - 92, 260, 80};
-const EpdRect kOlder = {284, H - 92, 118, 80};
-const EpdRect kNewer = {410, H - 92, 118, 80};
-const EpdRect kRadioOn = {120, 420, 300, 96};
-
-void renderComms(const RideState& s, uint8_t* fb) {
-    (void)s;
-    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
-    const EpdFont* small = ui::font(ui::F_SMALL);
-    const EpdFont* tiny = ui::font(ui::F_TINY);
-    const EpdFont* body = ui::font(ui::F_LABEL);
-    char hdr[80];
-    if (!mesh_service::enabled()) {
-        // Contours behind, a clear card in front: the words stay readable.
-        topo_bg::draw({0, TOP, W, H - TOP}, fb, 1);
-        const EpdRect card = {40, 280, W - 80, 330};
-        epd_fill_rect(card, PAPER, fb);
-        frame(card, 2, fb);
-        if (stealth::active()) {
-            ui::text(ui::font(ui::F_TITLE), W / 2, 360, "STEALTH", fb, EPD_DRAW_ALIGN_CENTER, INK);
-            ui::text(small, W / 2, 410, "Nothing in, nothing out.", fb, EPD_DRAW_ALIGN_CENTER, INK);
-            ui::text(tiny, W / 2, 450, stealth::listen() ? "To listen, turn RADIO on in SETTINGS."
-                                                         : "STEALTH: LISTEN in SETTINGS receives.", fb, EPD_DRAW_ALIGN_CENTER, INK);
-            ui::text(tiny, W / 2, 560, "End stealth on HOME (two taps)", fb, EPD_DRAW_ALIGN_CENTER, INK);
-            return;
-        }
-        ui::text(ui::font(ui::F_TITLE), W / 2, 360, "RADIO OFF", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        button(kRadioOn, "TURN ON", true, fb);
-        ui::text(tiny, W / 2, 570, "LoRa 868 MHz · Meshtastic", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        return;
-    }
-    if (stealth::active()) {
-        // Listening in stealth: a dark band says nothing is going out.
-        epd_fill_rect({0, TOP, W, 50}, INK, fb);
-        ui::text(small, 14, TOP + 34, "STEALTH · listening · nothing is sent", fb, EPD_DRAW_ALIGN_LEFT, PAPER);
-    } else {
-        snprintf(hdr, sizeof hdr, "CH %s · %.3f MHz · %d nodes", mesh_service::channelName(),
-                 mesh_service::frequencyMHz(), mesh_service::nodeCount());
-        ui::text(small, 14, TOP + 34, hdr, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        epd_fill_rect({0, TOP + 48, W, 2}, INK, fb);
-    }
-
-    // Newest at the bottom; draw upward from the buttons.
-    const int areaTop = TOP + 56, areaBottom = H - 104;
-    int y = areaBottom;
-    const int total = mesh_service::messageCount();
-    if (g_commsScroll > total - 1) g_commsScroll = total > 0 ? total - 1 : 0;
-    for (int i = total - 1 - g_commsScroll; i >= 0; --i) {
-        mesh_service::Message m;
-        if (!mesh_service::messageAt(i, m)) continue;
-        char lines[8][256];
-        int nl = 0;
-        wrap(body, m.text, W - 40, [&](const char* l) {
-            if (nl < 8) snprintf(lines[nl++], sizeof lines[0], "%s", l);
-        });
-        const int lineH = 30;
-        const int blockH = 28 + nl * lineH + 14;
-        if (y - blockH < areaTop) break;
-        y -= blockH;
-        char who[48], when[8], meta[96];
-        clockOf(m.utc, when, sizeof when);
-        if (m.outgoing) {
-            const char* st = m.status == mesh_service::TX_ACKED ? "ACK"
-                           : m.status == mesh_service::TX_SENT ? "SENT"
-                           : m.status == mesh_service::TX_FAILED ? "FAILED" : "...";
-            snprintf(meta, sizeof meta, "%s  ME  [%s]", when, st);
-        } else {
-            if (!mesh_service::nodeName(m.from, who, sizeof who))
-                snprintf(who, sizeof who, "!%08lx", (unsigned long)m.from);
-            snprintf(meta, sizeof meta, "%s  %s  %ddB", when, who, m.snr);
-        }
-        const int x = m.outgoing ? 40 : 14;
-        ui::text(tiny, x, y + 20, meta, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        for (int k = 0; k < nl; ++k)
-            ui::text(body, x, y + 28 + (k + 1) * lineH - 6, lines[k], fb, EPD_DRAW_ALIGN_LEFT, INK);
-        if (m.outgoing) epd_fill_rect({20, y + 6, 4, blockH - 18}, INK, fb);   // own-message bar
-        epd_fill_rect({14, y + blockH - 4, W - 28, 1}, INK, fb);
-    }
-    if (total == 0)
-        ui::text(small, W / 2, 420, "no messages yet", fb, EPD_DRAW_ALIGN_CENTER, INK);
-    mesh_service::markAllRead();
-    button(kWrite, "WRITE", true, fb);
-    button(kOlder, "OLDER", false, fb);
-    button(kNewer, "NEWER", false, fb);
-}
-
-Go tapComms(int x, int y) {
-    if (!mesh_service::enabled()) {
-        if (!stealth::active() && hit(kRadioOn, x, y)) mesh_service::setEnabled(true);
-        return STAY;
-    }
-    if (hit(kWrite, x, y)) { g_compose.clear(); return TO_COMPOSE; }
-    if (hit(kOlder, x, y)) { g_commsScroll += 3; return STAY; }
-    if (hit(kNewer, x, y)) { g_commsScroll = g_commsScroll > 3 ? g_commsScroll - 3 : 0; return STAY; }
-    return STAY;
-}
-
-// --- COMPOSE -----------------------------------------------------------------
-
-void renderCompose(const RideState& s, uint8_t* fb) {
-    (void)s;
-    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
-    g_compose.top = H - g_compose.height();
-    g_compose.enterLabel = "SEND";
-    char hdr[64];
-    snprintf(hdr, sizeof hdr, "TO: ALL on %s", mesh_service::channelName());
-    ui::text(ui::font(ui::F_SMALL), 14, TOP + 34, hdr, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    char cnt[16];
-    snprintf(cnt, sizeof cnt, "%u/%u", (unsigned)strlen(g_compose.text), (unsigned)mesh::MAX_TEXT_LEN);
-    ui::text(ui::font(ui::F_TINY), W - 14, TOP + 34, cnt, fb, EPD_DRAW_ALIGN_RIGHT, INK);
-    const EpdRect box = {10, TOP + 48, W - 20, g_compose.top - TOP - 64};
-    frame(box, 2, fb);
-    char shown[300];
-    snprintf(shown, sizeof shown, "%s_", g_compose.text);
-    int ly = box.y + 40;
-    wrap(ui::font(ui::F_KEY), shown, box.width - 28, [&](const char* l) {
-        if (ly < box.y + box.height - 8)
-            ui::text(ui::font(ui::F_KEY), box.x + 14, ly, l, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        ly += 40;
-    });
-    g_compose.render(fb);
-}
-
-Go tapCompose(int x, int y) {
-    const kbd::Action a = g_compose.tap(x, y);
-    if (strlen(g_compose.text) > mesh::MAX_TEXT_LEN) kbd::popUtf8(g_compose.text);
-    if (a == kbd::ENTER && g_compose.text[0]) {
-        mesh_service::queueText(mesh::BROADCAST_ADDR, g_compose.text, 0);
-        g_compose.clear();
-        g_commsScroll = 0;
-        return TO_COMMS;
-    }
     return STAY;
 }
 
@@ -642,6 +505,499 @@ Go tapSetup(int x, int y) {
             break;
         }
         case R_MORE: return TO_MORE;
+    }
+    return STAY;
+}
+
+// --- COMMS: chats and nodes, Meshtastic-style ----------------------------------
+//
+// Three levels, like the Meshtastic app: CHATS (the public channel, private
+// channels, one chat per person written to) and NODES (everyone heard: name,
+// when, how far, which way); a CHAT is one conversation with QUICK replies and
+// WRITE. Delivery shows as in the app: ... queued, one tick on the air, two
+// ticks acknowledged, ! failed.
+
+enum CommsView : uint8_t { CV_CHATS, CV_NODES, CV_CHAT, CV_QUICK };
+CommsView g_cv = CV_CHATS;
+int g_listPage = 0;
+// The open conversation: a channel (dm == 0) or a person (dm = node number).
+uint8_t g_chatCh = 0;
+uint32_t g_chatDm = 0;
+double g_myLat = 0, g_myLon = 0;
+bool g_myPos = false;
+// When each conversation was last looked at (millis), for its unread count.
+struct Seen { uint8_t ch; uint32_t dm; uint32_t ms; };
+constexpr int MAX_SEEN = 24;
+Seen g_seen[MAX_SEEN];
+int g_seenCount = 0;
+
+constexpr int TAB_Y = TOP + 8, TAB_H = 56, LIST_Y = TOP + 76, ROW_H = 100;
+constexpr int BAR_Y = H - 92, BAR_H = 80;
+const EpdRect kRadioOn = {120, 420, 300, 96};
+const EpdRect kPrev = {12, BAR_Y, 110, BAR_H};
+const EpdRect kNext = {W - 122, BAR_Y, 110, BAR_H};
+const EpdRect kQuick = {130, BAR_Y, 120, BAR_H};
+const EpdRect kWrite = {258, BAR_Y, 150, BAR_H};
+const EpdRect kOlder = {12, BAR_Y, 110, BAR_H};
+const EpdRect kNewer = {416, BAR_Y, 112, BAR_H};
+// In a chat: ^ older, QUICK, WRITE, v newer.
+
+bool isDm(const mesh_service::Message& m) {
+    return m.outgoing ? m.to != mesh::BROADCAST_ADDR : m.to == mesh_service::nodeNum();
+}
+uint32_t peerOf(const mesh_service::Message& m) { return m.outgoing ? m.to : m.from; }
+bool inChat(const mesh_service::Message& m, uint8_t ch, uint32_t dm) {
+    if (dm) return isDm(m) && peerOf(m) == dm;
+    return !isDm(m) && m.channel == ch;
+}
+uint32_t& seenMs(uint8_t ch, uint32_t dm) {
+    for (int i = 0; i < g_seenCount; ++i)
+        if (g_seen[i].ch == ch && g_seen[i].dm == dm) return g_seen[i].ms;
+    if (g_seenCount == MAX_SEEN) { memmove(g_seen, g_seen + 1, sizeof(Seen) * (MAX_SEEN - 1)); --g_seenCount; }
+    g_seen[g_seenCount] = {ch, dm, 0};
+    return g_seen[g_seenCount++].ms;
+}
+
+void nameOf(uint32_t num, char* out, size_t n) {
+    if (!mesh_service::nodeName(num, out, n) || !out[0]) snprintf(out, n, "!%08lx", (unsigned long)num);
+}
+void chatTitle(uint8_t ch, uint32_t dm, char* out, size_t n) {
+    if (dm) { nameOf(dm, out, n); return; }
+    if (ch == 0) { snprintf(out, n, "EVERYONE"); return; }
+    mesh_service::ChannelInfo ci;
+    if (mesh_service::channelAt(ch, ci) && ci.name[0]) snprintf(out, n, "# %s", ci.name);
+    else snprintf(out, n, "# channel %u", (unsigned)ch);
+}
+void ago(uint32_t ms, char* out, size_t n) {
+    const uint32_t s = (millis() - ms) / 1000;
+    if (s < 60) snprintf(out, n, "now");
+    else if (s < 3600) snprintf(out, n, "%lum", (unsigned long)(s / 60));
+    else if (s < 86400) snprintf(out, n, "%luh", (unsigned long)(s / 3600));
+    else snprintf(out, n, "%lud", (unsigned long)(s / 86400));
+}
+// "1.2 km · 34-50" from here to a node, "" without both positions.
+void whereIs(const mesh_service::Node& nd, char* out, size_t n) {
+    out[0] = 0;
+    if (!g_myPos || !nd.hasPosition) return;
+    double b, d;
+    milgeo::bearingDistance(g_myLat, g_myLon, nd.latitude, nd.longitude, b, d);
+    char az[8], ds[16];
+    milgeo::mils((float)b, milspec::milsSystem(), az, sizeof az);
+    doba_points::formatDistance(d, ds, sizeof ds);
+    snprintf(out, n, "%s · %s", ds, az);
+}
+// Cut a line to fit with "...", at a character.
+void fit(const EpdFont* f, char* s, int maxW) {
+    if (ui::textWidth(f, s) <= maxW) return;
+    size_t n = strlen(s);
+    while (n > 0) {
+        do { --n; } while (n > 0 && ((uint8_t)s[n] & 0xC0) == 0x80);
+        memcpy(s + n, "...", 4);
+        if (ui::textWidth(f, s) <= maxW) return;
+    }
+}
+
+// The conversations: the channels in use, then everyone written with, newest first.
+struct Chat { uint8_t ch; uint32_t dm; uint32_t lastMs; int unread; int lastIdx; };
+constexpr int MAX_CHATS = 24;
+int collectChats(Chat* out) {
+    int n = 0;
+    for (int c = 0; c < 8 && n < MAX_CHATS; ++c) {
+        mesh_service::ChannelInfo ci;
+        if (c == 0 || (mesh_service::channelAt(c, ci) && ci.used)) out[n++] = {(uint8_t)c, 0, 0, 0, -1};
+    }
+    const int total = mesh_service::messageCount();
+    for (int i = 0; i < total; ++i) {
+        mesh_service::Message m;
+        if (!mesh_service::messageAt(i, m)) continue;
+        const uint32_t dm = isDm(m) ? peerOf(m) : 0;
+        const uint8_t ch = dm ? 0 : m.channel;
+        int k = 0;
+        while (k < n && !(out[k].ch == ch && out[k].dm == dm)) ++k;
+        if (k == n) { if (n == MAX_CHATS) continue; out[n++] = {ch, dm, 0, 0, -1}; }
+        out[k].lastMs = m.ms;
+        out[k].lastIdx = i;
+        if (!m.outgoing && m.ms > seenMs(ch, dm)) ++out[k].unread;
+    }
+    // channels first (in slot order), then people by the newest message
+    std::stable_sort(out, out + n, [](const Chat& a, const Chat& b) {
+        if ((a.dm == 0) != (b.dm == 0)) return a.dm == 0;
+        if (a.dm == 0) return a.ch < b.ch;
+        return a.lastMs > b.lastMs;
+    });
+    return n;
+}
+
+void tabs(uint8_t* fb) {
+    char nodes[24];
+    snprintf(nodes, sizeof nodes, "NODES  %d", mesh_service::nodeCount());
+    const char* const l[] = {"CHATS", nodes};
+    segments(TAB_Y, TAB_H, l, 2, g_cv == CV_NODES ? 1 : 0, fb, 12, W - 24);
+}
+
+void pager(int page, int pages, uint8_t* fb) {
+    if (pages <= 1) return;
+    button(kPrev, "<", false, fb);
+    button(kNext, ">", false, fb);
+    char p[16];
+    snprintf(p, sizeof p, "%d / %d", page + 1, pages);
+    ui::text(ui::font(ui::F_LABEL), W / 2, BAR_Y + BAR_H / 2 + 10, p, fb, EPD_DRAW_ALIGN_CENTER, INK);
+}
+int rowsPerPage() { return (BAR_Y - 8 - LIST_Y) / ROW_H; }
+
+void renderChats(uint8_t* fb) {
+    tabs(fb);
+    Chat chats[MAX_CHATS];
+    const int n = collectChats(chats);
+    const int per = rowsPerPage(), pages = (n + per - 1) / per;
+    if (g_listPage >= pages) g_listPage = pages ? pages - 1 : 0;
+    const EpdFont* big = ui::font(ui::F_LABEL);
+    const EpdFont* small = ui::font(ui::F_SMALL);
+    for (int r = 0; r < per && g_listPage * per + r < n; ++r) {
+        const Chat& c = chats[g_listPage * per + r];
+        const int y = LIST_Y + r * ROW_H;
+        char t[48], pv[160], when[12] = "";
+        chatTitle(c.ch, c.dm, t, sizeof t);
+        // a mark for what it is: a person, the open channel, a private one
+        if (c.dm) { epd_fill_circle(36, y + 30, 12, INK, fb); epd_fill_rect({22, y + 46, 29, 12}, INK, fb); epd_fill_circle(36, y + 46, 14, INK, fb); epd_fill_rect({18, y + 58, 40, 6}, PAPER, fb); }
+        else if (c.ch == 0) { for (int k = 0; k < 3; ++k) epd_draw_circle(36, y + 42, 8 + k * 7, INK, fb), epd_draw_circle(36, y + 42, 9 + k * 7, INK, fb); epd_fill_circle(36, y + 42, 5, INK, fb); }
+        else { epd_fill_rect({22, y + 34, 28, 22}, INK, fb); for (int k = 0; k < 3; ++k) epd_draw_circle(36, y + 32, 9 - k, INK, fb); epd_fill_rect({24, y + 36, 24, 18}, INK, fb); }
+        pv[0] = 0;
+        if (c.lastIdx >= 0) {
+            mesh_service::Message m;
+            if (mesh_service::messageAt(c.lastIdx, m)) {
+                char who[40];
+                if (m.outgoing) snprintf(who, sizeof who, "you");
+                else nameOf(m.from, who, sizeof who);
+                snprintf(pv, sizeof pv, c.dm && !m.outgoing ? "%s" : "%s: %s", c.dm && !m.outgoing ? m.text : who, m.text);
+                ago(m.ms, when, sizeof when);
+            }
+        } else {
+            snprintf(pv, sizeof pv, c.ch == 0 ? "everyone in range · %s" : "private channel", mesh_service::presetName());
+        }
+        const int tx = 70, right = W - 16;
+        ui::text(small, right, y + 36, when, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        fit(big, t, right - tx - ui::textWidth(small, when) - 16);
+        ui::text(big, tx, y + 38, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        int pw = right - tx;
+        if (c.unread) {
+            char u[8];
+            snprintf(u, sizeof u, "%d", c.unread > 99 ? 99 : c.unread);
+            const int bw = ui::textWidth(small, u) + 22;
+            epd_fill_rect({right - bw, y + 54, bw, 32}, INK, fb);
+            ui::text(small, right - bw / 2, y + 77, u, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+            pw -= bw + 10;
+        }
+        fit(small, pv, pw);
+        ui::text(small, tx, y + 78, pv, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        epd_fill_rect({tx, y + ROW_H - 1, W - tx - 12, 1}, INK, fb);
+    }
+    pager(g_listPage, pages, fb);
+    if (pages <= 1)
+        ui::text(ui::font(ui::F_TINY), W / 2, BAR_Y + 44, "tap a chat to read and write", fb, EPD_DRAW_ALIGN_CENTER, INK);
+}
+
+void renderNodes(uint8_t* fb) {
+    tabs(fb);
+    const int n = mesh_service::nodeCount();
+    const int per = rowsPerPage(), pages = (n + per - 1) / per;
+    if (g_listPage >= pages) g_listPage = pages ? pages - 1 : 0;
+    const EpdFont* big = ui::font(ui::F_LABEL);
+    const EpdFont* small = ui::font(ui::F_SMALL);
+    if (n == 0) {
+        ui::text(small, W / 2, 420, "nobody heard yet", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_TINY), W / 2, 456, "nodes show here as their radios are heard", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    }
+    for (int r = 0; r < per && g_listPage * per + r < n; ++r) {
+        mesh_service::Node nd;
+        if (!mesh_service::nodeAt(g_listPage * per + r, nd)) continue;
+        const int y = LIST_Y + r * ROW_H;
+        // the short name in a box, as Meshtastic shows it
+        char sh[8];
+        snprintf(sh, sizeof sh, "%.4s", nd.shortName[0] ? nd.shortName : "?");
+        epd_fill_rect({12, y + 16, 76, 64}, INK, fb);
+        ui::text(small, 50, y + 56, sh, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+        char nm[48], when[12], where[40], meta[96];
+        snprintf(nm, sizeof nm, "%s", nd.longName[0] ? nd.longName : sh);
+        ago(nd.lastHeardMs, when, sizeof when);
+        whereIs(nd, where, sizeof where);
+        const int tx = 104, right = W - 16;
+        ui::text(small, right, y + 40, when, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        fit(big, nm, right - tx - ui::textWidth(small, when) - 16);
+        ui::text(big, tx, y + 42, nm, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        if (nd.hops == 0) snprintf(meta, sizeof meta, "%s%sdirect · %d dB", where, where[0] ? " · " : "", nd.snr);
+        else if (nd.hops == mesh_service::HOPS_UNKNOWN) snprintf(meta, sizeof meta, "%s", where[0] ? where : "relayed");
+        else snprintf(meta, sizeof meta, "%s%s%u hop%s", where, where[0] ? " · " : "", nd.hops, nd.hops == 1 ? "" : "s");
+        fit(small, meta, right - tx);
+        ui::text(small, tx, y + 78, meta, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        epd_fill_rect({tx, y + ROW_H - 1, W - tx - 12, 1}, INK, fb);
+    }
+    pager(g_listPage, pages, fb);
+    if (pages <= 1 && n)
+        ui::text(ui::font(ui::F_TINY), W / 2, BAR_Y + 44, "tap a node to write to it", fb, EPD_DRAW_ALIGN_CENTER, INK);
+}
+
+int g_chatScroll = 0;   // messages skipped from the newest in the open chat
+
+void renderChat(uint8_t* fb) {
+    const EpdFont* small = ui::font(ui::F_SMALL);
+    const EpdFont* tiny = ui::font(ui::F_TINY);
+    const EpdFont* body = ui::font(ui::F_LABEL);
+    // Header: who, and for a person how far and which way.
+    char t[48], sub[80] = "";
+    chatTitle(g_chatCh, g_chatDm, t, sizeof t);
+    if (g_chatDm) {
+        for (int i = 0; i < mesh_service::nodeCount(); ++i) {
+            mesh_service::Node nd;
+            if (mesh_service::nodeAt(i, nd) && nd.num == g_chatDm) {
+                char when[12], where[40];
+                ago(nd.lastHeardMs, when, sizeof when);
+                whereIs(nd, where, sizeof where);
+                snprintf(sub, sizeof sub, "%s%sheard %s · private", where, where[0] ? " · " : "", when);
+                break;
+            }
+        }
+    } else {
+        snprintf(sub, sizeof sub, g_chatCh == 0 ? "everyone in range can read this" : "only those with the key");
+    }
+    fit(body, t, W - 28);
+    ui::text(body, 14, TOP + 34, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(tiny, 14, TOP + 58, sub, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    epd_fill_rect({0, TOP + 70, W, 2}, INK, fb);
+
+    // Bubbles, newest at the bottom: theirs on the left in a frame with the
+    // sender's name, yours on the right, filled, with the delivery state.
+    const int areaTop = TOP + 78, areaBottom = BAR_Y - 8;
+    const int total = mesh_service::messageCount();
+    int mine = 0;
+    for (int i = 0; i < total; ++i) { mesh_service::Message m; if (mesh_service::messageAt(i, m) && inChat(m, g_chatCh, g_chatDm)) ++mine; }
+    if (g_chatScroll > mine - 1) g_chatScroll = mine > 0 ? mine - 1 : 0;
+    int y = areaBottom, skip = g_chatScroll, shown = 0;
+    const int maxW = W - 120;
+    for (int i = total - 1; i >= 0; --i) {
+        mesh_service::Message m;
+        if (!mesh_service::messageAt(i, m) || !inChat(m, g_chatCh, g_chatDm)) continue;
+        if (skip > 0) { --skip; continue; }
+        char lines[8][256];
+        int nl = 0, wmax = 0;
+        wrap(body, m.text, maxW - 28, [&](const char* l) {
+            if (nl < 8) { snprintf(lines[nl], sizeof lines[0], "%s", l); wmax = std::max(wmax, ui::textWidth(body, lines[nl])); ++nl; }
+        });
+        char meta[80], when[12], who[40] = "";
+        if (m.utc) clockOf(m.utc, when, sizeof when);
+        else ago(m.ms, when, sizeof when);   // no wall clock yet: how long ago
+        const int ticks = !m.outgoing ? 0 : m.status == mesh_service::TX_ACKED ? 2 : m.status == mesh_service::TX_SENT ? 1 : 0;
+        if (m.outgoing) {
+            snprintf(meta, sizeof meta, "%s%s", when, m.status == mesh_service::TX_FAILED ? "  NOT SENT"
+                                                   : m.status == mesh_service::TX_PENDING ? "  ..." : "");
+        } else {
+            nameOf(m.from, who, sizeof who);
+            snprintf(meta, sizeof meta, g_chatDm ? "%s" : "%s  %s", g_chatDm ? when : who, when);
+        }
+        const int lineH = 32, bw = std::max(wmax, ui::textWidth(tiny, meta) + ticks * 14 + 8) + 28;
+        const int bh = 30 + nl * lineH + 8;
+        if (y - bh - 10 < areaTop) break;
+        y -= bh + 10;
+        const int x = m.outgoing ? W - 14 - bw : 14;
+        const uint8_t fg = m.outgoing ? PAPER : INK;
+        if (m.outgoing) epd_fill_rect({x, y, bw, bh}, INK, fb); else frame({x, y, bw, bh}, 2, fb);
+        ui::text(tiny, x + 14, y + 22, meta, fb, EPD_DRAW_ALIGN_LEFT, fg);
+        // delivery ticks, drawn: one on the air, two acknowledged
+        for (int k = 0; k < ticks; ++k) {
+            const int tx = x + 14 + ui::textWidth(tiny, meta) + 10 + k * 12, ty = y + 16;
+            for (int t = 0; t < 2; ++t) {
+                epd_draw_line(tx, ty + t, tx + 4, ty + 4 + t, fg, fb);
+                epd_draw_line(tx + 4, ty + 4 + t, tx + 12, ty - 5 + t, fg, fb);
+            }
+        }
+        for (int k = 0; k < nl; ++k)
+            ui::text(body, x + 14, y + 30 + (k + 1) * lineH - 8, lines[k], fb, EPD_DRAW_ALIGN_LEFT, fg);
+        ++shown;
+    }
+    if (mine == 0) {
+        ui::text(small, W / 2, 400, "no messages yet", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(tiny, W / 2, 436, "QUICK sends a ready phrase, WRITE types one", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    }
+    seenMs(g_chatCh, g_chatDm) = millis();
+    mesh_service::markAllRead();
+    button(kOlder, "OLDER", false, fb);
+    button(kQuick, "QUICK", false, fb);
+    button(kWrite, "WRITE", true, fb);
+    button(kNewer, "NEWER", false, fb);
+    (void)shown;
+}
+
+// Ready phrases: one tap, no keyboard, with cold hands.
+const char* const kQuickText[] = {
+    "OK", "Copy", "On my way", "Wait for me", "Need help", "All good", "Where are you?",
+    "Stay there", "Coming back", "Low battery",
+};
+constexpr int N_QUICK = sizeof(kQuickText) / sizeof(kQuickText[0]);
+constexpr int Q_TOP = TOP + 90, Q_H = 76, Q_GAP = 10;
+EpdRect quickRect(int i) {
+    const int cw = (W - 24 - Q_GAP) / 2;
+    return {12 + (i % 2) * (cw + Q_GAP), Q_TOP + (i / 2) * (Q_H + Q_GAP), cw, Q_H};
+}
+const EpdRect kSendPos = {12, Q_TOP + (N_QUICK / 2) * (Q_H + Q_GAP), W - 24, Q_H};
+
+void renderQuick(uint8_t* fb) {
+    char t[48], h[80];
+    chatTitle(g_chatCh, g_chatDm, t, sizeof t);
+    snprintf(h, sizeof h, "SEND TO %s", t);
+    fit(ui::font(ui::F_LABEL), h, W - 28);
+    ui::text(ui::font(ui::F_LABEL), 14, TOP + 40, h, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    epd_fill_rect({0, TOP + 60, W, 2}, INK, fb);
+    for (int i = 0; i < N_QUICK; ++i) button(quickRect(i), kQuickText[i], false, fb);
+    button(kSendPos, g_myPos ? "MY POSITION (MGRS)" : "MY POSITION: no fix", true, fb);
+    ui::text(ui::font(ui::F_TINY), W / 2, H - 30, "one tap sends · BACK to the chat", fb, EPD_DRAW_ALIGN_CENTER, INK);
+}
+
+void sendToChat(const char* text) {
+    mesh_service::queueText(g_chatDm ? g_chatDm : mesh::BROADCAST_ADDR, text, g_chatDm ? 0 : g_chatCh);
+    g_chatScroll = 0;
+    Serial.printf("[comms] send to %s%lx: %s\n", g_chatDm ? "!" : "ch", (unsigned long)(g_chatDm ? g_chatDm : g_chatCh), text);
+}
+
+void renderComms(const RideState& s, uint8_t* fb) {
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    g_myPos = s.gpsFix || s.everHadFix;
+    g_myLat = s.latitude;
+    g_myLon = s.longitude;
+    const EpdFont* small = ui::font(ui::F_SMALL);
+    const EpdFont* tiny = ui::font(ui::F_TINY);
+    if (!mesh_service::enabled()) {
+        // Contours behind, a clear card in front: the words stay readable.
+        topo_bg::draw({0, TOP, W, H - TOP}, fb, 1);
+        const EpdRect card = {40, 280, W - 80, 330};
+        epd_fill_rect(card, PAPER, fb);
+        frame(card, 2, fb);
+        if (stealth::active()) {
+            ui::text(ui::font(ui::F_TITLE), W / 2, 360, "STEALTH", fb, EPD_DRAW_ALIGN_CENTER, INK);
+            ui::text(small, W / 2, 410, "Nothing in, nothing out.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+            ui::text(tiny, W / 2, 450, stealth::listen() ? "To listen, turn RADIO on in SETTINGS."
+                                                         : "STEALTH: LISTEN in SETTINGS receives.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+            ui::text(tiny, W / 2, 560, "End stealth on HOME (two taps)", fb, EPD_DRAW_ALIGN_CENTER, INK);
+            return;
+        }
+        ui::text(ui::font(ui::F_TITLE), W / 2, 360, "RADIO OFF", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        button(kRadioOn, "TURN ON", true, fb);
+        ui::text(tiny, W / 2, 570, "messages and nodes need the radio", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        return;
+    }
+    switch (g_cv) {
+        case CV_CHATS: renderChats(fb); break;
+        case CV_NODES: renderNodes(fb); break;
+        case CV_CHAT: renderChat(fb); break;
+        case CV_QUICK: renderQuick(fb); break;
+    }
+    if (stealth::active() && g_cv != CV_QUICK) {
+        // Listening in stealth: a dark band says nothing is going out.
+        epd_fill_rect({0, BAR_Y - 46, W, 38}, INK, fb);
+        ui::text(small, W / 2, BAR_Y - 20, "STEALTH: listening, nothing is sent", fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+    }
+}
+
+void openChat(uint8_t ch, uint32_t dm) {
+    g_chatCh = ch;
+    g_chatDm = dm;
+    g_chatScroll = 0;
+    g_cv = CV_CHAT;
+}
+
+Go tapComms(int x, int y) {
+    if (!mesh_service::enabled()) {
+        if (!stealth::active() && hit(kRadioOn, x, y)) mesh_service::setEnabled(true);
+        return STAY;
+    }
+    switch (g_cv) {
+        case CV_CHATS:
+        case CV_NODES: {
+            if (y >= TAB_Y && y < TAB_Y + TAB_H) {
+                const CommsView v = x < W / 2 ? CV_CHATS : CV_NODES;
+                if (v != g_cv) { g_cv = v; g_listPage = 0; }
+                return STAY;
+            }
+            if (y >= BAR_Y) {
+                if (hit(kPrev, x, y) && g_listPage > 0) --g_listPage;
+                if (hit(kNext, x, y)) ++g_listPage;   // clamped when drawn
+                return STAY;
+            }
+            const int r = (y - LIST_Y) / ROW_H, per = rowsPerPage();
+            if (y < LIST_Y || r >= per) return STAY;
+            const int i = g_listPage * per + r;
+            if (g_cv == CV_CHATS) {
+                Chat chats[MAX_CHATS];
+                if (i < collectChats(chats)) openChat(chats[i].ch, chats[i].dm);
+            } else {
+                mesh_service::Node nd;
+                if (i < mesh_service::nodeCount() && mesh_service::nodeAt(i, nd)) openChat(0, nd.num);
+            }
+            return STAY;
+        }
+        case CV_CHAT:
+            if (hit(kWrite, x, y)) { g_compose.clear(); return TO_COMPOSE; }
+            if (hit(kQuick, x, y)) { g_cv = CV_QUICK; return STAY; }
+            if (hit(kOlder, x, y)) { g_chatScroll += 3; return STAY; }
+            if (hit(kNewer, x, y)) { g_chatScroll = g_chatScroll > 3 ? g_chatScroll - 3 : 0; return STAY; }
+            return STAY;
+        case CV_QUICK:
+            for (int i = 0; i < N_QUICK; ++i)
+                if (hit(quickRect(i), x, y)) { sendToChat(kQuickText[i]); g_cv = CV_CHAT; return STAY; }
+            if (hit(kSendPos, x, y) && g_myPos) {
+                char m[64], g[32];
+                milgeo::mgrs(g_myLat, g_myLon, g, sizeof g);
+                snprintf(m, sizeof m, "I am at %s (%.5f, %.5f)", g, g_myLat, g_myLon);
+                sendToChat(m);
+                g_cv = CV_CHAT;
+            }
+            return STAY;
+    }
+    return STAY;
+}
+
+// Back inside COMMS: quick -> chat -> the list it came from. false at the list.
+bool commsBack() {
+    if (g_cv == CV_QUICK) { g_cv = CV_CHAT; return true; }
+    if (g_cv == CV_CHAT) { g_cv = g_chatDm && g_seenCount >= 0 ? CV_CHATS : CV_CHATS; return true; }
+    return false;
+}
+
+// --- COMPOSE -----------------------------------------------------------------
+
+void renderCompose(const RideState& s, uint8_t* fb) {
+    (void)s;
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    g_compose.top = H - g_compose.height();
+    g_compose.enterLabel = "SEND";
+    char t[48], hdr[64];
+    chatTitle(g_chatCh, g_chatDm, t, sizeof t);
+    snprintf(hdr, sizeof hdr, "TO: %s", t);
+    fit(ui::font(ui::F_SMALL), hdr, W - 120);
+    ui::text(ui::font(ui::F_SMALL), 14, TOP + 34, hdr, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char cnt[16];
+    snprintf(cnt, sizeof cnt, "%u/%u", (unsigned)strlen(g_compose.text), (unsigned)mesh::MAX_TEXT_LEN);
+    ui::text(ui::font(ui::F_TINY), W - 14, TOP + 34, cnt, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+    const EpdRect box = {10, TOP + 48, W - 20, g_compose.top - TOP - 64};
+    frame(box, 2, fb);
+    char shown[300];
+    snprintf(shown, sizeof shown, "%s_", g_compose.text);
+    int ly = box.y + 40;
+    wrap(ui::font(ui::F_KEY), shown, box.width - 28, [&](const char* l) {
+        if (ly < box.y + box.height - 8)
+            ui::text(ui::font(ui::F_KEY), box.x + 14, ly, l, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ly += 40;
+    });
+    g_compose.render(fb);
+}
+
+Go tapCompose(int x, int y) {
+    const kbd::Action a = g_compose.tap(x, y);
+    if (strlen(g_compose.text) > mesh::MAX_TEXT_LEN) kbd::popUtf8(g_compose.text);
+    if (a == kbd::ENTER && g_compose.text[0]) {
+        sendToChat(g_compose.text);
+        g_compose.clear();
+        g_cv = CV_CHAT;
+        return TO_COMMS;
     }
     return STAY;
 }
@@ -1331,7 +1687,7 @@ Go tap(Page p, int x, int y, const RideState& s) {
 Go back(Page p) {
     switch (p) {
         case HOME:    return TO_MAP;
-        case COMMS:   return TO_HOME;
+        case COMMS:   return commsBack() ? STAY : TO_HOME;
         case COMPOSE: return TO_COMMS;
         case LIBRARY: return doba_lib::libraryBack() ? STAY : TO_HOME;
         case ARTICLE:
