@@ -1136,7 +1136,8 @@ void renderArticle(uint8_t* fb) {
             const uint32_t a = L.start > ls ? L.start : ls, b = L.end < le ? L.end : le;
             const int x0 = x + widthOf(f, g_text + ls, a - ls);
             const int x1 = x + widthOf(f, g_text + ls, b - ls);
-            epd_fill_rect({x0, y + h - 5, x1 - x0, 2}, INK, fb);
+            const int ul = y + h - baselineOf(l.kind) + 4;      // just under the baseline
+            epd_fill_rect({x0, ul, x1 - x0, 3}, INK, fb);
             if (g_hotCount < MAX_HOT)
                 g_hot[g_hotCount++] = {(int16_t)x0, (int16_t)y, (int16_t)x1, (int16_t)(y + h), j};
         }
@@ -1290,8 +1291,39 @@ bool findIn(int bi, const char* title, Result& out) {
     return found;
 }
 
+// "#Heading": a jump inside the article to the heading of that name.
+bool jumpToHeading(const char* name) {
+    char want[KEY], have[KEY];
+    fold(name, want, sizeof want);
+    for (int k = 0; k < g_lineCount; ++k) {
+        const Line& l = g_lines[k];
+        if (l.kind != 'H' && l.kind != 'S' && l.kind != 'T') continue;
+        if (!(l.off == 0 || g_text[l.off - 1] == (char)l.kind)) continue;   // its first line
+        char text[KEY];
+        size_t e = l.off, n = 0;
+        while (e < g_textLen && g_text[e] != '\n' && n < sizeof text - 1) text[n++] = g_text[e++];
+        text[n] = 0;
+        fold(text, have, sizeof have);
+        if (!strcmp(want, have)) {
+            if (g_historyCount == HISTORY) {
+                memmove(g_history, g_history + 1, sizeof(Visit) * (HISTORY - 1));
+                --g_historyCount;
+            }
+            g_history[g_historyCount++] = {g_current, g_book, g_page};
+            g_page = pageOfLine(k);
+            Serial.printf("[lib] jump '%s' -> page %d\n", name, g_page + 1);
+            return true;
+        }
+    }
+    return false;
+}
+
 void follow(int link) {
     const char* target = g_targets + g_links[link].target;
+    if (target[0] == '#') {
+        if (!jumpToHeading(target + 1)) g_note = "not in this article";
+        return;
+    }
     Result r;
     if (!findExact(target, r)) {
         Serial.printf("[lib] no '%s' in this book\n", target);

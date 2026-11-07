@@ -56,7 +56,10 @@ LINK_A, LINK_B, LINK_C = "\x01", "\x02", "\x03"
 
 
 def link_target(href):
-    """A title-like target for an in-book link, or None (external, anchors, files)."""
+    """A title-like target for an in-book link, "#" for a jump inside the article
+    (resolved to a heading by its visible text later), or None (external, files)."""
+    if href and href.startswith("#") and len(href) > 1 and not href.startswith(("#cite", "#ref")):
+        return "#"
     if not href or href.startswith(("#", "http:", "https:", "//", "mailto:", "javascript:")):
         return None
     from urllib.parse import unquote
@@ -204,6 +207,49 @@ def tidy_links(text):
     return " ".join(s.split())
 
 
+# Endonyms that site language menus list ("English · Español · Русский ...").
+LANGS = {fold(x).decode() for x in (
+    "English", "Español", "Français", "Kreyòl", "Kreyòl ayisyen", "Русский", "Tagalog", "Tiếng Việt",
+    "中文", "简体中文", "繁體中文", "العربية", "한국어", "Polski", "Deutsch", "Português", "Українська",
+    "Italiano", "日本語", "Af-Soomaali", "فارسی", "Kiswahili", "Shqip", "Ελληνικά", "Nederlands",
+    "Türkçe", "हिन्दी", "Bahasa Indonesia", "Română", "اردو", "Hmoob", "ພາສາລາວ", "ខ្មែរ", "Diné")}
+
+
+def tidy_lines(lines):
+    """The article's lines with site furniture taken out: language menus (runs
+    of list items that are mostly language names), empty list items; in-page
+    links ("#") kept only when their text names a heading of the article."""
+    def plain(t):
+        return strip_links(t)
+    out, i = [], 0
+    while i < len(lines):
+        k, t = lines[i]
+        if k == "B":
+            j = i
+            while j < len(lines) and lines[j][0] == "B":
+                j += 1
+            run = lines[i:j]
+            langs = sum(1 for _, x in run if fold(plain(x)).decode() in LANGS)
+            if langs >= 3 and langs * 2 >= len([x for _, x in run if plain(x)]):
+                i = j          # a language menu
+                continue
+            out += [(k, x) for k, x in run if re.search(r"\w", plain(x))]
+            i = j
+            continue
+        out.append((k, t))
+        i += 1
+    heads = {fold(plain(t)).decode() for k, t in out if k in ("H", "S")}
+
+    def anchor(m):
+        vis, tgt = m.group(1), m.group(2)
+        if tgt != "#":
+            return m.group(0)
+        if fold(vis).decode() in heads:
+            return LINK_A + vis + LINK_B + "#" + vis + LINK_C
+        return vis
+    return [(k, _LINK_RE.sub(anchor, t)) for k, t in out]
+
+
 def to_text(title, html, picture=None):
     c = Cleaner(picture)
     try:
@@ -212,7 +258,7 @@ def to_text(title, html, picture=None):
     except Exception:
         pass
     out = ["T" + title]
-    for kind, text in c.lines:
+    for kind, text in tidy_lines(c.lines):
         out.append(kind + text)
     return "\n".join(out)
 

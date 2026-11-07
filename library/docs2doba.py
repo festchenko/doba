@@ -225,7 +225,8 @@ def read_txt(path, title):
 
 
 def strip_links(text):
-    return re.sub("\x01([^\x02]*)\x02[^\x03]*\x03", r"\1", text)
+    """Links out of a document's text, but jumps to its own headings ("#...") stay."""
+    return re.sub("\x01([^\x02]*)\x02(?!#)[^\x03]*\x03", r"\1", text)
 
 
 def read_text(path):
