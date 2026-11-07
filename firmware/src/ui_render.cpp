@@ -2167,7 +2167,7 @@ void ui_render_power_sheet(bool recording, uint8_t* fb) {
     sheetShell(fb);
     sheetHead("POWER", "SHUT DOWN?",
               recording ? "A track is recording — it will be saved first."
-                        : "The device sleeps until you press the button.",
+                        : "Sleeps until you press the button.",
               fb);
     sheetButton(kPowerShutdown, "SHUT DOWN", true, fb);
     sheetButton(kPowerCancel, "CANCEL", false, fb);

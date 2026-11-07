@@ -712,11 +712,11 @@ void renderPoints(const RideState& s, uint8_t* fb) {
     char ll[64];
     float dep;
     if (have && doba_dem::depth(lat, lon, dep))   // on water: depth under you (EMODnet)
-        snprintf(ll, sizeof ll, "%c%.5f %c%.5f  DEPTH %dm  SAT %d", lat >= 0 ? 'N' : 'S', fabs(lat),
+        snprintf(ll, sizeof ll, "%c%.5f %c%.5f  DEPTH %dm  GPS %d", lat >= 0 ? 'N' : 'S', fabs(lat),
                  lon >= 0 ? 'E' : 'W', fabs(lon), (int)lroundf(dep), s.satellites);
-    else if (have) snprintf(ll, sizeof ll, "%c%.5f %c%.5f  ALT %dm  SAT %d", lat >= 0 ? 'N' : 'S', fabs(lat),
+    else if (have) snprintf(ll, sizeof ll, "%c%.5f %c%.5f  ALT %dm  GPS %d", lat >= 0 ? 'N' : 'S', fabs(lat),
                        lon >= 0 ? 'E' : 'W', fabs(lon), (int)lroundf(groundAlt(s)), s.satellites);
-    else snprintf(ll, sizeof ll, "waiting for satellites · SAT %d", s.satellites);
+    else snprintf(ll, sizeof ll, "waiting for satellites · GPS %d", s.satellites);
     ui::text(ui::font(ui::F_SMALL), 14, TOP + 116, ll, fb, EPD_DRAW_ALIGN_LEFT, INK);
     if (g_pointsNote) {
         ui::text(ui::font(ui::F_TINY), W - 14, TOP + 30, g_pointsNote, fb, EPD_DRAW_ALIGN_RIGHT, INK);
