@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "..", "..", "maps"))
 from tilepack import BASE_CELL_Z, PackWriter, pack_path  # noqa: E402
 
 LAT, LON = 52.042, 6.617          # Groenlo
-Z = 16                            # what the default 2 m/px snaps to here
+Z = 16                            # two zoom-ins from where the topo map opens (z14)
 MAP_TOP, MAP_BOTTOM = 70, 800     # panel rows between the status bar and the data strip
 
 
@@ -68,7 +68,12 @@ def show_map(device):
         device.button("home")
         time.sleep(0.6)
     device.wait_status(lambda s: s["screen"] == "map", timeout=10)
-    time.sleep(3)
+    time.sleep(1.5)
+    # The first topo view opens at z14; these packs are z16: two steps in.
+    for _ in range(2):
+        device.console("zoom in")
+        time.sleep(1)
+    time.sleep(2)
 
 
 def test_topo_tiles_are_drawn_level_for_level(device, tmp_path):

@@ -113,7 +113,7 @@ RideSummary pendingSummary;
 // of stopping a live one.
 bool recoveryPrompt = false;
 
-float mapMpp = 6.0f;  // DOBA: opens at ~6 m/px (topo z14), room both ways. map zoom: 1/2/4/8/16/32 m per px (wide levels show tiles)
+float mapMpp = 2.0f;  // map zoom: 1/2/4/8/16/32 m per px (wide levels show tiles)
 // DOBA: the last map frame was a topo one. Topo packs carry zooms 9-16, so the
 // map may zoom out further than the vector maps' 32 m/px (z9 is ~190 m/px here).
 bool mapTopoActive = false;
@@ -1725,6 +1725,13 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
     map.topo = topo::covers(lat, lon);
     mapTopoActive = map.topo;
     if (map.topo) {
+        // DOBA: the first topo view opens at z14 (~6 m/px), not at the closest
+        // level, so + and - both do something from the start.
+        static bool opened = false;
+        if (!opened) {
+            opened = true;
+            if (mapMpp == 2.0f) mapMpp = topo::nativeMpp(14, lat);
+        }
         mapMpp = topo::nativeMpp(topo::zoomFor(lat, mapMpp), lat);
         map.metersPerPixel = mapMpp;
         rot = 0.0f;

@@ -22,17 +22,22 @@ const tz_grid::Zone* zoneAt(double lat, double lon) {
     }
 }
 
+// Seconds since 1970 for a UTC date (no timegm() in the ESP32 toolchain).
+time_t utcOf(int y, int m, int d, int hh) {
+    y -= m <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    const long days = (long)era * 146097 + (long)doe - 719468;
+    return (time_t)days * 86400 + hh * 3600;
+}
+
 // Day of month of the n-th (1..) or last (n = 0) Sunday of month m (1..12) in year y.
 int sunday(int y, int m, int n) {
-    struct tm t = {};
-    t.tm_year = y - 1900;
-    t.tm_mon = m - 1;
-    t.tm_mday = 1;
-    t.tm_hour = 12;
-    const time_t first = timegm(&t);
-    struct tm f;
-    gmtime_r(&first, &f);
-    const int firstSun = 1 + (7 - f.tm_wday) % 7;
+    const time_t first = utcOf(y, m, 1, 12);
+    const int wday = (int)((first / 86400 + 4) % 7);   // 1970-01-01 was a Thursday
+    const int firstSun = 1 + (7 - wday) % 7;
     if (n > 0) return firstSun + 7 * (n - 1);
     static const int kDays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
     int last = kDays[m - 1] + (m == 2 && y % 4 == 0 && (y % 100 || y % 400 == 0));
@@ -41,14 +46,7 @@ int sunday(int y, int m, int n) {
     return d;
 }
 
-time_t at(int y, int m, int d, int hh) {
-    struct tm t = {};
-    t.tm_year = y - 1900;
-    t.tm_mon = m - 1;
-    t.tm_mday = d;
-    t.tm_hour = hh;
-    return timegm(&t);
-}
+time_t at(int y, int m, int d, int hh) { return utcOf(y, m, d, hh); }
 
 bool summer(const tz_grid::Zone& z, time_t utc) {
     if (z.rule == 0 || utc < 1000000000) return false;
