@@ -29,11 +29,6 @@ enum Icon : uint8_t {
     I_FILES,      // folder
     I_GROW,       // sprout over the soil line
     I_POWER,      // battery with a bolt
-    I_MAP,        // folded map with a pin
-    I_POS,        // crosshair
-    I_SOS,        // beacon light with rays
-    I_SUN,        // sun on the horizon
-    I_GEAR,       // cog
 };
 
 // Draw `icon` centred on (cx, cy), fitting a size x size box, in `ink` on `paper`.

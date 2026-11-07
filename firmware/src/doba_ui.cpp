@@ -1,6 +1,5 @@
 // DOBA: main screen, comms and library pages — see doba_ui.h.
 #include "doba_ui.h"
-#include "doba_icons.h"
 #include "stealth.h"
 #include "settings.h"
 #include "usb_storage.h"
@@ -118,29 +117,21 @@ const Tile kTiles[8] = {
 
 void renderHome(const RideState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
-    // Contours only between the tiles: inside, nothing competes with the words.
-    topo_bg::draw({0, TOP, W, H - TOP}, fb, 0);
     char sub[64];
     for (int i = 0; i < 8; ++i) {
         const Tile& t = kTiles[i];
         // SOS is always the one black tile: found without reading. Sending, it
         // gets a white inner ring as well.
         const bool sos = t.go == TO_SOS, dark = sos;
-        epd_fill_rect(t.r, dark ? INK : PAPER, fb);
-        frame(t.r, 3, fb);
+        if (dark) epd_fill_rect(t.r, INK, fb); else frame(t.r, 3, fb);
         if (sos && sosActive()) {
             const EpdRect in = {t.r.x + 8, t.r.y + 8, t.r.width - 16, t.r.height - 16};
             epd_fill_rect(in, PAPER, fb);
             epd_fill_rect({in.x + 5, in.y + 5, in.width - 10, in.height - 10}, INK, fb);
         }
-        const uint8_t fg = dark ? PAPER : INK, bg = dark ? INK : PAPER;
-        using namespace doba_icons;
-        const Icon ic = t.go == TO_MAP ? I_MAP : t.go == TO_POINTS ? I_POS : t.go == TO_LIBRARY ? I_BOOKS
-                      : t.go == TO_COMMS ? I_COMMS : t.go == TO_SOS ? I_SOS : t.go == TO_SUN ? I_SUN
-                      : t.go == TO_SETUP ? I_GEAR : I_POWER;
-        draw(ic, t.r.x + t.r.width / 2, t.r.y + 58, 64, fg, bg, fb);
+        const uint8_t fg = dark ? PAPER : INK;
         const char* title = sos && sosActive() ? "SOS ON" : t.title;
-        ui::text(ui::font(ui::F_TITLE), t.r.x + t.r.width / 2, t.r.y + 128, title, fb, EPD_DRAW_ALIGN_CENTER, fg);
+        ui::text(ui::font(ui::F_TITLE), t.r.x + 16, t.r.y + 52, title, fb, EPD_DRAW_ALIGN_LEFT, fg);
         sub[0] = 0;
         switch (t.go) {
             case TO_MAP: snprintf(sub, sizeof sub, "topo + MGRS grid"); break;
@@ -174,8 +165,8 @@ void renderHome(const RideState& s, uint8_t* fb) {
         }
         // Subtitle may be long (MGRS): shrink to fit the tile.
         const EpdFont* sf = ui::font(ui::F_SMALL);
-        if (ui::textWidth(sf, sub) > t.r.width - 20) sf = ui::font(ui::F_TINY);
-        ui::text(sf, t.r.x + t.r.width / 2, t.r.y + t.r.height - 20, sub, fb, EPD_DRAW_ALIGN_CENTER, fg);
+        if (ui::textWidth(sf, sub) > t.r.width - 32) sf = ui::font(ui::F_TINY);
+        ui::text(sf, t.r.x + 16, t.r.y + t.r.height - 24, sub, fb, EPD_DRAW_ALIGN_LEFT, fg);
         // Unread badge on COMMS.
         if (t.go == TO_COMMS && mesh_service::enabled() && mesh_service::unreadCount() > 0) {
             epd_fill_circle(t.r.x + t.r.width - 34, t.r.y + 36, 18, INK, fb);
@@ -1234,7 +1225,7 @@ Go tapMore(int x, int y) {
 
 void render(Page p, const RideState& s, uint8_t* fb) {
     switch (p) {
-        case HOME:    renderHome(s, fb); break;
+        case HOME:    renderHome(s, fb); topo_bg::draw({0, TOP, W, H - TOP}, fb, 0); break;
         case COMMS:   renderComms(s, fb); break;
         case COMPOSE: renderCompose(s, fb); break;
         case LIBRARY:
