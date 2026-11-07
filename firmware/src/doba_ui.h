@@ -21,6 +21,7 @@ enum Page : uint8_t {
     MAPOPTS,     // map options: orientation, grid, points
     SOS,         // a distress call over the mesh, repeated
     SUN,         // sunrise, sunset, twilight, moon
+    MORE,        // the rest of the settings: USB drive, GPS, card, about
 };
 
 // Where a tap leads. STAY = redraw this page.
@@ -28,7 +29,7 @@ enum Go : uint8_t {
     STAY, TO_HOME, TO_MAP, TO_POSITION, TO_LIBRARY, TO_ARTICLE, TO_COMMS,
     TO_COMPOSE, TO_TRACKS, TO_ROUTES, TO_SETTINGS, TO_RECORD,
     TO_SETUP, TO_SETUP_NAME, TO_POINTS, TO_POINT, TO_POINT_NEW, TO_MAPOPTS,
-    TO_SOS, TO_SUN, TO_POWER,
+    TO_SOS, TO_SUN, TO_POWER, TO_MORE, TO_GPSDEBUG,
 };
 
 // Called every pass of the UI loop: repeats an active SOS. True when the SOS

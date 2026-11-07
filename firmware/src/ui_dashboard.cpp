@@ -76,7 +76,7 @@ enum Screen { SCREEN_DASH, SCREEN_MAP, SCREEN_SUMMARY, SCREEN_MENU,
               // DOBA: the launcher, comms and library (doba_ui.h).
               SCREEN_HOME, SCREEN_COMMS, SCREEN_COMPOSE, SCREEN_LIBRARY,
               SCREEN_ARTICLE, SCREEN_SETUP, SCREEN_SETUP_NAME, SCREEN_POINTS,
-              SCREEN_POINT, SCREEN_POINT_NEW, SCREEN_MAPOPTS, SCREEN_SOS, SCREEN_SUN };
+              SCREEN_POINT, SCREEN_POINT_NEW, SCREEN_MAPOPTS, SCREEN_SOS, SCREEN_SUN, SCREEN_MORE };
 #ifdef OTP_SIM
 // DOBA: the inherited OTP sim suites were written for a dashboard boot; they set
 // DOBA_START=dash (sim/tests/conftest.py). The device always boots to HOME.
@@ -791,6 +791,7 @@ doba_ui::Page dobaPage() {
         case SCREEN_MAPOPTS: return doba_ui::MAPOPTS;
         case SCREEN_SOS: return doba_ui::SOS;
         case SCREEN_SUN: return doba_ui::SUN;
+        case SCREEN_MORE: return doba_ui::MORE;
         default:             return doba_ui::HOME;
     }
 }
@@ -818,6 +819,8 @@ void dobaGo(doba_ui::Go g) {
         case doba_ui::TO_MAPOPTS:  screen = SCREEN_MAPOPTS; break;
         case doba_ui::TO_SOS:      screen = SCREEN_SOS; break;
         case doba_ui::TO_SUN:      screen = SCREEN_SUN; break;
+        case doba_ui::TO_MORE:     screen = SCREEN_MORE; break;
+        case doba_ui::TO_GPSDEBUG: screen = SCREEN_GPSDEBUG; break;
         case doba_ui::TO_POWER:    sheetKind = SHEET_POWER; powerOverlay = true; break;
     }
 }
@@ -833,7 +836,7 @@ void goBack() {
         return;
     }
     switch (screen) {
-        case SCREEN_GPSDEBUG: screen = SCREEN_SETTINGS; break;
+        case SCREEN_GPSDEBUG: screen = SCREEN_MORE; break;   // DOBA
         case SCREEN_MAPLAYERS: screen = SCREEN_MAP; break;
         case SCREEN_DIRECTIONS: screen = directionsFrom; break;
         case SCREEN_SETTINGS: screen = SCREEN_SETUP; break;  // DOBA: OTP's settings are "MORE"
@@ -844,14 +847,11 @@ void goBack() {
         case SCREEN_COMPOSE:
         case SCREEN_LIBRARY:
         case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
-        case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN:
+        case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE:
         case SCREEN_ARTICLE:  dobaGo(doba_ui::back(dobaPage())); break;
         case SCREEN_SENSORS:  leaveList(); break;  // also stops the BLE scan
         case SCREEN_MENU:     screen = SCREEN_DASH; break;
-        case SCREEN_MAP:
-            dashPage = firstContentPage();
-            screen = SCREEN_DASH;
-            break;
+        case SCREEN_MAP:      screen = SCREEN_HOME; break;   // DOBA: the map is a page of Doba's home
         // Back on the summary resumes the ride (non-destructive); SAVE / DISCARD
         // must be tapped explicitly.
         case SCREEN_SUMMARY:
@@ -966,7 +966,8 @@ bool isDobaSubPage(Screen sc) {
     switch (sc) {
         case SCREEN_COMMS: case SCREEN_COMPOSE: case SCREEN_LIBRARY: case SCREEN_ARTICLE:
         case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS: case SCREEN_POINT:
-        case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN:
+        case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE:
+        case SCREEN_MAP: case SCREEN_SETTINGS: case SCREEN_GPSDEBUG: case SCREEN_MAPLAYERS:
             return true;
         default:
             return false;
@@ -1325,7 +1326,7 @@ void handleTap(int x, int y) {
         case SCREEN_COMPOSE:
         case SCREEN_LIBRARY:
         case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
-        case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN:
+        case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE:
         case SCREEN_ARTICLE: {  // DOBA
             const int bl = settings::backlight();
             dobaGo(doba_ui::tap(dobaPage(), x, y, g_state.snapshot()));
@@ -3413,6 +3414,7 @@ static void runConsoleLine(char* line) {
         else if (!strcasecmp(arg, "mapopts"))  screen = SCREEN_MAPOPTS;   // DOBA
         else if (!strcasecmp(arg, "sos"))      screen = SCREEN_SOS;       // DOBA
         else if (!strcasecmp(arg, "sun"))      screen = SCREEN_SUN;       // DOBA
+        else if (!strcasecmp(arg, "more"))     screen = SCREEN_MORE;      // DOBA
         else { Serial.printf("[cmd] unknown screen '%s'\n", arg); return; }
         noteActivity();
     } else if (!strcasecmp(cmd, "zoom")) {
@@ -4286,7 +4288,7 @@ void task(void*) {
                 case SCREEN_COMPOSE:
                 case SCREEN_LIBRARY:
                 case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
-                case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN:
+                case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE:
                 case SCREEN_ARTICLE: {   // DOBA
                     doba_ui::render(dobaPage(), s, fb);
                     if (screen == SCREEN_HOME) ui::statusBar(s, fb, doba_ui::title(dobaPage()));
@@ -4307,12 +4309,12 @@ void task(void*) {
                                     settings::usbDrive(),
                                     mesh_service::enabled()};
                     ui_render_settings(si, fb);
-                    ui::statusBar(s, fb, "SETTINGS");
+                    ui::statusBarBack(s, fb, "MORE");
                     break;
                 }
                 case SCREEN_MAPLAYERS:
                     ui_render_map_layers(settings::mapLayers(), fb);
-                    ui::statusBar(s, fb, "MAP LAYERS");
+                    ui::statusBarBack(s, fb, "MAP LAYERS");
                     break;
                 case SCREEN_GPSDEBUG: {
                     GpsDebug d;
@@ -4339,7 +4341,7 @@ void task(void*) {
                     v.second = d.second;
                     v.useMiles = settings::useMiles();
                     ui_render_gps_debug(v, fb);
-                    ui::statusBar(s, fb, "GPS DEBUG");
+                    ui::statusBarBack(s, fb, "GPS DEBUG");
                     break;
                 }
             }

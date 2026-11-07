@@ -949,15 +949,15 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
     // No map covers this position — tell the rider how to get one instead of
     // showing a blank screen.
     if (!map.hasMap) {
-        const int bw = 500, bh = 96;
-        const int bx = (W - bw) / 2, by = (H - bh) / 2 - 30;
+        // Left of the zoom column, never under it.
+        const int bx = 16, bw = W - 16 - 96, bh = 96, by = (H - bh) / 2 - 30;
         epd_fill_rect({bx, by, bw, bh}, 0xFF, fb);
         for (int i = 0; i < 2; ++i)
             epd_draw_rect({bx - i, by - i, bw + 2 * i, bh + 2 * i}, 0x00, fb);
         // Downloaded maps live on the card, so without one the app's advice
         // would not help: say what is actually missing.
         const char* head = "NO MAP HERE";
-        const char* sub = "Download this area from the app";
+        const char* sub = "This area is not on the card";
         if (s.sdCard == SD_CARD_NONE) {
             head = "NO SD CARD";
             sub = "Insert a FAT32 card for maps";
@@ -965,9 +965,9 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
             head = "SD CARD UNREADABLE";
             sub = "Reformat it as FAT32 (not exFAT)";
         }
-        ui::text(&Arial_B, W / 2, by + 38, head, fb, EPD_DRAW_ALIGN_CENTER,
+        ui::text(&Arial_B, bx + bw / 2, by + 38, head, fb, EPD_DRAW_ALIGN_CENTER,
                  0x00);
-        ui::text(&Arial_L, W / 2, by + 70, sub, fb, EPD_DRAW_ALIGN_CENTER,
+        ui::text(&Arial_L, bx + bw / 2, by + 70, sub, fb, EPD_DRAW_ALIGN_CENTER,
                  0x00);
     }
 
@@ -989,7 +989,7 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
 
     // Status bar drawn after the map (epdiy has no clipping)
     epd_fill_rect({0, 0, W, ui::STATUS_H - 3}, 0xFF, fb);
-    ui::statusBar(s, fb);
+    ui::statusBarBack(s, fb, "MAP");   // DOBA: BACK to home like every page
 
     // DOBA: on the topo map the footer is the position readout instead.
     if (map.topo) {

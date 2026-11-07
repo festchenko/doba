@@ -1,6 +1,8 @@
 // DOBA: main screen, comms and library pages — see doba_ui.h.
 #include "doba_ui.h"
 #include "stealth.h"
+#include "settings.h"
+#include "usb_storage.h"
 #include "doba_topo_bg.h"
 
 #include <Arduino.h>
@@ -219,15 +221,34 @@ void renderComms(const RideState& s, uint8_t* fb) {
     const EpdFont* body = ui::font(ui::F_LABEL);
     char hdr[80];
     if (!mesh_service::enabled()) {
+        // Contours behind, a clear card in front: the words stay readable.
+        topo_bg::draw({0, TOP, W, H - TOP}, fb, 1);
+        const EpdRect card = {40, 280, W - 80, 330};
+        epd_fill_rect(card, PAPER, fb);
+        frame(card, 2, fb);
+        if (stealth::active()) {
+            ui::text(ui::font(ui::F_TITLE), W / 2, 360, "STEALTH", fb, EPD_DRAW_ALIGN_CENTER, INK);
+            ui::text(small, W / 2, 410, "Nothing in, nothing out.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+            ui::text(tiny, W / 2, 450, stealth::listen() ? "To listen, turn RADIO on in SETTINGS."
+                                                         : "STEALTH: LISTEN in SETTINGS receives.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+            ui::text(tiny, W / 2, 560, "End stealth on HOME (two taps)", fb, EPD_DRAW_ALIGN_CENTER, INK);
+            return;
+        }
         ui::text(ui::font(ui::F_TITLE), W / 2, 360, "RADIO OFF", fb, EPD_DRAW_ALIGN_CENTER, INK);
         button(kRadioOn, "TURN ON", true, fb);
-        ui::text(tiny, W / 2, 560, "LoRa 868 MHz · Meshtastic", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(tiny, W / 2, 570, "LoRa 868 MHz · Meshtastic", fb, EPD_DRAW_ALIGN_CENTER, INK);
         return;
     }
-    snprintf(hdr, sizeof hdr, "CH %s · %.3f MHz · %d nodes", mesh_service::channelName(),
-             mesh_service::frequencyMHz(), mesh_service::nodeCount());
-    ui::text(small, 14, TOP + 34, hdr, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    epd_fill_rect({0, TOP + 48, W, 2}, INK, fb);
+    if (stealth::active()) {
+        // Listening in stealth: a dark band says nothing is going out.
+        epd_fill_rect({0, TOP, W, 50}, INK, fb);
+        ui::text(small, 14, TOP + 34, "STEALTH · listening · nothing is sent", fb, EPD_DRAW_ALIGN_LEFT, PAPER);
+    } else {
+        snprintf(hdr, sizeof hdr, "CH %s · %.3f MHz · %d nodes", mesh_service::channelName(),
+                 mesh_service::frequencyMHz(), mesh_service::nodeCount());
+        ui::text(small, 14, TOP + 34, hdr, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        epd_fill_rect({0, TOP + 48, W, 2}, INK, fb);
+    }
 
     // Newest at the bottom; draw upward from the buttons.
     const int areaTop = TOP + 56, areaBottom = H - 104;
@@ -275,7 +296,7 @@ void renderComms(const RideState& s, uint8_t* fb) {
 
 Go tapComms(int x, int y) {
     if (!mesh_service::enabled()) {
-        if (hit(kRadioOn, x, y)) mesh_service::setEnabled(true);
+        if (!stealth::active() && hit(kRadioOn, x, y)) mesh_service::setEnabled(true);
         return STAY;
     }
     if (hit(kWrite, x, y)) { g_compose.clear(); return TO_COMPOSE; }
@@ -398,7 +419,11 @@ void segments(int y, int h, const char* const* labels, int n, int sel, uint8_t* 
         const int sx = x0 + w * i / n, sw = w * (i + 1) / n - w * i / n;
         if (i == sel) epd_fill_rect({sx, top, sw, CTRL_H}, INK, fb);
         else if (i) epd_fill_rect({sx, top + 8, 2, CTRL_H - 16}, INK, fb);
-        ui::text(ui::font(ui::F_SMALL), sx + sw / 2, top + CTRL_H / 2 + 9, labels[i], fb, EPD_DRAW_ALIGN_CENTER,
+        // One size for the whole control: the smaller one if any label needs it.
+        const EpdFont* lf = ui::font(ui::F_SMALL);
+        for (int j = 0; j < n; ++j)
+            if (ui::textWidth(ui::font(ui::F_SMALL), labels[j]) > sw - 12) lf = ui::font(ui::F_TINY);
+        ui::text(lf, sx + sw / 2, top + CTRL_H / 2 + (lf == ui::font(ui::F_TINY) ? 6 : 9), labels[i], fb, EPD_DRAW_ALIGN_CENTER,
                  i == sel ? PAPER : INK);
     }
 }
@@ -592,7 +617,7 @@ Go tapSetup(int x, int y) {
             if (i >= 0) milspec::setMilsSystem(i ? 6400 : 6000);
             break;
         }
-        case R_MORE: return TO_SETTINGS;
+        case R_MORE: return TO_MORE;
     }
     return STAY;
 }
@@ -1141,12 +1166,60 @@ void renderSun(const RideState& s, uint8_t* fb) {
     ui::text(ui::font(ui::F_TINY), W / 2, H - 24, line, fb, EPD_DRAW_ALIGN_CENTER, INK);
 }
 
+
+// --- MORE ----------------------------------------------------------------------
+
+enum MoreRow { M_USB, M_GPS, M_CARD, M_ABOUT, M_COUNT };
+int moreRowY(int r) { return TOP + 4 + SEC_H + r * SROW_H; }
+
+void renderMore(const RideState& s, uint8_t* fb) {
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    section(TOP + 4, "DEVICE", fb);
+    for (int r = 0; r < M_COUNT; ++r) {
+        const int y = moreRowY(r);
+        char sub[64];
+        switch (r) {
+            case M_USB:
+                caption(y, SROW_H, "USB DRIVE", settings::usbDrive() ? "the card shows on a computer" : "off: the card is Doba's", fb);
+                toggle(y, SROW_H, settings::usbDrive(), fb);
+                break;
+            case M_GPS:
+                snprintf(sub, sizeof sub, s.gpsFix ? "fix · %u satellites" : "no fix yet", (unsigned)s.satellites);
+                caption(y, SROW_H, "GPS", sub, fb);
+                button({CTRL_X, y + (SROW_H - CTRL_H) / 2, CTRL_W, CTRL_H}, "DETAILS  >", false, fb);
+                break;
+            case M_CARD:
+                snprintf(sub, sizeof sub, s.sdCard == SD_CARD_OK ? "%d books" : "no card", doba_lib::count());
+                caption(y, SROW_H, "CARD", sub, fb);
+                break;
+            case M_ABOUT:
+                caption(y, SROW_H, "DOBA", "offline backcountry assistant · " __DATE__, fb);
+                break;
+        }
+        epd_fill_rect({16, y + SROW_H - 1, W - 32, 1}, INK, fb);
+    }
+    ui::text(ui::font(ui::F_TINY), W / 2, H - 24, "USB DRIVE: copy books and maps from a computer", fb,
+             EPD_DRAW_ALIGN_CENTER, INK);
+}
+
+Go tapMore(int x, int y) {
+    const int r = (y - moreRowY(0)) / SROW_H;
+    if (y < moreRowY(0) || r >= M_COUNT) return STAY;
+    if (r == M_USB && toggleHit(x)) {
+        const bool on = x >= CTRL_X + CTRL_W - 75;
+        settings::setUsbDrive(on);
+        usb_storage::setDriveEnabled(on);
+    }
+    if (r == M_GPS && x >= CTRL_X) return TO_GPSDEBUG;
+    return STAY;
+}
+
 }  // namespace
 
 void render(Page p, const RideState& s, uint8_t* fb) {
     switch (p) {
         case HOME:    renderHome(s, fb); topo_bg::draw({0, TOP, W, H - TOP}, fb, 0); break;
-        case COMMS:   renderComms(s, fb); topo_bg::draw({0, TOP, W, H - TOP}, fb, 1); break;
+        case COMMS:   renderComms(s, fb); break;
         case COMPOSE: renderCompose(s, fb); break;
         case LIBRARY:
             doba_lib::renderSearch(g_search, fb);   // icon grid: no contours behind it
@@ -1162,6 +1235,7 @@ void render(Page p, const RideState& s, uint8_t* fb) {
         case MAPOPTS: renderMapOpts(s, fb); break;
         case SOS:     renderSos(s, fb); break;
         case SUN:     renderSun(s, fb); break;
+        case MORE:    renderMore(s, fb); break;
     }
 }
 
@@ -1194,6 +1268,7 @@ const char* title(Page p) {
         case MAPOPTS: return "MAP";
         case SOS: return "SOS";
         case SUN: return "SUN & MOON";
+        case MORE: return "MORE";
     }
     return nullptr;
 }
@@ -1213,6 +1288,7 @@ Go tap(Page p, int x, int y, const RideState& s) {
         case MAPOPTS: return tapMapOpts(x, y);
         case SOS:     return tapSos(x, y, s);
         case SUN:     return STAY;
+        case MORE:    return tapMore(x, y);
     }
     return STAY;
 }
@@ -1234,6 +1310,7 @@ Go back(Page p) {
         case MAPOPTS: return TO_MAP;
         case SOS:     return TO_HOME;
         case SUN:     return TO_HOME;
+        case MORE:    return TO_SETUP;
     }
     return TO_HOME;
 }

@@ -23,10 +23,16 @@ def key(ch):
     """Centre of a letter on the EN keyboard (doba_keyboard.cpp geometry)."""
     for r, row in enumerate(ROWS):
         if ch in row:
-            units = len(row) * 2 + (6 if r == 2 else 0)
-            u = W // max(units, 24)
-            x = (W - units * u) // 2 + (u * 3 if r == 2 else 0)
-            return x + row.index(ch) * 2 * u + u, KTOP + r * 84 + 42
+            # doba_keyboard.cpp: one key width (the longest row) over the span
+            # inside 6 px margins; shorter rows centred; row 3 between SHIFT and DEL.
+            span = W - 12
+            kw = span // max(len(x) for x in ROWS)
+            if r == 2:
+                side = (span - len(row) * kw) // 2
+                x = 6 + side
+            else:
+                x = 6 + (span - len(row) * kw) // 2
+            return x + row.index(ch) * kw + kw // 2, KTOP + r * 84 + 42
     raise KeyError(ch)
 
 

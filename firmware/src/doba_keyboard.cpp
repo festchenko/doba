@@ -1,6 +1,7 @@
 // DOBA: on-screen keyboard — see doba_keyboard.h.
 #include "doba_keyboard.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "epd_compat.h"
@@ -11,7 +12,7 @@ namespace {
 
 constexpr int W = 540, H = 960;
 constexpr int ROW_H = 84;
-constexpr int GAP = 3;
+constexpr int GAP = 4;
 
 // Three letter rows per layout, each a UTF-8 string of single characters.
 // Row 3 also carries SHIFT (left) and DEL (right).
@@ -64,26 +65,55 @@ Key mk(int x, int y, int w, int h, const char* label, int kind) {
     return k;
 }
 
+// Every row spans the same width (screen minus a small margin), keys are one
+// width per layout (the longest row sets it), shorter rows sit centred, and
+// the third row's SHIFT and DEL take whatever is left at its two ends.
+constexpr int MARGIN = 6;
 int layoutKeys(const Keyboard& k, Key* out) {
     int n = 0;
     const int lay = k.layout;
+    const int span = W - 2 * MARGIN;
+    int maxCount = 0;
+    for (int r = 0; r < 3; ++r) maxCount = std::max(maxCount, countChars(kRows[lay][r]));
+    const int keyW = span / maxCount;
     for (int r = 0; r < 3; ++r) {
         const char* row = kRows[lay][r];
         const int count = countChars(row);
-        // Row 3 shares its width with SHIFT and DEL (1.5 keys each).
-        const int units2 = (r == 2) ? count * 2 + 6 : count * 2;
-        const int unitW = W / (units2 > 24 ? units2 : 24);
-        const int keyW = unitW * 2;
-        const int used = units2 * unitW;
-        int x = (W - used) / 2;
         const int y = k.top + r * ROW_H;
-        if (r == 2) {
+        int x;
+        if (r == 2 && lay != SYM) {
+            // SHIFT | letters | DEL across the full span
+            const int letters = std::min(count, maxCount - 2);
+            const int side = (span - letters * keyW) / 2;
             Key& s = out[n++];
-            s = mk(x, y, unitW * 3, ROW_H, "", lay == SYM ? 0 : 1);
-            strcpy(s.label, lay == SYM ? "" : (k.shift ? "ABC" : "abc"));
-            if (lay == SYM) --n;
-            x += unitW * 3;
+            s = mk(MARGIN, y, side, ROW_H, k.shift ? "ABC" : "abc", 1);
+            x = MARGIN + side;
+            const char* p = row;
+            for (int i = 0; i < count && *p; ++i) {
+                Key& kk = out[n++];
+                const int w = (count > letters) ? (span - 2 * side) / count : keyW;
+                kk = mk(x, y, w, ROW_H, "", 0);
+                p += nextChar(p, kk.label);
+                if (k.shift) upper(kk.label);
+                x += w;
+            }
+            out[n++] = mk(x, y, MARGIN + span - x, ROW_H, "DEL", 2);
+            continue;
         }
+        if (r == 2) {   // symbols: no shift, DEL at the end
+            const int w = (span - keyW * 3 / 2) / count;
+            x = MARGIN;
+            const char* p = row;
+            while (*p) {
+                Key& kk = out[n++];
+                kk = mk(x, y, w, ROW_H, "", 0);
+                p += nextChar(p, kk.label);
+                x += w;
+            }
+            out[n++] = mk(x, y, MARGIN + span - x, ROW_H, "DEL", 2);
+            continue;
+        }
+        x = MARGIN + (span - count * keyW) / 2;
         const char* p = row;
         while (*p) {
             Key& kk = out[n++];
@@ -92,19 +122,15 @@ int layoutKeys(const Keyboard& k, Key* out) {
             if (k.shift && lay != SYM) upper(kk.label);
             x += keyW;
         }
-        if (r == 2) {
-            Key& d = out[n++];
-            d = mk(x, y, unitW * 3, ROW_H, "DEL", 2);
-        }
     }
     const int y = k.top + 3 * ROW_H;
-    const int u = W / 12;
-    out[n++] = mk(0, y, u * 2, ROW_H, "", 3);
+    const int u = span / 12;
+    out[n++] = mk(MARGIN, y, u * 2, ROW_H, "", 3);
     strcpy(out[n - 1].label, lay == SYM ? kLayoutName[k.lastLetters] : "123");
-    out[n++] = mk(u * 2, y, u * 2, ROW_H, "", 4);
+    out[n++] = mk(MARGIN + u * 2, y, u * 2, ROW_H, "", 4);
     strcpy(out[n - 1].label, lay == SYM ? "" : kLayoutName[lay == UA ? EN : lay + 1]);
-    out[n++] = mk(u * 4, y, u * 5, ROW_H, "SPACE", 5);
-    out[n++] = mk(u * 9, y, W - u * 9, ROW_H, "", 6);
+    out[n++] = mk(MARGIN + u * 4, y, u * 5, ROW_H, "SPACE", 5);
+    out[n++] = mk(MARGIN + u * 9, y, span - u * 9, ROW_H, "", 6);
     strncpy(out[n - 1].label, k.enterLabel, sizeof(out[n - 1].label) - 1);
     return n;
 }

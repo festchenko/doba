@@ -228,7 +228,7 @@ void statusBar(const RideState& s, uint8_t* fb, const char* title) {
     // Left cluster, only when the middle is not a page title.
     if (!title) {
         char gps[16];
-        if (s.gpsFix) snprintf(gps, sizeof(gps), "SAT %u", (unsigned)s.satellites);
+        if (s.gpsFix) snprintf(gps, sizeof(gps), "GPS %u", (unsigned)s.satellites);
         else snprintf(gps, sizeof(gps), "NO FIX");
         text(&Arial_L, x, base, gps, fb, EPD_DRAW_ALIGN_LEFT, FG);
         x += textWidth(&Arial_L, gps) + 14;
