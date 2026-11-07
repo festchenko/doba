@@ -4,6 +4,7 @@
 #include "settings.h"
 #include "usb_storage.h"
 #include "doba_topo_bg.h"
+#include "tz_auto.h"
 
 #include <Arduino.h>
 #include <cmath>
@@ -159,8 +160,11 @@ void renderHome(const RideState& s, uint8_t* fb) {
                 if (s.batteryPercent) snprintf(sub, sizeof sub, "%u%%%s · sleep / off", s.batteryPercent, s.charging ? " charging" : "");
                 else snprintf(sub, sizeof sub, "sleep / off");
                 break;
-            case TO_SETUP: snprintf(sub, sizeof sub, "%s · %s", mesh::region(mesh_service::regionIndex()).name,
-                                    milspec::milsSystem() == 6400 ? "6400" : "60-00"); break;
+            case TO_SETUP: {
+                const int m = settings::tzMinutes();
+                snprintf(sub, sizeof sub, "UTC%+d · %s", m / 60, milspec::milsSystem() == 6400 ? "6400" : "60-00");
+                break;
+            }
             default: break;
         }
         // Subtitle may be long (MGRS): shrink to fit the tile.
@@ -471,10 +475,10 @@ constexpr int kRegions = sizeof(kRegionCycle) / sizeof(kRegionCycle[0]);
 kbd::Keyboard g_nameKbd;
 
 // The layout, top to bottom: section headers and rows.
-enum SetupRow { R_STEALTH, R_RADIO, R_REGION, R_PRESET, R_NAME, R_LIGHT, R_TZ, R_MILS, R_MORE, R_COUNT };
+enum SetupRow { R_STEALTH, R_RADIO, R_REGION, R_NAME, R_LIGHT, R_TZ, R_MILS, R_MORE, R_COUNT };
 constexpr int SROW_H = 78, SEC_H = 34;
 int setupRowY(int r) {
-    // RADIO: 5 rows (stealth first) · DISPLAY: 2 · NAVIGATION: 2
+    // RADIO: 4 rows (stealth first) · DISPLAY: 2 · NAVIGATION: 2
     const int sec = r < R_LIGHT ? 1 : r < R_MILS ? 2 : 3;
     return TOP + 4 + sec * SEC_H + r * SROW_H;
 }
@@ -487,8 +491,8 @@ int setupRowAt(int y) {
 void renderSetup(const RideState& s, uint8_t* fb) {
     (void)s;
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
-    section(setupRowY(R_STEALTH) - SEC_H, "RADIO  (MESHTASTIC LORA)", fb);
-    section(setupRowY(R_LIGHT) - SEC_H, "DISPLAY", fb);
+    section(setupRowY(R_STEALTH) - SEC_H, "RADIO", fb);
+    section(setupRowY(R_LIGHT) - SEC_H, "SCREEN AND CLOCK", fb);
     section(setupRowY(R_MILS) - SEC_H, "NAVIGATION", fb);
     char v[48], hint[48];
     for (int r = 0; r < R_COUNT; ++r) {
@@ -508,17 +512,15 @@ void renderSetup(const RideState& s, uint8_t* fb) {
                 toggle(y, SROW_H, mesh_service::enabled(), fb);
                 break;
             case R_REGION: {
+                // The country decides the band; nobody should have to know its name.
                 const mesh::Region& rg = mesh::region(mesh_service::regionIndex());
-                snprintf(hint, sizeof hint, "%.3f MHz%s", mesh_service::frequencyMHz(),
-                         !strcmp(rg.name, "EU_868") ? " · Europe" : !strcmp(rg.name, "UA_868") ? " · Ukraine" : "");
-                caption(y, SROW_H, "BAND", hint, fb);
-                stepper(y, SROW_H, rg.name, fb);
+                const char* where = !strcmp(rg.name, "EU_868") ? "Europe" : !strcmp(rg.name, "UA_868") ? "Ukraine" : rg.name;
+                if (settings::regionAuto()) snprintf(hint, sizeof hint, "by GPS: %s", where);
+                else snprintf(hint, sizeof hint, "set by hand: %s", where);
+                caption(y, SROW_H, "COUNTRY", hint, fb);
+                stepper(y, SROW_H, settings::regionAuto() ? "AUTO" : rg.name, fb);
                 break;
             }
-            case R_PRESET:
-                caption(y, SROW_H, "MODE", "Long = range, Short = speed", fb);
-                stepper(y, SROW_H, mesh_service::presetName(), fb);
-                break;
             case R_NAME: {
                 char sh[20];
                 shortName(mesh_service::longName(), sh, sizeof sh);
@@ -544,10 +546,21 @@ void renderSetup(const RideState& s, uint8_t* fb) {
             }
             case R_TZ: {
                 const int m = settings::tzMinutes();
-                if (m % 60) snprintf(v, sizeof v, "UTC%+d:%02d", m / 60, abs(m % 60));
-                else snprintf(v, sizeof v, "UTC%+d", m / 60);
-                caption(y, SROW_H, "TIME ZONE", "no summer time: step it", fb);
-                stepper(y, SROW_H, v, fb);
+                char off[16];
+                if (m % 60) snprintf(off, sizeof off, "UTC%+d:%02d", m / 60, abs(m % 60));
+                else snprintf(off, sizeof off, "UTC%+d", m / 60);
+                if (settings::tzAuto()) {
+                    double la, lo;
+                    const bool pos = settings::lastPosition(la, lo);
+                    if (!pos) snprintf(hint, sizeof hint, "by GPS: waiting for a fix");
+                    else snprintf(hint, sizeof hint, "by GPS: %s%s", off,
+                                  tz_auto::summerAt(la, lo, time(nullptr)) ? ", summer" : "");
+                    caption(y, SROW_H, "TIME ZONE", hint, fb);
+                    stepper(y, SROW_H, "AUTO", fb);
+                } else {
+                    caption(y, SROW_H, "TIME ZONE", "set by hand", fb);
+                    stepper(y, SROW_H, off, fb);
+                }
                 break;
             }
             case R_MILS: {
@@ -557,7 +570,7 @@ void renderSetup(const RideState& s, uint8_t* fb) {
                 break;
             }
             case R_MORE: {
-                caption(y, SROW_H, "MORE", "GPS, clock, sensors, phone", fb);
+                caption(y, SROW_H, "MORE", "USB drive, GPS, radio mode", fb);
                 const int top = y + (SROW_H - CTRL_H) / 2;
                 frame({CTRL_X, top, CTRL_W, CTRL_H}, 1, fb);
                 ui::text(ui::font(ui::F_SMALL), CTRL_X + CTRL_W / 2, top + CTRL_H / 2 + 9, "OPEN  >", fb,
@@ -587,20 +600,18 @@ Go tapSetup(int x, int y) {
             if (toggleHit(x)) mesh_service::setEnabled(x >= CTRL_X + CTRL_W - 75);
             break;
         case R_REGION: {
+            // AUTO, then the bands by hand, round again to AUTO.
             const int step = stepperHit(x) < 0 ? -1 : 1;
             const char* cur = mesh::region(mesh_service::regionIndex()).name;
-            int at = -1;
-            for (int i = 0; i < kRegions; ++i) if (!strcmp(cur, kRegionCycle[i])) at = i;
-            if (at < 0) at = step > 0 ? -1 : 0;
-            for (int k = 1; k <= kRegions; ++k) {
-                const int ri = mesh::regionIndexByName(kRegionCycle[((at + step * k) % kRegions + kRegions) % kRegions]);
-                if (ri >= 0) { mesh_service::setRegion((uint8_t)ri); break; }
+            int at = kRegions;   // AUTO sits after the last band
+            if (!settings::regionAuto())
+                for (int i = 0; i < kRegions; ++i) if (!strcmp(cur, kRegionCycle[i])) at = i;
+            for (int k = 1; k <= kRegions + 1; ++k) {
+                const int n = ((at + step * k) % (kRegions + 1) + kRegions + 1) % (kRegions + 1);
+                if (n == kRegions) { settings::setRegionAuto(true); break; }
+                const int ri = mesh::regionIndexByName(kRegionCycle[n]);
+                if (ri >= 0) { settings::setRegionAuto(false); mesh_service::setRegion((uint8_t)ri); break; }
             }
-            break;
-        }
-        case R_PRESET: {
-            const int n = mesh::PRESET_COUNT, step = stepperHit(x) < 0 ? -1 : 1;
-            mesh_service::setPreset((uint8_t)(((mesh_service::presetIndex() + step) % n + n) % n));
             break;
         }
         case R_NAME:
@@ -613,9 +624,15 @@ Go tapSetup(int x, int y) {
             break;
         }
         case R_TZ: {
-            int m = settings::tzMinutes() + (stepperHit(x) < 0 ? -60 : 60);
-            if (m < -12 * 60) m = 14 * 60;
-            if (m > 14 * 60) m = -12 * 60;
+            // AUTO, then whole hours by hand from where AUTO had it.
+            const int step = stepperHit(x) < 0 ? -60 : 60;
+            if (settings::tzAuto()) {
+                settings::setTzMinutes(settings::tzMinutes() + step);
+                settings::setTzAuto(false);
+                break;
+            }
+            int m = settings::tzManualMinutes() + step;
+            if (m < -12 * 60 || m > 14 * 60) { settings::setTzAuto(true); break; }
             settings::setTzMinutes(m);
             break;
         }
@@ -1176,7 +1193,7 @@ void renderSun(const RideState& s, uint8_t* fb) {
 
 // --- MORE ----------------------------------------------------------------------
 
-enum MoreRow { M_USB, M_GPS, M_CARD, M_ABOUT, M_COUNT };
+enum MoreRow { M_USB, M_GPS, M_MODE, M_CARD, M_ABOUT, M_COUNT };
 int moreRowY(int r) { return TOP + 4 + SEC_H + r * SROW_H; }
 
 void renderMore(const RideState& s, uint8_t* fb) {
@@ -1194,6 +1211,13 @@ void renderMore(const RideState& s, uint8_t* fb) {
                 snprintf(sub, sizeof sub, s.gpsFix ? "fix · %u satellites" : "no fix yet", (unsigned)s.satellites);
                 caption(y, SROW_H, "GPS", sub, fb);
                 button({CTRL_X, y + (SROW_H - CTRL_H) / 2, CTRL_W, CTRL_H}, "DETAILS  >", false, fb);
+                break;
+            case M_MODE:
+                // Meshtastic's modem preset. Every node on the mesh has to match;
+                // LongFast is what they all use unless told otherwise.
+                snprintf(sub, sizeof sub, "all nodes must match");
+                caption(y, SROW_H, "RADIO MODE", sub, fb);
+                stepper(y, SROW_H, mesh_service::presetName(), fb);
                 break;
             case M_CARD:
                 snprintf(sub, sizeof sub, s.sdCard == SD_CARD_OK ? "%d books" : "no card", doba_lib::count());
@@ -1218,6 +1242,10 @@ Go tapMore(int x, int y) {
         usb_storage::setDriveEnabled(on);
     }
     if (r == M_GPS && x >= CTRL_X) return TO_GPSDEBUG;
+    if (r == M_MODE && x >= CTRL_X) {
+        const int n = mesh::PRESET_COUNT, step = stepperHit(x) < 0 ? -1 : 1;
+        mesh_service::setPreset((uint8_t)(((mesh_service::presetIndex() + step) % n + n) % n));
+    }
     return STAY;
 }
 

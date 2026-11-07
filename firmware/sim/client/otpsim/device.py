@@ -138,6 +138,10 @@ class SimDevice:
     def tap(self, x, y, ms=120):
         self.cmd("tap", x=x, y=y, ms=ms)
 
+    def swipe(self, x0, y0, x1, y1, ms=300):
+        """A finger drawn across the glass: down at (x0, y0), up at (x1, y1)."""
+        self.cmd("swipe", x0=x0, y0=y0, x1=x1, y1=y1, ms=ms)
+
     def button(self, name="boot", ms=150):
         self.cmd("button", name=name, ms=ms)
 

@@ -126,7 +126,9 @@ def test_settings_change_the_band_on_the_device(doba):
             time.sleep(0.2)
         raise AssertionError(doba.lora())
     freq(lambda f: abs(f - 869.525) < 1e-3)
-    doba.tap(500, TOP + 4 + 34 + 2 * 78 + 39)               # BAND: ">" EU_868 -> UA_868
+    doba.tap(500, TOP + 4 + 34 + 2 * 78 + 39)               # COUNTRY: ">" AUTO -> EU_868 by hand
+    time.sleep(0.6)
+    doba.tap(500, TOP + 4 + 34 + 2 * 78 + 39)               # ">" EU_868 -> UA_868
     freq(lambda f: 868.0 <= f <= 868.6)
 
 

@@ -30,8 +30,14 @@ void setAutoPauseSec(int s);
 int wheelCircMm();
 bool setWheelCircMm(int mm);
 
-int tzMinutes();
-void setTzMinutes(int m);
+int tzMinutes();            // DOBA: from the GPS position when tzAuto()
+void setTzMinutes(int m);   // the manual offset
+int tzManualMinutes();
+bool tzAuto();
+void setTzAuto(bool on);
+// DOBA: the mesh region (EU_868 / UA_868) from where the device is.
+bool regionAuto();
+void setRegionAuto(bool on);
 
 int backlight();          // 0=off .. 3=bright
 void setBacklight(int b);

@@ -147,6 +147,9 @@ struct MapScreenData {
     // A turn-by-turn banner is drawn over the top of the map. The compass sits
     // in the same place, so it moves below the banner rather than under it.
     bool navBannerVisible = false;
+    // DOBA: the map was dragged off the position (a CENTRE button brings it back),
+    // and whether the zoom buttons are at their ends (drawn grey there).
+    bool panned = false, zoomInEnd = false, zoomOutEnd = false;
 
     // Position is coming from the connected phone (device GPS has no fix).
     bool phonePosition = false;
@@ -189,6 +192,8 @@ struct MapTouchZones {
     int layersY;   // the MAP LAYERS button, stacked above zoom-in
 };
 extern const MapTouchZones kMapZoom;
+// DOBA: CENTRE, shown while the map is dragged away: above the zoom column.
+int mapCentreY();
 
 // One zoom button, on its own. Re-projecting the map after a zoom tap takes the
 // best part of a second (tiles come off the SD card), and until this existed

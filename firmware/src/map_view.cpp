@@ -673,6 +673,7 @@ void drawCompass(int cx, int cy, float northDeg, bool trackUp, uint8_t* fb) {
 }  // namespace
 
 const MapTouchZones kMapZoom = {540 - 78, 560, 640, 76, 560 - 76 - 8};
+int mapCentreY() { return kMapZoom.layersY - kMapZoom.size - 8; }
 const MapCompassZone kMapCompass = {540 - 46, 64 + 48, 34};
 // Bottom edge of the turn-by-turn banner (ui_dashboard's kNavBanner is
 // {0, STATUS_H, 540, 138}); the compass drops below this while navigating.
@@ -915,7 +916,8 @@ void renderMapTop(const MapScreenData& map, uint8_t* fb) {
     // exactly the one that must not disappear under it.
     drawPois(map, fb);
 
-    drawRider(map.riderX, map.riderY, map.headingDeg, fb);
+    if (map.riderX > -30 && map.riderX < 570 && map.riderY > ui::STATUS_H - 30 && map.riderY < 990)
+        drawRider(map.riderX, map.riderY, map.headingDeg, fb);   // DOBA: dragged far off, it isn't on screen
 }
 }  // namespace
 
@@ -982,10 +984,30 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
                  EPD_DRAW_ALIGN_LEFT, 0x00);
     }
 
-    // Zoom buttons (design 1f, right edge)
+    // Zoom buttons (design 1f, right edge). At the end of its range a button
+    // goes grey: a tap that cannot do anything should look like it.
     ui_map_draw_zoom_button(true, false, fb);
     if (!map.topo) drawLayersButton(fb);   // DOBA: bike layers mean nothing on topo
     ui_map_draw_zoom_button(false, false, fb);
+    for (int k = 0; k < 2; ++k) {
+        if (!(k ? map.zoomOutEnd : map.zoomInEnd)) continue;
+        const EpdRect r = {kMapZoom.zoomX + 3, (k ? kMapZoom.zoomOutY : kMapZoom.zoomInY) + 3,
+                           kMapZoom.size - 6, kMapZoom.size - 6};
+        for (int y = r.y; y < r.y + r.height; ++y)
+            for (int x = r.x + ((y & 1)); x < r.x + r.width; x += 2) epd_draw_pixel(x, y, 0xFF, fb);
+    }
+    // DOBA: dragged away from where you are: CENTRE brings the map back.
+    if (map.panned) {
+        const EpdRect r = {kMapZoom.zoomX, mapCentreY(), kMapZoom.size, kMapZoom.size};
+        epd_fill_rect(r, 0x00, fb);
+        const int cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+        for (int t = 0; t < 3; ++t) epd_draw_circle(cx, cy, 15 - t, 0xFF, fb);
+        epd_fill_circle(cx, cy, 5, 0xFF, fb);
+        epd_fill_rect({cx - 2, cy - 26, 4, 10}, 0xFF, fb);
+        epd_fill_rect({cx - 2, cy + 16, 4, 10}, 0xFF, fb);
+        epd_fill_rect({cx - 26, cy - 2, 10, 4}, 0xFF, fb);
+        epd_fill_rect({cx + 16, cy - 2, 10, 4}, 0xFF, fb);
+    }
 
     // Status bar drawn after the map (epdiy has no clipping)
     epd_fill_rect({0, 0, W, ui::STATUS_H - 3}, 0xFF, fb);

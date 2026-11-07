@@ -113,7 +113,7 @@ RideSummary pendingSummary;
 // of stopping a live one.
 bool recoveryPrompt = false;
 
-float mapMpp = 2.0f;  // map zoom: 1/2/4/8/16/32 m per px (wide levels show tiles)
+float mapMpp = 6.0f;  // DOBA: opens at ~6 m/px (topo z14), room both ways. map zoom: 1/2/4/8/16/32 m per px (wide levels show tiles)
 // DOBA: the last map frame was a topo one. Topo packs carry zooms 9-16, so the
 // map may zoom out further than the vector maps' 32 m/px (z9 is ~190 m/px here).
 bool mapTopoActive = false;
@@ -128,6 +128,9 @@ bool mapFullPass = false;
 // from the tap until a COMPLETE map frame has been drawn.
 int zoomHeld = 0;
 bool mapTrackUp = false;
+// DOBA: how far the map has been dragged off the position, metres east/north.
+float mapPanE = 0, mapPanN = 0;
+bool mapPanned() { return mapPanE != 0 || mapPanN != 0; }
 float mapTestHeading = -1.0f;   // console `heading`: stands in for the real one
 
 MapBaseCache mapCache;
@@ -947,6 +950,19 @@ void ackPagerTap(const EpdRect& r) {
     refresh(false, true, false);
 }
 
+// DOBA: a finger drawn across the map body moves the map with it. Released,
+// not live: e-paper redraws once, where the finger let go.
+bool mapDrag(int x0, int y0, int x1, int y1) {
+    if (screen != SCREEN_MAP || powerOverlay) return false;
+    const int dx = x1 - x0, dy = y1 - y0;
+    if (dx * dx + dy * dy < 30 * 30) return false;
+    if (y0 < ui::STATUS_H || y0 >= ui::MAP_STRIP_TOP) return false;
+    mapPanE -= dx * mapMpp;
+    mapPanN += dy * mapMpp;
+    Serial.printf("[map] drag %d,%d -> %.0f m E %.0f m N\n", dx, dy, mapPanE, mapPanN);
+    return true;
+}
+
 // DOBA: a finger held on the map body drops a waypoint there and opens it.
 bool mapLongPress(int x, int y) {
     if (screen != SCREEN_MAP) return false;
@@ -1208,17 +1224,24 @@ void handleTap(int x, int y) {
                 x < kMapZoom.zoomX + kMapZoom.size) {
                 // DOBA: the layers button opens Doba's map options (OTP's were
                 // cycling layers: bike routes, toilets, bike shops).
+                if (mapPanned() && y >= mapCentreY() && y < mapCentreY() + kMapZoom.size) {
+                    mapPanE = mapPanN = 0;
+                    Serial.println("[map] centre");
+                    break;
+                }
                 if (y >= kMapZoom.layersY && y < kMapZoom.layersY + kMapZoom.size) {
                     screen = SCREEN_MAPOPTS;
                     break;
                 }
                 if (y >= kMapZoom.zoomInY && y < kMapZoom.zoomInY + kMapZoom.size) {
                     if (mapMpp > 1.0f) mapMpp /= 2.0f;
+                    Serial.printf("[map] zoom in -> %.2f m/px\n", mapMpp);
                     ackZoomTap(true);
                     break;
                 }
                 if (y >= kMapZoom.zoomOutY && y < kMapZoom.zoomOutY + kMapZoom.size) {
                     if (mapMpp < mapMaxMpp()) mapMpp *= 2.0f;
+                    Serial.printf("[map] zoom out -> %.2f m/px\n", mapMpp);
                     ackZoomTap(false);
                     break;
                 }
@@ -1566,8 +1589,8 @@ void buildMapPeers(double lat, double lon, float rot, bool useMiles,
 
 MapBaseKey mapKeyFor(const MapScreenData& map) {
     MapBaseKey k;
-    k.lat = map.centerLat;
-    k.lon = map.centerLon;
+    k.lat = map.centerLat + mapPanN / 111320.0;
+    k.lon = map.centerLon + mapPanE / (111320.0 * cos(map.centerLat * M_PI / 180.0));
     k.mpp = map.metersPerPixel;
     k.rotDeg = map.northDeg;
     k.layers = map.layers;
@@ -1708,6 +1731,19 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
         map.northDeg = 0.0f;
         map.trackUp = false;
         map.headingDeg = heading;
+    }
+    // DOBA: dragged: the view stays north-up and the position moves on the
+    // screen (it may leave it); everything is still drawn round it.
+    map.zoomInEnd = map.topo ? topo::zoomFor(lat, mapMpp / 2.0f) == topo::zoomFor(lat, mapMpp) : mapMpp <= 1.0f;
+    map.zoomOutEnd = mapMpp * 2.0f > mapMaxMpp() * 1.01f;
+    if (mapPanned()) {
+        map.panned = true;
+        rot = 0.0f;
+        map.northDeg = 0.0f;
+        map.trackUp = false;
+        map.headingDeg = heading;
+        map.riderX = 270 - (int)lroundf(mapPanE / mapMpp);
+        map.riderY = 430 + (int)lroundf(mapPanN / mapMpp);
     }
     // The farewell frame is the one frame with no "next one".
     //
@@ -3886,7 +3922,7 @@ void task(void*) {
         // GT911 INT fired, while a touch is ongoing (to catch the release),
         // or on a slow fallback tick so input is never dropped.
         if (touchOk) {
-            static int16_t lastX = 0, lastY = 0;
+            static int16_t lastX = 0, lastY = 0, downX = 0, downY = 0;
             static uint32_t lastTouchPoll = 0;
             if (touchIrq || touchWasDown || millis() - lastTouchPoll > 200) {
                 touchIrq = false;
@@ -3902,6 +3938,10 @@ void task(void*) {
                 static uint32_t lastTapMs = 0;
                 if (down && !touchWasDown) {
                     touchDownAt = millis();
+                    downX = lastX;
+                    downY = lastY;
+                } else if (!down && touchWasDown && mapDrag(downX, downY, lastX, lastY)) {
+                    noteActivity();   // DOBA: a finger drawn across the map moves it
                 } else if (!down && touchWasDown) {
                     // One tap per release, debounced so a flickery touch read
                     // can't fire twice and toggle the screen back.

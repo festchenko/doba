@@ -64,8 +64,14 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport"
 </div>
 <script>
 const img=document.getElementById('panel');let paints=-1,walking=false;
-img.onclick=e=>{const r=img.getBoundingClientRect();
- post('/tap?x='+Math.round((e.clientX-r.left)*540/r.width)+'&y='+Math.round((e.clientY-r.top)*960/r.height))};
+// A tap, or a finger drawn across the panel (drags the map).
+let down=null;
+function px(e){const r=img.getBoundingClientRect();return [Math.round((e.clientX-r.left)*540/r.width),Math.round((e.clientY-r.top)*960/r.height)]}
+img.style.touchAction='none';img.draggable=false;
+img.onpointerdown=e=>{down=px(e);e.preventDefault()};
+img.onpointerup=e=>{if(!down)return;const u=px(e),[x0,y0]=down;down=null;
+ if(Math.hypot(u[0]-x0,u[1]-y0)>25)post('/swipe?x0='+x0+'&y0='+y0+'&x1='+u[0]+'&y1='+u[1]);
+ else post('/tap?x='+x0+'&y='+y0)};
 function post(u){return fetch(u,{method:'POST'}).then(()=>setTimeout(tick,150))}
 function key(n,ms){post('/key?n='+n+(ms?'&ms='+ms:''))}
 function walk(){walking=!walking;document.getElementById('walk').classList.toggle('on',walking);post('/walk?on='+(walking?1:0))}
@@ -189,6 +195,8 @@ def serve(v, port, host="127.0.0.1"):
                 d = v.alive()
                 if u.path == "/tap":
                     d.tap(int(q["x"]), int(q["y"]))
+                elif u.path == "/swipe":
+                    d.swipe(int(q["x0"]), int(q["y0"]), int(q["x1"]), int(q["y1"]))
                 elif u.path == "/key":
                     d.button(q["n"], ms=int(q.get("ms", 150)))
                 elif u.path == "/place":

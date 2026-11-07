@@ -68,8 +68,20 @@ double moonAge(time_t when) {
     return a;
 }
 
+// Lit fraction from the true phase angle (Meeus, Astronomical Algorithms
+// 48.4: elongation and anomalies with their main periodic terms). The mean
+// lunar age alone is off by up to ~2 % near new moon, which shows as "6 %"
+// where a Garmin says 4 %.
 double moonLit(time_t when) {
-    return (1 - cos(2 * M_PI * moonAge(when) / 29.530588853)) / 2;
+    const double T = (when / 86400.0 + 2440587.5 - 2451545.0) / 36525.0;
+    const double r = M_PI / 180.0;
+    const double D = 297.8501921 + 445267.1114034 * T;    // mean elongation
+    const double M = 357.5291092 + 35999.0502909 * T;     // sun's mean anomaly
+    const double Mp = 134.9633964 + 477198.8675055 * T;   // moon's mean anomaly
+    const double i = 180.0 - fmod(D, 360.0) - 6.289 * sin(Mp * r) + 2.100 * sin(M * r)
+                     - 1.274 * sin((2 * D - Mp) * r) - 0.658 * sin(2 * D * r)
+                     - 0.214 * sin(2 * Mp * r) - 0.110 * sin(D * r);
+    return (1 + cos(i * r)) / 2;
 }
 
 const char* moonName(time_t when) {

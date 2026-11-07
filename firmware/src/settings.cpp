@@ -1,5 +1,7 @@
 #include <stdlib.h>
 #include "settings.h"
+#include "tz_auto.h"
+#include <ctime>
 #include "ble_sensors.h"
 #include <string.h>
 
@@ -14,6 +16,8 @@
 namespace {
 
 Preferences prefs;
+bool tzAutoOn = true;   // DOBA
+bool regionAutoOn = true;
 float compassOff = NAN;
 int ftp = FTP_WATTS;
 int tz = TIMEZONE_OFFSET_MINUTES;
@@ -80,6 +84,8 @@ void begin() {
     bl = prefs.getInt("bl", 0);
     miles = prefs.getBool("miles", false);
     clk24 = prefs.getBool("clk24", true);
+    tzAutoOn = prefs.getBool("tzAuto", true);
+    regionAutoOn = prefs.getBool("rgAuto", true);
     // Key bumped to usbdrv2 so the new OFF default takes effect even on devices
     // that had the old (default-ON) "usbdrv" value stored. OFF = the device
     // keeps the SD (logs/recording) when plugged in.
@@ -166,11 +172,23 @@ bool setWheelCircMm(int mm) {
     return true;
 }
 
-int tzMinutes() { return tz; }
+// DOBA: by default the zone comes from the last GPS position (tz_auto), summer
+// time included; a manual offset is kept for when that is wrong or unknown.
+int tzMinutes() {
+    double la, lo;
+    int m;
+    if (tzAuto() && lastPosition(la, lo) && tz_auto::offsetAt(la, lo, time(nullptr), m)) return m;
+    return tz;
+}
+int tzManualMinutes() { return tz; }
 void setTzMinutes(int m) {
     tz = constrain(m, -12 * 60, 14 * 60);
     prefs.putInt("tz", tz);
 }
+bool tzAuto() { return tzAutoOn; }
+void setTzAuto(bool on) { tzAutoOn = on; prefs.putBool("tzAuto", on); }
+bool regionAuto() { return regionAutoOn; }
+void setRegionAuto(bool on) { regionAutoOn = on; prefs.putBool("rgAuto", on); }
 
 int backlight() { return bl; }
 void setBacklight(int b) {

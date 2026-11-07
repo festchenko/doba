@@ -337,6 +337,18 @@ std::string handle(const json::Value& r) {
         sim::touch(x, y, false);
         return ok();
     }
+    if (cmd == "swipe") {   // finger down at (x0,y0), drawn to (x1,y1) in steps, lifted
+        const int x0 = (int)r.num("x0"), y0 = (int)r.num("y0"), x1 = (int)r.num("x1"), y1 = (int)r.num("y1");
+        const int steps = 6;
+        for (int i = 0; i <= steps; ++i) {
+            { std::lock_guard<std::mutex> lk(g_inM); g_touchReads = 0; }
+            sim::touch(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps, true);
+            holdUntilRead([] { std::lock_guard<std::mutex> lk(g_inM); return g_touchReads; },
+                          (uint32_t)r.num("ms", 300) / (steps + 1), 1);
+        }
+        sim::touch(x1, y1, false);
+        return ok();
+    }
     if (cmd == "touch") { sim::touch((int)r.num("x"), (int)r.num("y"), r.boolean("down", true)); return ok(); }
     if (cmd == "button") {
         std::string name = r.str("name", "boot");

@@ -1,4 +1,5 @@
 #include "mesh_service.h"
+#include "tz_auto.h"
 #include "stealth.h"
 
 #include <Arduino.h>
@@ -1216,6 +1217,23 @@ void applyPendingConfig() {
     }
 }
 
+// DOBA: the region follows the country (UA_868 in Ukraine, EU_868 elsewhere in
+// Europe) unless it was set by hand. Checked once a minute against the last
+// position the GPS saved.
+void followRegion() {
+    static uint32_t next = 0;
+    if ((int32_t)(millis() - next) < 0) return;
+    next = millis() + 60000;
+    if (!settings::regionAuto()) return;
+    double la, lo;
+    if (!settings::lastPosition(la, lo)) return;
+    const int want = mesh::regionIndexByName(tz_auto::inUkraine(la, lo) ? "UA_868" : "EU_868");
+    if (want >= 0 && want != (int)mesh_service::regionIndex()) {
+        Serial.printf("mesh: region follows position -> %s\n", mesh::region(want).name);
+        mesh_service::setRegion((uint8_t)want);
+    }
+}
+
 void task(void*) {
     uint8_t frame[mesh::MAX_RADIO_LEN];
     ensureKeys();
@@ -1236,6 +1254,7 @@ void task(void*) {
         if (wake) xSemaphoreTake(wake, pdMS_TO_TICKS(waitMs));
 
         applyPendingConfig();
+        followRegion();
 
         if (!radioUp || !meshEnabled) {
             vTaskDelay(pdMS_TO_TICKS(500));

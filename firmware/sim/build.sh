@@ -23,7 +23,7 @@ CFLAGS="-include sim/linux/linux_compat.h -std=gnu11 -g -O1 $WARN $INC $DEFS"
 # Firmware sources compiled as-is. Everything else in src/ is hardware and
 # has a stand-in in sim/host/.
 FW_CPP="link settings dash_config dash_layout ui_render vfont
-  map_view map_tiles map_store topo_layer milspec milgeo doba_keyboard doba_ui doba_library doba_icons stealth doba_topo_bg doba_points doba_dem doba_sun routes segments ride_recorder fit_writer workout
+  map_view map_tiles map_store topo_layer milspec milgeo doba_keyboard doba_ui doba_library doba_icons stealth tz_auto doba_topo_bg doba_points doba_dem doba_sun routes segments ride_recorder fit_writer workout
   workout_service diag diag_sd media radar mesh_service mesh_proto mesh_crypto
   gps_service ble_server ble_sensors ams_client
   crash_report"
