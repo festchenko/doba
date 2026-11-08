@@ -288,6 +288,64 @@ def _runs(pts, max_turn=0.35):
     return out
 
 
+def along_label(cv, text, fnt, x0, y0, x1, y1, level=0):
+    """Text centred on a straight run, turned to its angle, kept upright;
+    False when it would cut the edge or touch another label."""
+    hs = px(S.LABEL_HALO)
+    tw = cv.draw.textlength(text, font=fnt)
+    mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+    ang = math.degrees(math.atan2(y1 - y0, x1 - x0))
+    if ang > 90:
+        ang -= 180
+    if ang < -90:
+        ang += 180
+    asc, desc = fnt.getmetrics()
+    w, h = int(tw) + 2 * hs + 4, asc + desc + 2 * hs + 4
+    halo = Image.new("L", (w, h), 0)
+    ink = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(halo).text((w / 2, h / 2), text, font=fnt, fill=255, anchor="mm",
+                              stroke_width=hs, stroke_fill=255)
+    ImageDraw.Draw(ink).text((w / 2, h / 2), text, font=fnt, fill=255, anchor="mm")
+    halo = halo.rotate(-ang, resample=Image.BICUBIC, expand=True)
+    ink = ink.rotate(-ang, resample=Image.BICUBIC, expand=True)
+    bx, by = int(mx - halo.width / 2), int(my - halo.height / 2)
+    box = (bx, by, bx + halo.width, by + halo.height)
+    lo, hi = cv.buf, cv.buf + cv.core
+    if box[0] < lo or box[1] < lo or box[2] > hi or box[3] > hi:
+        return False
+    sh = 0.3 if 20 < abs(ang) < 70 else 0.0
+    cb = (box[0] + halo.width * sh / 2, box[1] + halo.height * sh / 2,
+          box[2] - halo.width * sh / 2, box[3] - halo.height * sh / 2)
+    pad = 4 * SS
+    if any(not (cb[2] + pad < b[0] or cb[0] - pad > b[2] or cb[3] + pad < b[1] or cb[1] - pad > b[3])
+           for b in cv.labels):
+        return False
+    cv.img.paste(S.WHITE * 17, box, halo)
+    cv.img.paste(level * 17, box, ink)
+    cv.labels.append(cb)
+    return True
+
+
+def contour_labels(cv, contours):
+    rule = S.CONTOUR_LABEL
+    fnt = font(S.FONT_REGULAR, rule["font"])
+    placed = []
+    for is_index, pts, level in contours:
+        if not is_index or len(pts) < 2:
+            continue
+        text = ("%g" % level)
+        tw = cv.draw.textlength(text, font=fnt)
+        for x0, y0, x1, y1, length in sorted(_runs(pts, 0.25), key=lambda r: -r[4]):
+            if length < tw + 16 * SS:
+                break
+            mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+            if any(math.hypot(mx - a, my - b) < rule["every_px"] * SS for a, b in placed):
+                continue
+            if along_label(cv, text, fnt, x0, y0, x1, y1, S.DARK):
+                placed.append((mx, my))
+                break
+
+
 def street_names(cv, feats, z):
     rule = S.STREET_NAME
     fnt = font(S.FONT_REGULAR, rule["font"])
@@ -317,35 +375,8 @@ def street_names(cv, feats, z):
                   for a, b in placed_names.get(name, []))
         if not far:
             continue
-        ang = math.degrees(math.atan2(y1 - y0, x1 - x0))
-        if ang > 90:
-            ang -= 180
-        if ang < -90:
-            ang += 180
-        # the text as two masks (halo, ink), turned to the road's angle
-        asc, desc = fnt.getmetrics()
-        w, h = int(tw) + 2 * hs + 4, asc + desc + 2 * hs + 4
-        halo = Image.new("L", (w, h), 0)
-        ink = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(halo).text((w / 2, h / 2), name, font=fnt, fill=255, anchor="mm",
-                                  stroke_width=hs, stroke_fill=255)
-        ImageDraw.Draw(ink).text((w / 2, h / 2), name, font=fnt, fill=255, anchor="mm")
-        halo = halo.rotate(-ang, resample=Image.BICUBIC, expand=True)
-        ink = ink.rotate(-ang, resample=Image.BICUBIC, expand=True)
-        bx, by = int(mx - halo.width / 2), int(my - halo.height / 2)
-        box = (bx, by, bx + halo.width, by + halo.height)
-        if box[0] < lo or box[1] < lo or box[2] > hi or box[3] > hi:
+        if not along_label(cv, name, fnt, x0, y0, x1, y1):
             continue
-        # collision on a box shrunk toward the text's real (diagonal) extent
-        sh = 0.3 if 20 < abs(ang) < 70 else 0.0
-        cb = (box[0] + halo.width * sh / 2, box[1] + halo.height * sh / 2,
-              box[2] - halo.width * sh / 2, box[3] - halo.height * sh / 2)
-        if any(not (cb[2] + pad < b[0] or cb[0] - pad > b[2] or cb[3] + pad < b[1] or cb[1] - pad > b[3])
-               for b in cv.labels):
-            continue
-        cv.img.paste(S.WHITE * 17, box, halo)
-        cv.img.paste(0, box, ink)
-        cv.labels.append(cb)
         placed_names.setdefault(name, []).append((mx, my))
 
 
@@ -418,6 +449,8 @@ def pattern_mask(cv, kind):
         return ((x + y) % sp) < SS
     if kind == "dash":      # short horizontal dashes, staggered rows
         return ((y % sp) < SS) & (((x + row * (sp // 2)) % (2 * sp)) < 3 * SS)
+    if kind == "lines":     # horizontal water lining, like an engraved sheet
+        return (y % sp) < SS
     if kind == "grain":     # sparse fine dots
         return ((y % (2 * sp)) < SS) & (((x + row * sp) % (2 * sp)) < SS)
     raise ValueError(kind)
@@ -431,7 +464,8 @@ def relief(cv, dem):
     lat_c = float(np.mean(lat))
     m_per_px = 156543.03 * math.cos(math.radians(lat_c)) / 2 ** z / SS
     m_per_cell = m_per_px * step
-    sigma = min(max(S.DEM_SMOOTH_M / m_per_cell, 0.5), 20)
+    flat_dem = os.environ.get("DOBA_CONTOURS") == "flat"
+    sigma = min(max((S.DEM_SMOOTH_M_FLAT if flat_dem else S.DEM_SMOOTH_M) / m_per_cell, 0.5), 20)
     elev = gaussian_filter(elev, sigma)
     out = {}
     if z >= S.HILLSHADE["min_zoom"]:
@@ -449,13 +483,14 @@ def relief(cv, dem):
             (cv.size, cv.size), Image.BILINEAR)
         m = np.asarray(img, dtype=np.float32) / 255.0
         cv.fill = (cv.fill.astype(np.float32) * m).astype(np.uint8)
-    iv = S.size_for_zoom(S.CONTOUR_INTERVALS, z)
+    flat = os.environ.get("DOBA_CONTOURS") == "flat"
+    iv = S.size_for_zoom(S.CONTOUR_INTERVALS_FLAT if flat else S.CONTOUR_INTERVALS, z)
     if iv:
         interval, index = iv
         lo = math.ceil(elev.min() / interval) * interval
         hi = math.floor(elev.max() / interval) * interval
         lines = []
-        min_loop = S.CONTOUR_MIN_LOOP_PX * SS
+        min_loop = (S.CONTOUR_MIN_LOOP_PX_FLAT if flat else S.CONTOUR_MIN_LOOP_PX) * SS
         for level in np.arange(lo, hi + 1, interval):
             for c in find_contours(elev, level):
                 pts = c[:, ::-1] * step
@@ -464,7 +499,7 @@ def relief(cv, dem):
                     length = np.hypot(*np.diff(pts, axis=0).T).sum()
                     if length < min_loop:
                         continue  # DSM noise: trees, houses, tiny bumps
-                lines.append((level % index == 0, [tuple(p) for p in pts]))
+                lines.append((abs(level % index) < 1e-6, [tuple(p) for p in pts], float(level)))
         out["contours"] = lines
     return out
 
@@ -506,12 +541,14 @@ def render_metatile(src, dem, z, mx0, my0, n, bathy=None):
                 if it[3]["properties"].get("class") == cls]
 
     for layer, cls, minz, level in S.AREA_FILLS:
-        items = items_of(layer, cls) if z >= minz else []
+        maxz = S.AREA_PATTERN_MAX_Z.get(cls, 99)
+        items = items_of(layer, cls) if minz <= z <= maxz else []
         if items:
             apply_fill(cv, fill_mask(cv, items), level)
     textures = {}
     for layer, cls, minz, kind, level in S.AREA_PATTERNS:
-        items = items_of(layer, cls) if z >= minz else []
+        maxz = S.AREA_PATTERN_MAX_Z.get(cls, 99)
+        items = items_of(layer, cls) if minz <= z <= maxz else []
         if not items:
             continue
         mask = fill_mask(cv, items)
@@ -537,6 +574,8 @@ def render_metatile(src, dem, z, mx0, my0, n, bathy=None):
         if seamask is not None:
             wmask = wmask | seamask
         apply_fill(cv, wmask, S.WATER_FILL)
+        if z >= S.WATER_LINING_FROM:   # lined, so water never reads as a roof
+            apply_fill(cv, wmask & pattern_mask(cv, "lines"), S.WATER_LINING)
         if z >= 9:
             apply_edge(cv, wmask, S.WATER_EDGE, 1.0)
 
@@ -549,7 +588,7 @@ def render_metatile(src, dem, z, mx0, my0, n, bathy=None):
     cv.start_lines()
 
     # 5. contours ------------------------------------------------------------
-    for is_index, pts in rel.get("contours", []):
+    for is_index, pts, _ in rel.get("contours", []):
         st = S.CONTOUR_INDEX if is_index else S.CONTOUR
         cv.line(pts, st["width"], st["level"])
 
@@ -656,6 +695,8 @@ def render_metatile(src, dem, z, mx0, my0, n, bathy=None):
 
     if z >= S.STREET_NAME["min_zoom"]:
         street_names(cv, feats, z)
+    if z >= S.CONTOUR_LABEL["min_zoom"]:
+        contour_labels(cv, rel.get("contours", []))
 
     if z >= S.PEAK["min_zoom"]:
         m = S.PEAK["marker"] * SS
@@ -713,6 +754,20 @@ def render_job(args):
         zooms = range(max(zmin, CELL_Z + 1), zmax + 1)
     detail = job != "base" and zmin >= DETAIL_Z   # z17: a pack of its own per cell
     final = pack_path(opts["out"], cz, cx, cy, detail)
+    # Contours: 2.5 m in flat country, the standard 10 m elsewhere. Decided per
+    # z8 cell from the heights there, unless the region says (DOBA_CONTOURS).
+    if opts.get("contours") in ("flat", "normal"):
+        os.environ["DOBA_CONTOURS"] = opts["contours"]
+    elif dem is not None and job != "base":
+        lon0, lat1 = tile_to_lonlat(cx, cy, cz)
+        lon1, lat0 = tile_to_lonlat(cx + 1, cy + 1, cz)
+        glon, glat = np.meshgrid(np.linspace(lon0, lon1, 60), np.linspace(lat0, lat1, 60))
+        h = dem.sample(glon, glat)
+        h = h[np.isfinite(h)] if h is not None else np.array([])
+        relief = float(np.percentile(h, 98) - np.percentile(h, 2)) if h.size > 100 else 999.0
+        os.environ["DOBA_CONTOURS"] = "flat" if relief < S.FLAT_RELIEF_M else "normal"
+    else:
+        os.environ["DOBA_CONTOURS"] = "normal"
     if os.path.exists(final):          # resumable: finished packs are kept
         return job, 0
     os.makedirs(os.path.dirname(final), exist_ok=True)
@@ -754,12 +809,14 @@ def main():
     ap.add_argument("--zoom", default="8-16", help="e.g. 8-16")
     ap.add_argument("--out", required=True)
     ap.add_argument("--jobs", type=int, default=os.cpu_count())
+    ap.add_argument("--contours", choices=("auto", "flat", "normal"), default="auto",
+                    help="2.5 m (flat) or 10 m contours; auto decides per z8 cell")
     a = ap.parse_args()
 
     bbox = tuple(float(v) for v in a.bbox.split(","))
     zmin, zmax = (int(v) for v in a.zoom.split("-"))
     opts = {"mbtiles": a.mbtiles, "dem": a.dem, "bathy": a.bathy, "bbox": bbox,
-            "zmin": zmin, "zmax": zmax, "out": a.out}
+            "zmin": zmin, "zmax": zmax, "out": a.out, "contours": a.contours}
 
     jobs = []
     if zmin <= CELL_Z:

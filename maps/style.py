@@ -37,27 +37,34 @@ AREA_PATTERNS = [
     ("landcover", "wetland", 10, "dash", DARK),
     ("landcover", "sand", 10, "grain", DARK),
     ("landcover", "rock", 10, "grain", BLACK),
+    # Built-up areas: hatched only while the houses are too small to show
+    # (max zoom in AREA_PATTERN_MAX_Z); from there the buildings speak.
     ("landuse", "residential", 10, "hatch", LIGHT),
     ("landuse", "suburb", 10, "hatch", LIGHT),
     ("landuse", "neighbourhood", 10, "hatch", LIGHT),
     ("landuse", "commercial", 12, "hatch", LIGHT),
     ("landuse", "retail", 12, "hatch", LIGHT),
-    ("landuse", "industrial", 12, "hatch", DARK),
+    ("landuse", "industrial", 12, "hatch", LIGHT),
     ("landuse", "railway", 13, "hatch", LIGHT),
     ("landuse", "cemetery", 13, "grain", DARK),
     ("landuse", "military", 11, "hatch", DARK),
 ]
-PATTERN_SPACING = {"dots": 7, "hatch": 6, "dash": 6, "grain": 5}
+PATTERN_SPACING = {"dots": 7, "hatch": 6, "dash": 6, "grain": 5, "lines": 5}
+# Built-up hatching stops here: at closer zooms the buildings are the town.
+AREA_PATTERN_MAX_Z = {"residential": 13, "suburb": 13, "neighbourhood": 13, "commercial": 13,
+                      "retail": 13, "industrial": 13, "railway": 13}
 # Outline drawn round patterned areas, so the edge reads even where the
 # pattern is sparse (forest edge, town edge). None to skip.
 PATTERN_EDGE = {"dots": DARK, "hatch": None, "dash": None, "grain": None}
 
 WATER_FILL = LIGHT
 WATER_EDGE = DARK
+WATER_LINING = DARK
+WATER_LINING_FROM = 13
 WATER_MIN_ZOOM = 0
 
-BUILDING_FILL = DARK
-BUILDING_EDGE = BLACK
+BUILDING_FILL = LIGHT      # light blocks with a dark edge: the streets read first
+BUILDING_EDGE = DARK
 BUILDING_MIN_ZOOM = 14
 
 # --- relief ----------------------------------------------------------------
@@ -72,10 +79,21 @@ HILLSHADE = {  # strength = max darkening fraction on steep shadowed slopes
 # zoom -> (interval m, index interval m)
 CONTOUR_INTERVALS = {11: (100, 500), 12: (50, 250), 13: (20, 100),
                      14: (10, 50), 15: (10, 50), 16: (10, 50)}
-CONTOUR = {"level": LIGHT, "width": 1.0}
-CONTOUR_INDEX = {"level": DARK, "width": 1.4}
+# Flat country (DOBA_CONTOURS=flat in the region): 2.5 m like the Dutch
+# 1:25 000 sheets, so the little relief there is still reads.
+CONTOUR_INTERVALS_FLAT = {11: (20, 100), 12: (10, 50), 13: (5, 25),
+                          14: (2.5, 10), 15: (2.5, 10), 16: (2.5, 10), 17: (2.5, 10)}
+CONTOUR = {"level": DARK, "width": 0.8}
+CONTOUR_INDEX = {"level": DARK, "width": 1.5}
+# Heights written along index contours, upright, now and then.
+CONTOUR_LABEL = {"min_zoom": 13, "font": 10, "every_px": 380}
 DEM_SMOOTH_M = 45  # smoothing radius; Copernicus is a surface model (trees!)
 CONTOUR_MIN_LOOP_PX = 60  # drop closed contour rings shorter than this
+# Flat country: 2.5 m lines would trace every roof and hedge in a surface
+# model, so smooth harder and drop more small rings.
+DEM_SMOOTH_M_FLAT = 110
+FLAT_RELIEF_M = 80   # a z8 cell whose heights span less than this is "flat"
+CONTOUR_MIN_LOOP_PX_FLAT = 200
 
 # --- sea depths (EMODnet, bathy.py) -------------------------------------------
 # zoom -> isobath depths (m); every one in BATHY_BOLD is drawn heavier
