@@ -30,7 +30,6 @@ BOOKS=(
   "stack_exchange|gardening.stackexchange.com_en_all_|garden_se|Gardening Q&A|Gardening SE · CC BY-SA"
   "wikisource|wikisource_uk_all_maxi_|shelf_uk|Вікіджерела|Вікіджерела · CC BY-SA / суспільне надбання"
   "gutenberg|gutenberg_en_all_|shelf_en|Gutenberg EN|Project Gutenberg · public domain"
-  "gutenberg|gutenberg_ru_all_|shelf_ru|Gutenberg RU|Project Gutenberg · public domain"
 )
 
 latest() {   # newest file in a kiwix directory listing with this prefix

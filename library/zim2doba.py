@@ -6,7 +6,7 @@ article is cleaned to plain text lines and stored as its own small zlib
 stream, with a sorted fixed-width title index for binary search on the card.
 Format: src/doba_library.h in the firmware.
 
-    python3 zim2doba.py wikipedia_ru_all_nopic_2026-10.zim out/wiki_ru --name "Википедия RU"
+    python3 zim2doba.py wikipedia_uk_all_nopic_2026-07.zim out/wiki_uk --name "Вікіпедія"
     python3 zim2doba.py mdwiki_en_all_maxi.zim out/med_en --name "WikiMed EN"
 
 Then copy out/<book> to /doba/lib/<book> on the card (tools/prepare-sd-mac.sh).

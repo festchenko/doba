@@ -18,11 +18,10 @@ constexpr int GAP = 4;
 // Row 3 also carries SHIFT (left) and DEL (right).
 const char* const kRows[LAYOUT_COUNT][3] = {
     {"qwertyuiop", "asdfghjkl", "zxcvbnm"},
-    {"йцукенгшщзхъ", "фывапролджэ", "ячсмитьбюё"},
     {"йцукенгшщзхї", "фівапролджє", "ячсмитьбюґ"},
     {"1234567890", "-/:;()@&\"'", ".,?!#%+=*_"},
 };
-const char* const kLayoutName[LAYOUT_COUNT] = {"EN", "RU", "UA", "123"};
+const char* const kLayoutName[LAYOUT_COUNT] = {"EN", "UA", "123"};
 
 // Next UTF-8 character of s into out (NUL-terminated); returns bytes used.
 int nextChar(const char* s, char* out) {

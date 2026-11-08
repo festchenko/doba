@@ -1,6 +1,6 @@
 #pragma once
 
-// DOBA: on-screen keyboard for the touch e-ink panel. Latin, Russian and
+// DOBA: on-screen keyboard for the touch e-ink panel. Latin and
 // Ukrainian letters, digits and symbols; text is UTF-8. Drawn in the bottom
 // part of the portrait screen; one tap = one key.
 
@@ -9,7 +9,7 @@
 
 namespace kbd {
 
-enum Layout : uint8_t { EN = 0, RU, UA, SYM, LAYOUT_COUNT };
+enum Layout : uint8_t { EN = 0, UA, SYM, LAYOUT_COUNT };   // DOBA: English and Ukrainian only
 
 enum Action : uint8_t {
     NONE = 0,   // missed every key

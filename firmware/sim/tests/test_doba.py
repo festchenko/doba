@@ -68,7 +68,7 @@ def test_an_article_link_opens_its_article_and_back_returns(doba, book):
     boot(doba)
     doba.console("screen library", 800)
     time.sleep(0.6)
-    doba.tap(270, TOP + 45)                                 # "Search all books"
+    doba.tap(270, 960 - 49)                                 # "Search all books", at the bottom
     time.sleep(0.6)
     for c in "wat":
         doba.tap(*key(c))
@@ -185,7 +185,7 @@ def test_a_manual_pdf_becomes_chapters_found_by_their_own_words(doba, tmp_path):
     boot(doba)
     doba.console("screen library", 800)
     time.sleep(0.6)
-    doba.tap(270, TOP + 45)                                 # "Search all books"
+    doba.tap(270, 960 - 49)                                 # "Search all books", at the bottom
     time.sleep(0.6)
     for c in "shel":
         doba.tap(*key(c))
@@ -239,12 +239,14 @@ def test_library_sections_open_their_guides_and_emergency_buttons_jump(doba, boo
     doba.console("screen library", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(96, TOP + 92 + 28 + 54)                        # BLEEDING
+    doba.tap(400, TOP + 36)                                 # TOPICS tab
+    time.sleep(0.6)
+    doba.tap(96, TOP + 72 + 28 + 54)                        # BLEEDING
     doba.wait_log(r"\[lib\] open 'Tourniquet'", since=since)
     time.sleep(0.6)
     doba.tap(50, 30)                                        # BACK: to the sections
     time.sleep(0.8)
-    doba.tap(96, TOP + 92 + 28 + 108 + 16 + 70)             # WATER, first cell
+    doba.tap(96, TOP + 72 + 28 + 108 + 16 + 40)             # WATER, first cell
     time.sleep(0.8)
     since = doba.log_seq()
     doba.tap(270, TOP + 120 + 50)                           # START HERE card
@@ -277,7 +279,9 @@ def test_a_figure_in_a_manual_is_shown_as_a_picture_in_its_article(doba, tmp_pat
     doba.console("screen library", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(96, TOP + 92 + 28 + 54)
+    doba.tap(400, TOP + 36)                                 # TOPICS tab
+    time.sleep(0.6)
+    doba.tap(96, TOP + 72 + 28 + 54)
     doba.wait_log(r"\[lib\] open 'Knots \(US Army\)'", since=since)
     doba.wait_log(r"\[lib\] picture \d+ \d+x\d+", since=since)
 
@@ -301,7 +305,9 @@ def test_a_picture_in_a_zim_article_reaches_the_screen_from_its_pack(doba, book)
     doba.console("screen library", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(96, TOP + 92 + 28 + 54)
+    doba.tap(400, TOP + 36)                                 # TOPICS tab
+    time.sleep(0.6)
+    doba.tap(96, TOP + 72 + 28 + 54)
     doba.wait_log(r"\[lib\] picture [0-9a-f]{10} 480x320", since=since)
 
 
@@ -341,7 +347,7 @@ def test_reader_text_size_and_contents(doba, book):
     boot(doba)
     doba.console("screen library", 800)
     time.sleep(0.6)
-    doba.tap(270, TOP + 45)
+    doba.tap(270, 960 - 49)
     time.sleep(0.6)
     for c in "wat":
         doba.tap(*key(c))
@@ -375,3 +381,18 @@ def test_the_home_key_goes_home_from_anywhere(doba):
         doba.wait_log(r"\[ui\] home key", since=since)
         time.sleep(0.6)
         doba.wait_status(lambda s: s["screen"] == "other", timeout=3)
+
+
+def test_the_library_opens_on_its_books_and_a_book_opens_its_documents(doba, book):
+    """BOOKS: a cover per book; a book's page lists what it holds; a row opens it."""
+    shutil.copytree(book, os.path.join(doba.sd, "doba", "lib", "field"))
+    boot(doba)
+    doba.console("screen library", 800)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(100, TOP + 76 + 80)                            # the first cover
+    doba.wait_log(r"\[lib\] book field", since=since)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(200, TOP + 216 + 40 + 30)                      # its first document
+    doba.wait_log(r"\[lib\] open '", since=since)
