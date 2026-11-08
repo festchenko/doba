@@ -10,6 +10,7 @@
 // Card layout:
 //   /doba/map/base.dtp            zoom 0-8 for the whole region
 //   /doba/map/8/<x>/<y>.dtp       zoom 9-16 for one zoom-8 cell
+//   /doba/map/8/<x>/<y>.17.dtp    zoom 17 (detail, street names) where rendered
 //
 // When a pack covers the rider, the topo layer replaces the OpenTrailPaper
 // vector roads entirely (they would only repeat what the topo tile shows),
@@ -27,8 +28,12 @@ bool covers(double lat, double lon);
 // Ground metres per screen pixel of zoom `z` at this latitude.
 float nativeMpp(int z, double lat);
 
-// The tile zoom closest to `mpp` at this latitude, clamped to 0..16.
+// The tile zoom closest to `mpp` at this latitude, clamped to 0..17.
 int zoomFor(double lat, float mpp);
+
+// The closest zoom drawn from real tiles here: 17 where a detail pack
+// (8/<x>/<y>.17.dtp, street names) is on the card, else 16.
+int maxZoomAt(double lat, double lon);
 
 // Draws the topo tiles for map.centerLat/centerLon at map.metersPerPixel, with
 // the centre at (map.riderX, map.riderY), over the whole 540x960 portrait fb.

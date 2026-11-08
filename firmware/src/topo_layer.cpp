@@ -24,11 +24,13 @@ namespace {
 constexpr int TILE = 256;
 constexpr int TILE_BYTES = TILE * TILE / 2;   // 4bpp, high nibble = left px
 constexpr int CELL_Z = 8;
-constexpr int MAX_Z = 16;
+constexpr int MAX_Z = 17;                     // 17 only where a detail pack exists
+constexpr int DETAIL_Z = 17;
 constexpr int CACHE_TILES = 32;               // 32 x 32 KB = 1 MB of PSRAM
 constexpr int HEADER = 32;
 constexpr int ENTRY = 16;
 constexpr uint8_t FLAG_SOLID = 1;
+constexpr uint16_t PACK_RELATIVE = 1;   // header flags: x, y relative to the cell
 constexpr int SCREEN_W = 540, SCREEN_H = 960;  // portrait
 constexpr int NATIVE_W = 960, NATIVE_ROW = NATIVE_W / 2;
 const char kMagic[8] = {'D', 'O', 'B', 'A', 'T', 'P', '1', 0};
@@ -36,7 +38,7 @@ const char* kRoot = "/doba/map";
 
 struct Slot {
     uint8_t z = 0;
-    uint16_t x = 0, y = 0;
+    uint32_t x = 0, y = 0;
     bool valid = false;
     bool present = false;
     bool solid = false;
@@ -52,7 +54,7 @@ uint32_t g_zbufLen = 0;
 Stats g_stats = {0, 0, 0, 0};
 
 // covers(): one entry per recently asked zoom-8 cell.
-struct CellSeen { int32_t x = -1, y = -1; bool have = false; };
+struct CellSeen { int32_t x = -1, y = -1; bool have = false; int8_t detail = -1; };
 CellSeen g_cells[8];
 int g_cellNext = 0;
 
@@ -66,7 +68,8 @@ void packPath(int z, int x, int y, char* out, size_t n) {
         snprintf(out, n, "%s/base.dtp", kRoot);
     } else {
         const int s = z - CELL_Z;
-        snprintf(out, n, "%s/8/%d/%d.dtp", kRoot, x >> s, y >> s);
+        // detail tiles (z17) live in a pack of their own beside the cell's
+        snprintf(out, n, z >= DETAIL_Z ? "%s/8/%d/%d.17.dtp" : "%s/8/%d/%d.dtp", kRoot, x >> s, y >> s);
     }
 }
 
@@ -98,8 +101,14 @@ bool readTile(int z, int x, int y, Slot& s) {
     uint8_t hdr[HEADER];
     bool ok = f.read(hdr, HEADER) == HEADER && memcmp(hdr, kMagic, 8) == 0;
     const uint32_t count = ok ? rd32(hdr + 24) : 0;
+    // Detail packs keep x, y relative to the cell (absolute z17 x, y overflow u16).
+    if (ok && (rd16(hdr + 14) & PACK_RELATIVE)) {
+        const int sh = z - CELL_Z;
+        x -= (int)(rd32(hdr + 16) << sh);
+        y -= (int)(rd32(hdr + 20) << sh);
+    }
     // Binary search over the on-card index, sorted by (z, x, y).
-    const uint64_t want = (uint64_t)z << 32 | (uint64_t)x << 16 | (uint64_t)y;
+    const uint64_t want = (uint64_t)z << 32 | (uint64_t)(uint16_t)x << 16 | (uint64_t)(uint16_t)y;
     uint32_t lo = 0, hi = count;
     uint8_t e[ENTRY];
     bool found = false;
@@ -155,7 +164,7 @@ Slot* tile(int z, int x, int y) {
     }
     Slot& s = *victim;
     s.valid = true;
-    s.z = (uint8_t)z; s.x = (uint16_t)x; s.y = (uint16_t)y;
+    s.z = (uint8_t)z; s.x = (uint32_t)x; s.y = (uint32_t)y;
     s.lastUse = g_tick;
     s.present = readTile(z, x, y, s);
     if (!s.present) ++g_stats.missing;
@@ -189,11 +198,36 @@ int zoomFor(double lat, float mpp) {
     return zi;
 }
 
-bool covers(double lat, double lon) {
+namespace {
+void cellOf(double lat, double lon, int& cx, int& cy) {
     const double n = 1 << CELL_Z;
-    const int cx = (int)floor((lon + 180.0) / 360.0 * n);
+    cx = (int)floor((lon + 180.0) / 360.0 * n);
     const double lr = lat * M_PI / 180.0;
-    const int cy = (int)floor((1.0 - asinh(tan(lr)) / M_PI) / 2.0 * n);
+    cy = (int)floor((1.0 - asinh(tan(lr)) / M_PI) / 2.0 * n);
+}
+}  // namespace
+
+int maxZoomAt(double lat, double lon) {
+    int cx, cy;
+    cellOf(lat, lon, cx, cy);
+    if (!covers(lat, lon)) return 16;
+    for (CellSeen& c : g_cells) {
+        if (c.x != cx || c.y != cy) continue;
+        if (c.detail < 0) {
+            char path[64];
+            snprintf(path, sizeof path, "%s/8/%d/%d.17.dtp", kRoot, cx, cy);
+            sdLock();
+            c.detail = SD.exists(path) ? 1 : 0;
+            sdUnlock();
+        }
+        return c.detail ? DETAIL_Z : 16;
+    }
+    return 16;
+}
+
+bool covers(double lat, double lon) {
+    int cx, cy;
+    cellOf(lat, lon, cx, cy);
     for (const CellSeen& c : g_cells)
         if (c.x == cx && c.y == cy) return c.have;
     char path[64];
@@ -202,7 +236,7 @@ bool covers(double lat, double lon) {
     const bool have = SD.exists(path);
     sdUnlock();
     if (have) ++g_stats.packsOpened;
-    g_cells[g_cellNext] = {cx, cy, have};
+    g_cells[g_cellNext] = {cx, cy, have, -1};
     g_cellNext = (g_cellNext + 1) % 8;
     return have;
 }
@@ -210,7 +244,8 @@ bool covers(double lat, double lon) {
 int drawBase(const MapScreenData& map, uint8_t* fb) {
     g_inverted = epd_get_rotation() == EPD_ROT_INVERTED_PORTRAIT;
     const double lat = map.centerLat, lon = map.centerLon;
-    const int z = zoomFor(lat, map.metersPerPixel);
+    int z = zoomFor(lat, map.metersPerPixel);
+    if (z > 16 && maxZoomAt(lat, lon) < z) z = 16;   // no detail pack here: enlarge z16
     const double world = (double)TILE * (double)(1u << z);
     const double lr = lat * M_PI / 180.0;
     const double rcx = (lon + 180.0) / 360.0 * world;

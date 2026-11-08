@@ -142,6 +142,10 @@ PLACES = {
 PLACE_ORDER = ["city", "town", "village", "suburb", "hamlet",
                "neighbourhood", "isolated_dwelling"]
 PEAK = {"min_zoom": 12, "font": 11, "marker": 5}
+# Street names along their roads, at the detail zoom only (z17): there is
+# room for them there. Minor classes first in nothing; bigger roads win places.
+STREET_NAME = {"min_zoom": 17, "font": 15, "classes": ["motorway", "trunk", "primary", "secondary",
+               "tertiary", "minor", "service"], "every_px": 500}
 WATER_NAME = {"min_zoom": 12, "font": 11, "level": DARK}
 LABEL_HALO = 2  # px, white outline around text
 

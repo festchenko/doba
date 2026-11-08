@@ -26,7 +26,7 @@ from skimage.measure import find_contours
 
 import style as S
 from dem import Dem
-from tilepack import BASE_CELL_Z, TILE, PackWriter, pack_path
+from tilepack import BASE_CELL_Z, DETAIL_Z, TILE, PackWriter, pack_path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SS = 2           # supersampling factor
@@ -263,6 +263,90 @@ def font(name, size):
         _fonts[key] = ImageFont.truetype(
             os.path.join(HERE, "fonts", name), int(round(size * SS)))
     return _fonts[key]
+
+
+# ---------------------------------------------------------------------------
+# street names: along the road, upright, on its longest straight stretch
+
+
+def _runs(pts, max_turn=0.35):
+    """Straight-ish runs of a polyline: (x0, y0, x1, y1, length)."""
+    out, i = [], 0
+    while i < len(pts) - 1:
+        a = math.atan2(pts[i + 1][1] - pts[i][1], pts[i + 1][0] - pts[i][0])
+        j = i + 1
+        while j < len(pts) - 1:
+            b = math.atan2(pts[j + 1][1] - pts[j][1], pts[j + 1][0] - pts[j][0])
+            d = abs((b - a + math.pi) % (2 * math.pi) - math.pi)
+            if d > max_turn:
+                break
+            j += 1
+        x0, y0 = pts[i]
+        x1, y1 = pts[j]
+        out.append((x0, y0, x1, y1, math.hypot(x1 - x0, y1 - y0)))
+        i = j
+    return out
+
+
+def street_names(cv, feats, z):
+    rule = S.STREET_NAME
+    fnt = font(S.FONT_REGULAR, rule["font"])
+    hs = px(S.LABEL_HALO)
+    rank = {c: i for i, c in enumerate(rule["classes"])}
+    cands = []
+    for tx, ty, ext, f in feats.get("transportation_name", []):
+        p = f["properties"]
+        name, cls = p.get("name"), p.get("class")
+        if not name or cls not in rank:
+            continue
+        for ln in iter_lines(f["geometry"]):
+            pts = cv.to_canvas(tx, ty, ext, ln)
+            for run in _runs(pts):
+                cands.append((rank[cls], -run[4], name, run))
+    cands.sort()
+    lo, hi = cv.buf, cv.buf + cv.core
+    pad = 4 * SS
+    placed_names = {}
+    for _, _, name, (x0, y0, x1, y1, length) in cands:
+        tw = cv.draw.textlength(name, font=fnt)
+        if length < tw + 24 * SS:
+            continue
+        mx, my = (x0 + x1) / 2, (y0 + y1) / 2
+        # one copy of a name per stretch of screen
+        far = all(math.hypot(mx - a, my - b) > rule["every_px"] * SS
+                  for a, b in placed_names.get(name, []))
+        if not far:
+            continue
+        ang = math.degrees(math.atan2(y1 - y0, x1 - x0))
+        if ang > 90:
+            ang -= 180
+        if ang < -90:
+            ang += 180
+        # the text as two masks (halo, ink), turned to the road's angle
+        asc, desc = fnt.getmetrics()
+        w, h = int(tw) + 2 * hs + 4, asc + desc + 2 * hs + 4
+        halo = Image.new("L", (w, h), 0)
+        ink = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(halo).text((w / 2, h / 2), name, font=fnt, fill=255, anchor="mm",
+                                  stroke_width=hs, stroke_fill=255)
+        ImageDraw.Draw(ink).text((w / 2, h / 2), name, font=fnt, fill=255, anchor="mm")
+        halo = halo.rotate(-ang, resample=Image.BICUBIC, expand=True)
+        ink = ink.rotate(-ang, resample=Image.BICUBIC, expand=True)
+        bx, by = int(mx - halo.width / 2), int(my - halo.height / 2)
+        box = (bx, by, bx + halo.width, by + halo.height)
+        if box[0] < lo or box[1] < lo or box[2] > hi or box[3] > hi:
+            continue
+        # collision on a box shrunk toward the text's real (diagonal) extent
+        sh = 0.3 if 20 < abs(ang) < 70 else 0.0
+        cb = (box[0] + halo.width * sh / 2, box[1] + halo.height * sh / 2,
+              box[2] - halo.width * sh / 2, box[3] - halo.height * sh / 2)
+        if any(not (cb[2] + pad < b[0] or cb[0] - pad > b[2] or cb[3] + pad < b[1] or cb[1] - pad > b[3])
+               for b in cv.labels):
+            continue
+        cv.img.paste(S.WHITE * 17, box, halo)
+        cv.img.paste(0, box, ink)
+        cv.labels.append(cb)
+        placed_names.setdefault(name, []).append((mx, my))
 
 
 # ---------------------------------------------------------------------------
@@ -570,6 +654,9 @@ def render_metatile(src, dem, z, mx0, my0, n, bathy=None):
             fnt = font(S.FONT_ITALIC, size)
         cv.place_label(x, y, name, fnt)
 
+    if z >= S.STREET_NAME["min_zoom"]:
+        street_names(cv, feats, z)
+
     if z >= S.PEAK["min_zoom"]:
         m = S.PEAK["marker"] * SS
         for tx, ty, ext, f in feats.get("mountain_peak", []):
@@ -624,11 +711,12 @@ def render_job(args):
     else:
         cz, (cx, cy) = CELL_Z, job
         zooms = range(max(zmin, CELL_Z + 1), zmax + 1)
-    final = pack_path(opts["out"], cz, cx, cy)
+    detail = job != "base" and zmin >= DETAIL_Z   # z17: a pack of its own per cell
+    final = pack_path(opts["out"], cz, cx, cy, detail)
     if os.path.exists(final):          # resumable: finished packs are kept
         return job, 0
     os.makedirs(os.path.dirname(final), exist_ok=True)
-    writer = PackWriter(final + ".part", cz, cx, cy)
+    writer = PackWriter(final + ".part", cz, cx, cy, relative=detail)
     count = 0
     for z in zooms:
         bx0, by0, bx1, by1 = tile_range(bbox, z)

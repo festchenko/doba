@@ -1732,11 +1732,12 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
             opened = true;
             if (mapMpp == 2.0f) mapMpp = topo::nativeMpp(14, lat);
         }
-        // Past the closest tiles (z16), two more steps by enlarging them:
-        // 0.7 and 0.4 m/px — a house a thumb wide. Above, snap to a level.
-        const float n16 = topo::nativeMpp(16, lat);
-        if (mapMpp < n16 * 0.75f) mapMpp = mapMpp < n16 * 0.375f ? n16 / 4 : n16 / 2;
-        else mapMpp = topo::nativeMpp(topo::zoomFor(lat, mapMpp), lat);
+        // Down to ~0.4 m/px (z18): drawn from z17 detail tiles where the card
+        // has them, else from z16, the last steps by enlarging the tiles.
+        const int zmax = topo::maxZoomAt(lat, lon);
+        const float nMax = topo::nativeMpp(zmax, lat), floorMpp = topo::nativeMpp(18, lat);
+        if (mapMpp < nMax * 0.75f) mapMpp = (mapMpp < nMax * 0.375f || zmax == 17) ? floorMpp : nMax / 2;
+        else mapMpp = topo::nativeMpp(std::min(topo::zoomFor(lat, mapMpp), zmax), lat);
         map.metersPerPixel = mapMpp;
         rot = 0.0f;
         map.northDeg = 0.0f;
@@ -1745,7 +1746,7 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
     }
     // DOBA: dragged: the view stays north-up and the position moves on the
     // screen (it may leave it); everything is still drawn round it.
-    map.zoomInEnd = map.topo ? mapMpp <= topo::nativeMpp(16, lat) / 4 * 1.01f : mapMpp <= 1.0f;
+    map.zoomInEnd = map.topo ? mapMpp <= topo::nativeMpp(18, lat) * 1.01f : mapMpp <= 1.0f;
     map.zoomOutEnd = mapMpp * 2.0f > mapMaxMpp() * 1.01f;
     if (mapPanned()) {
         map.panned = true;

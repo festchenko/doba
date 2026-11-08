@@ -12,7 +12,9 @@ Layout (all little-endian):
     10  u8  cell_z     zoom of the cell this pack covers (255 = base pack)
     11  u8  bpp        bits per pixel, always 4
     12  u16 tile_size  pixels per tile side, always 256
-    14  u16 reserved
+    14  u16 flags      bit0 = x, y in the index are relative to the cell's
+                       top-left tile at that zoom (detail packs, z >= 17,
+                       whose absolute x, y would not fit in u16)
     16  u32 cell_x
     20  u32 cell_y
     24  u32 count      number of index entries
@@ -31,6 +33,8 @@ Layout (all little-endian):
     zlib (RFC 1950) streams. Each inflates to tile_size*tile_size/2 bytes:
     rows top to bottom, 2 pixels per byte, high nibble = left pixel,
     0 = black, 15 = white.
+
+Detail packs (z17) sit beside a cell's pack as <cell_y>.17.dtp, flag bit0 set.
 
 Packs are split per z8 cell so every file stays far below the FAT32 4 GB
 limit and a region can be added or replaced by copying files.
@@ -66,18 +70,24 @@ def unpack_4bpp(raw):
     return out
 
 
-def pack_path(root, cell_z, cell_x, cell_y):
+DETAIL_Z = 17
+FLAG_RELATIVE = 1
+
+
+def pack_path(root, cell_z, cell_x, cell_y, detail=False):
     if cell_z == BASE_CELL_Z:
         return os.path.join(root, "base.dtp")
-    return os.path.join(root, str(cell_z), str(cell_x), f"{cell_y}.dtp")
+    name = f"{cell_y}.{DETAIL_Z}.dtp" if detail else f"{cell_y}.dtp"
+    return os.path.join(root, str(cell_z), str(cell_x), name)
 
 
 class PackWriter:
     """Collects tiles in memory-light fashion (blobs go to a temp file)."""
 
-    def __init__(self, path, cell_z, cell_x, cell_y):
+    def __init__(self, path, cell_z, cell_x, cell_y, relative=False):
         self.path = path
         self.cell = (cell_z, cell_x, cell_y)
+        self.relative = relative
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         self.tmp_path = path + ".part"
         self.tmp = open(self.tmp_path, "wb")
@@ -85,6 +95,9 @@ class PackWriter:
         self.pos = 0
 
     def add(self, z, x, y, levels):
+        if self.relative:
+            k = 2 ** (z - self.cell[0])
+            x, y = x - self.cell[1] * k, y - self.cell[2] * k
         lo, hi = int(levels.min()), int(levels.max())
         if lo == hi:
             self.entries.append((z, x, y, FLAG_SOLID, lo, 0, 0))
@@ -104,7 +117,8 @@ class PackWriter:
         data_start = HEADER.size + ENTRY.size * len(self.entries)
         cz, cx, cy = self.cell
         with open(self.path + ".tmp", "wb") as f:
-            f.write(HEADER.pack(MAGIC, min(zs), max(zs), cz, 4, TILE, 0,
+            f.write(HEADER.pack(MAGIC, min(zs), max(zs), cz, 4, TILE,
+                                FLAG_RELATIVE if self.relative else 0,
                                 cx, cy, len(self.entries), 0))
             for z, x, y, flags, fill, rel, length in self.entries:
                 off = data_start + rel if length else 0
@@ -129,14 +143,17 @@ class PackReader:
         if hdr[0] != MAGIC:
             raise ValueError(f"{path}: not a Doba tile pack")
         (_, self.z_min, self.z_max, self.cell_z, self.bpp, self.tile_size,
-         _, self.cell_x, self.cell_y, self.count, _) = hdr
+         self.flags, self.cell_x, self.cell_y, self.count, _) = hdr
         raw = self.f.read(ENTRY.size * self.count)
         self.entries = [ENTRY.unpack_from(raw, i * ENTRY.size)
                         for i in range(self.count)]
         self.keys = [(e[0], e[2], e[3]) for e in self.entries]
 
     def get(self, z, x, y):
-        """Returns (TILE, TILE) uint8 levels 0..15, or None if absent."""
+        """(TILE, TILE) uint8 levels 0..15 for absolute (z, x, y), or None."""
+        if self.flags & FLAG_RELATIVE:
+            k = 2 ** (z - self.cell_z)
+            x, y = x - self.cell_x * k, y - self.cell_y * k
         i = bisect.bisect_left(self.keys, (z, x, y))
         if i == self.count or self.keys[i] != (z, x, y):
             return None
@@ -165,6 +182,10 @@ class PackLibrary:
         return self.cache[key]
 
     def get(self, z, x, y):
+        """Tile levels by absolute (z, x, y), or None."""
+        if self.flags & FLAG_RELATIVE:
+            k = 2 ** (z - self.cell_z)
+            x, y = x - self.cell_x * k, y - self.cell_y * k
         if z <= self.cell_z:
             r = self._reader(BASE_CELL_Z, 0, 0)
         else:
