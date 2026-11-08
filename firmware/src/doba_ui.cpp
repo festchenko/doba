@@ -1670,7 +1670,7 @@ Go tap(Page p, int x, int y, const RideState& s) {
         case COMMS:   return tapComms(x, y);
         case COMPOSE: return tapCompose(x, y);
         case LIBRARY: return doba_lib::tapSearch(g_search, x, y) ? TO_ARTICLE : STAY;
-        case ARTICLE: doba_lib::tapArticle(x, y); return STAY;
+        case ARTICLE: return doba_lib::tapArticle(x, y) ? back(ARTICLE) : STAY;   // CLOSE: as BACK
         case SETUP:   return tapSetup(x, y);
         case SETUP_NAME: return tapSetupName(x, y);
         case POINTS:  return tapPoints(x, y, s);

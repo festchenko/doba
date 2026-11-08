@@ -28,7 +28,7 @@ void rescan();
 void renderSearch(kbd::Keyboard& k, uint8_t* fb);
 bool tapSearch(kbd::Keyboard& k, int x, int y);   // true: an article was opened
 void renderArticle(uint8_t* fb);
-void tapArticle(int x, int y);       // a link opens its article; else pages
+bool tapArticle(int x, int y);       // a link opens its article; else pages. true: CLOSE tapped
 bool articleBack();                  // back along followed links; false at the first
 void leaveArticle();
 bool libraryBack();                  // section/search view -> library home; false at home

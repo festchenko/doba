@@ -1003,12 +1003,12 @@ void footer(const char* left, const char* mid, const char* midSub, const char* r
         epd_fill_triangle(26, fy + 39, 44, fy + 27, 44, fy + 51, INK, fb);
         ui::text(k, 56, fy + 50, left, fb, EPD_DRAW_ALIGN_LEFT, INK);
     }
-    if (right && strcmp(right, "END") != 0) {
+    if (right && strcmp(right, "CLOSE") != 0) {
         epd_fill_triangle(W - 26, fy + 39, W - 44, fy + 27, W - 44, fy + 51, INK, fb);
     }
     if (right) {
-        ui::text(k, strcmp(right, "END") ? W - 56 : W * 5 / 6, fy + 50, right, fb,
-                 strcmp(right, "END") ? EPD_DRAW_ALIGN_RIGHT : EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(k, strcmp(right, "CLOSE") ? W - 56 : W * 5 / 6, fy + 50, right, fb,
+                 strcmp(right, "CLOSE") ? EPD_DRAW_ALIGN_RIGHT : EPD_DRAW_ALIGN_CENTER, INK);
     }
     epd_fill_rect({W / 3, fy + 14, 1, FOOT_H - 28}, INK, fb);
     epd_fill_rect({W * 2 / 3, fy + 14, 1, FOOT_H - 28}, INK, fb);
@@ -1148,7 +1148,7 @@ void renderArticle(uint8_t* fb) {
     char pg[24];
     snprintf(pg, sizeof pg, "%d / %d", g_page + 1, g_pageCount);
     footer(g_page > 0 ? "PREV" : nullptr, pg, g_tocCount ? "CONTENTS" : nullptr,
-           g_page + 1 < g_pageCount ? "NEXT" : "END", fb);
+           g_page + 1 < g_pageCount ? "NEXT" : "CLOSE", fb);
     if (g_note) {
         const int tw = ui::textWidth(ui::font(ui::F_SMALL), g_note) + 24;
         epd_fill_rect({(W - tw) / 2, H - FOOT_H - 50, tw, 42}, INK, fb);
@@ -1357,13 +1357,13 @@ void cycleSize() {
     Serial.printf("[lib] text size %d pages=%d\n", g_size, g_pageCount);
 }
 
-void tapArticle(int x, int y) {
+bool tapArticle(int x, int y) {
     if (g_toc) {
         if (y >= H - FOOT_H) {
             if (x < W / 3) { if (g_tocPage > 0) --g_tocPage; }
             else if (x >= W * 2 / 3) { if (g_tocPage + 1 < tocPages()) ++g_tocPage; }
             else g_toc = false;
-            return;
+            return false;
         }
         const int row = (y - (BODY_TOP - 8)) / TOC_ROW;
         const int i = g_tocPage * tocRowsPerPage() + row;
@@ -1372,12 +1372,15 @@ void tapArticle(int x, int y) {
             g_toc = false;
             Serial.printf("[lib] contents -> page %d\n", g_page + 1);
         }
-        return;
+        return false;
     }
-    if (hit({kSizeBtn.x - 8, TOP, kSizeBtn.width + 16, kSizeBtn.height + 14}, x, y)) { cycleSize(); return; }
+    if (hit({kSizeBtn.x - 8, TOP, kSizeBtn.width + 16, kSizeBtn.height + 14}, x, y)) { cycleSize(); return false; }
     if (y >= H - FOOT_H) {            // the footer: back, contents, on
         if (x < W / 3) { if (g_page > 0) --g_page; }
-        else if (x >= W * 2 / 3) { if (g_page + 1 < g_pageCount) ++g_page; }
+        else if (x >= W * 2 / 3) {
+            if (g_page + 1 < g_pageCount) ++g_page;
+            else return true;   // CLOSE on the last page: done with it
+        }
         else if (g_tocCount) {
             g_toc = true;
             int cur = 0;
@@ -1386,7 +1389,7 @@ void tapArticle(int x, int y) {
             g_tocPage = cur / tocRowsPerPage();
             Serial.printf("[lib] contents %d\n", g_tocCount);
         }
-        return;
+        return false;
     }
     // A link, with a finger's slack round it; the nearest wins.
     int best = -1, bestD = 1 << 30;
@@ -1399,10 +1402,11 @@ void tapArticle(int x, int y) {
         const int d = (x - cx) * (x - cx) + 4 * (y - cy) * (y - cy);
         if (d < bestD) { bestD = d; best = h.link; }
     }
-    if (best >= 0) { follow(best); return; }
+    if (best >= 0) { follow(best); return false; }
     // Anywhere else on the page: the left third goes back, the rest on — a book.
     if (x > W / 3) { if (g_page + 1 < g_pageCount) ++g_page; }
     else if (g_page > 0) --g_page;
+    return false;
 }
 
 bool articleBack() {
