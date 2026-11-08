@@ -1234,7 +1234,7 @@ void handleTap(int x, int y) {
                     break;
                 }
                 if (y >= kMapZoom.zoomInY && y < kMapZoom.zoomInY + kMapZoom.size) {
-                    if (mapMpp > 1.0f) mapMpp /= 2.0f;
+                    if (mapMpp > (mapTopoActive ? 0.3f : 1.0f)) mapMpp /= 2.0f;
                     Serial.printf("[map] zoom in -> %.2f m/px\n", mapMpp);
                     ackZoomTap(true);
                     break;
@@ -1732,7 +1732,11 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
             opened = true;
             if (mapMpp == 2.0f) mapMpp = topo::nativeMpp(14, lat);
         }
-        mapMpp = topo::nativeMpp(topo::zoomFor(lat, mapMpp), lat);
+        // Past the closest tiles (z16), two more steps by enlarging them:
+        // 0.7 and 0.4 m/px — a house a thumb wide. Above, snap to a level.
+        const float n16 = topo::nativeMpp(16, lat);
+        if (mapMpp < n16 * 0.75f) mapMpp = mapMpp < n16 * 0.375f ? n16 / 4 : n16 / 2;
+        else mapMpp = topo::nativeMpp(topo::zoomFor(lat, mapMpp), lat);
         map.metersPerPixel = mapMpp;
         rot = 0.0f;
         map.northDeg = 0.0f;
@@ -1741,7 +1745,7 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
     }
     // DOBA: dragged: the view stays north-up and the position moves on the
     // screen (it may leave it); everything is still drawn round it.
-    map.zoomInEnd = map.topo ? topo::zoomFor(lat, mapMpp / 2.0f) == topo::zoomFor(lat, mapMpp) : mapMpp <= 1.0f;
+    map.zoomInEnd = map.topo ? mapMpp <= topo::nativeMpp(16, lat) / 4 * 1.01f : mapMpp <= 1.0f;
     map.zoomOutEnd = mapMpp * 2.0f > mapMaxMpp() * 1.01f;
     if (mapPanned()) {
         map.panned = true;
@@ -3461,7 +3465,7 @@ static void runConsoleLine(char* line) {
         else { Serial.printf("[cmd] unknown screen '%s'\n", arg); return; }
         noteActivity();
     } else if (!strcasecmp(cmd, "zoom")) {
-        if (arg && !strcasecmp(arg, "in") && mapMpp > 1.0f) mapMpp /= 2.0f;
+        if (arg && !strcasecmp(arg, "in") && mapMpp > (mapTopoActive ? 0.3f : 1.0f)) mapMpp /= 2.0f;
         else if (arg && !strcasecmp(arg, "out") && mapMpp < mapMaxMpp()) mapMpp *= 2.0f;
         screen = SCREEN_MAP; noteActivity();
     } else if (!strcasecmp(cmd, "greytest")) {   // DOBA: panel grey levels card

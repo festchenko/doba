@@ -610,14 +610,15 @@ void drawRider(int x, int y, float headingDeg, uint8_t* fb) {
         oy = y + lroundf(lx * s + ly * c);
     };
     int nx, ny, lx, ly, rx, ry, bx, by;
-    rot(24, 0, nx, ny);
-    rot(-15, -13, lx, ly);
-    rot(-15, 13, rx, ry);
-    rot(-8, 0, bx, by);
+    rot(17, 0, nx, ny);
+    rot(-11, -10, lx, ly);
+    rot(-11, 10, rx, ry);
+    rot(-5, 0, bx, by);
 
-    // White halo circle with black ring (design: circled position marker)
-    epd_fill_circle(x, y, 30, 0xFF, fb);
-    for (int r = 28; r <= 30; ++r) epd_draw_circle(x, y, r, 0x00, fb);
+    // DOBA: a small marker that hides little of the map — a white disc just
+    // big enough to carry the arrow, a ring round it.
+    epd_fill_circle(x, y, 20, 0xFF, fb);
+    for (int r = 19; r <= 21; ++r) epd_draw_circle(x, y, r, 0x00, fb);
     epd_fill_triangle(nx, ny, lx, ly, bx, by, 0x00, fb);
     epd_fill_triangle(nx, ny, rx, ry, bx, by, 0x00, fb);
 }
