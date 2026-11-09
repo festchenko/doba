@@ -9,16 +9,16 @@ on:
 jobs:
   build:
     name: Build (ESP32-S3)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: firmware
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
@@ -41,7 +41,7 @@ jobs:
             0x0 $B/bootloader.bin 0x8000 $B/partitions.bin \
             0xe000 $FW/tools/partitions/boot_app0.bin 0x10000 $B/firmware.bin
           cp $B/firmware.bin doba-app.bin
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: doba-firmware
           path: |
@@ -50,12 +50,12 @@ jobs:
 
   sim:
     name: Simulator tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: firmware
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Tools
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q clang protobuf-compiler zlib1g-dev
