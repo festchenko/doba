@@ -15,24 +15,49 @@ import zlib
 IMG_W, IMG_MAX_H = 484, 640      # the article column, the tallest picture on a page
 
 
+def is_drawing(img):
+    """Line art (diagrams, figures, scanned drawings): nearly all of it paper
+    or ink, little in between. Such pictures go to the panel crisp, without
+    the grain dithering gives photos."""
+    hist = img.histogram()
+    total = sum(hist) or 1
+    mid = sum(hist[48:208])
+    return mid / total < 0.14
+
+
 def encode(img, max_w=IMG_W, max_h=IMG_MAX_H):
-    """PIL image -> (dgi bytes, w, h): scaled to fit, 4 greys, dithered."""
-    from PIL import Image, ImageOps
+    """PIL image -> (dgi bytes, w, h): scaled to fit, the panel's 4 greys.
+
+    Drawings: contrast set, sharpened a little, snapped to the nearest grey
+    (edges keep one step of anti-aliasing, lines stay solid). Photos: contrast
+    stretched, mid-tones lifted (e-ink prints dark), sharpened for the
+    downscale, then Floyd-Steinberg so the tones survive four greys."""
+    from PIL import Image, ImageFilter, ImageOps
     if img.mode in ("RGBA", "LA", "P"):
         img = img.convert("RGBA")
         bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
         img = Image.alpha_composite(bg, img)
     img = img.convert("L")
+    drawing = is_drawing(img)
     w, h = img.size
     k = min(1.0, max_w / w, max_h / h)
     if w < 320 and h < 400:          # web thumbnails: a little larger reads better on paper
         k = min(1.6, max_w / w, max_h / h)
     if k != 1.0:
         img = img.resize((max(1, int(w * k)), max(1, int(h * k))), Image.LANCZOS)
-    img = ImageOps.autocontrast(img, cutoff=0.5)
     pal = Image.new("P", (1, 1))
     pal.putpalette([0, 0, 0, 85, 85, 85, 170, 170, 170, 255, 255, 255] + [255] * (252 * 3))
-    q = img.convert("RGB").quantize(palette=pal, dither=Image.Dither.FLOYDSTEINBERG)
+    if drawing:
+        img = ImageOps.autocontrast(img, cutoff=1)
+        img = img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=120, threshold=2))
+        # thin lines a downscale turned grey come back to ink; paper to white
+        img = img.point(lambda v: 0 if v < 96 else 255 if v > 200 else v)
+        q = img.convert("RGB").quantize(palette=pal, dither=Image.Dither.NONE)
+    else:
+        img = ImageOps.autocontrast(img, cutoff=1)
+        img = img.point(lambda v: int(255 * (v / 255.0) ** 0.8))
+        img = img.filter(ImageFilter.UnsharpMask(radius=1.4, percent=90, threshold=3))
+        q = img.convert("RGB").quantize(palette=pal, dither=Image.Dither.FLOYDSTEINBERG)
     w, h = q.size
     data = q.tobytes()
     grey = bytes([0, 5, 10, 15]) + bytes(252)

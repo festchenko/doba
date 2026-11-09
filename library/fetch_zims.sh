@@ -3,6 +3,7 @@
 #
 #   DOBA_BUILD=/Volumes/SSD/doba library/fetch_zims.sh          # download all
 #   DOBA_BUILD=/Volumes/SSD/doba library/fetch_zims.sh convert  # zim -> doba books
+#   DOBA_BUILD=... library/fetch_zims.sh reconvert id...           # again, into <id>.new, then swap
 #
 # Edit BOOKS to taste. Sizes are rough; the converted books are smaller (text only).
 set -euo pipefail
@@ -35,6 +36,35 @@ BOOKS=(
 latest() {   # newest file in a kiwix directory listing with this prefix
   curl -fsL "$MIRROR/$1/" | grep -o "href=\"$2[^\"]*\.zim\"" | sed 's/href="//; s/"$//' | sort | tail -1
 }
+
+if [ "${1:-}" = "reconvert" ]; then
+  shift
+  for want in "$@"; do
+    for b in "${BOOKS[@]}"; do
+      IFS='|' read -r dir prefix id name source <<< "$b"
+      [ "$id" = "$want" ] || continue
+      zim=$(ls "$ZIMS"/"$prefix"*.zim 2>/dev/null | sort | tail -1 || true)
+      [ -n "$zim" ] || { echo "skip $id: no zim"; continue; }
+      echo "== $(date +%H:%M) $id <- $(basename "$zim")"
+      new="$OUT/$id.new"; tmp="$OUT/.src-$id"
+      rm -rf "$new" "$tmp"
+      if python3 nautilus2dir.py "$zim" "$tmp" >/dev/null 2>&1; then
+        python3 docs2doba.py "$tmp" "$new" --name "$name" --source "$source" --titles-from-filenames | tail -1 \
+          && python3 repack_pics.py "$new" --delete | tail -1
+        rm -rf "$tmp"
+      else
+        python3 zim2doba.py "$zim" "$new" --name "$name" --source "$source" --jobs "${JOBS:-2}" | tail -1
+      fi
+      if [ -f "$new/index.dti" ]; then
+        rm -rf "$OUT/$id.old"; mv "$OUT/$id" "$OUT/$id.old" 2>/dev/null || true
+        mv "$new" "$OUT/$id" && rm -rf "$OUT/$id.old" && echo "   $id replaced"
+      else
+        echo "!! $id failed, the old one stays"
+      fi
+    done
+  done
+  exit 0
+fi
 
 if [ "${1:-}" = "convert" ]; then
   for b in "${BOOKS[@]}"; do
