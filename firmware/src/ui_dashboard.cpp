@@ -29,6 +29,7 @@
 #include "doba_ui.h"
 #include "stealth.h"      // DOBA
 #include "milspec.h"      // DOBA
+#include "vfont.h"        // DOBA: font cache stats
 #include "doba_points.h" // DOBA
 #include "doba_dem.h"    // DOBA
 #include "doba_library.h" // DOBA
@@ -4380,9 +4381,15 @@ void task(void*) {
                 case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
                 case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE:
                 case SCREEN_ARTICLE: {   // DOBA
+                    const uint32_t t0 = micros(), ev0 = vf_evictions();
                     doba_ui::render(dobaPage(), s, fb);
                     if (screen == SCREEN_HOME) ui::statusBar(s, fb, doba_ui::title(dobaPage()));
                     else ui::statusBarBack(s, fb, doba_ui::title(dobaPage()));
+                    // DOBA: what drawing the page cost (the panel's own update
+                    // comes after); a font face thrown out means glyphs drawn again.
+                    Serial.printf("[perf] page %d drawn in %lu ms%s\n", (int)dobaPage(),
+                                  (unsigned long)((micros() - t0) / 1000),
+                                  vf_evictions() != ev0 ? " (font cache full)" : "");
                     break;
                 }
                 case SCREEN_SETTINGS: {

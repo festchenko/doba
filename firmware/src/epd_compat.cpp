@@ -21,6 +21,8 @@
 // thirteen; its epdc_* panel shim lives in epd_compat_epdiy.cpp instead.
 #if !defined(ARDUINO) || defined(USE_EPD_PAINTER)
 
+#include <cstring>
+
 namespace {
 
 // Native panel geometry. The framebuffer is always in NATIVE orientation;
@@ -104,12 +106,41 @@ uint8_t doba_get_pixel(int x, int y, const uint8_t* fb) {
     return (uint8_t)(lv << 4 | lv);
 }
 
+// DOBA: a filled rectangle straight into native memory. Any of the four
+// rotations maps a rectangle to a rectangle, so it is clipped once, turned
+// once, and each native row filled with whole bytes (two pixels each) between
+// a nibble at either end — the same pixels as one epd_draw_pixel per pixel,
+// without half a million rotate/read-modify-writes for a full-page clear.
+static void fillNative(int x, int y, int w, int h, uint8_t color, uint8_t* fb) {
+    if (w <= 0 || h <= 0) return;
+    const bool portrait = g_rotation == EPD_ROT_PORTRAIT || g_rotation == EPD_ROT_INVERTED_PORTRAIT;
+    const int RW = portrait ? kNativeH : kNativeW, RH = portrait ? kNativeW : kNativeH;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > RW) w = RW - x;
+    if (y + h > RH) h = RH - y;
+    if (w <= 0 || h <= 0) return;
+    int ax, ay, bx, by;   // two opposite corners, native
+    rotateToNative(x, y, ax, ay);
+    rotateToNative(x + w - 1, y + h - 1, bx, by);
+    const int nx0 = ax < bx ? ax : bx, nx1 = ax < bx ? bx : ax;
+    const int ny0 = ay < by ? ay : by, ny1 = ay < by ? by : ay;
+    const uint8_t lv = color >> 4, both = (uint8_t)(lv | lv << 4);
+    for (int ny = ny0; ny <= ny1; ++ny) {
+        uint8_t* row = &fb[(size_t)ny * kBytesPerRow];
+        int a = nx0, b = nx1;
+        if (a & 1) { row[a >> 1] = (row[a >> 1] & 0x0F) | (uint8_t)(lv << 4); ++a; }
+        if (a <= b && !(b & 1)) { row[b >> 1] = (row[b >> 1] & 0xF0) | lv; --b; }
+        if (a <= b) memset(row + (a >> 1), both, (size_t)((b - a + 1) >> 1));
+    }
+}
+
 void epd_draw_hline(int x, int y, int length, uint8_t color, uint8_t* fb) {
-    for (int i = 0; i < length; ++i) epd_draw_pixel(x + i, y, color, fb);
+    fillNative(x, y, length, 1, color, fb);
 }
 
 void epd_draw_vline(int x, int y, int length, uint8_t color, uint8_t* fb) {
-    for (int i = 0; i < length; ++i) epd_draw_pixel(x, y + i, color, fb);
+    fillNative(x, y, 1, length, color, fb);
 }
 
 // Bresenham, stepping along whichever axis is longer and always left-to-right on
@@ -156,8 +187,7 @@ void epd_draw_line(int x0, int y0, int x1, int y1, uint8_t color, uint8_t* fb) {
 }
 
 void epd_fill_rect(EpdRect rect, uint8_t color, uint8_t* fb) {
-    for (int y = 0; y < rect.height; ++y)
-        epd_draw_hline(rect.x, rect.y + y, rect.width, color, fb);
+    fillNative(rect.x, rect.y, rect.width, rect.height, color, fb);
 }
 
 void epd_draw_rect(EpdRect rect, uint8_t color, uint8_t* fb) {

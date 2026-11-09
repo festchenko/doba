@@ -111,21 +111,7 @@ bool build(int variant) {
     return true;
 }
 
-// Nothing but white within kHalo px (a square; cheap and looks the same).
 bool g_inverted = false;   // drawing on black: the paper is black, the content white
-bool clear(int x, int y, const uint8_t* fb, const EpdRect& r) {
-    for (int dy = -kHalo; dy <= kHalo; ++dy) {
-        const int yy = y + dy;
-        if (yy < r.y || yy >= r.y + r.height) continue;
-        for (int dx = -kHalo; dx <= kHalo; ++dx) {
-            const int xx = x + dx;
-            if (xx < r.x || xx >= r.x + r.width) continue;
-            const uint8_t p = doba_get_pixel(xx, yy, fb);
-            if (g_inverted ? p > 0x0F : p < 0xF0) return false;
-        }
-    }
-    return true;
-}
 
 }  // namespace
 
@@ -137,19 +123,45 @@ void draw(const EpdRect& r0, uint8_t* fb, int variant) {
     if (r.x + r.width > W) r.width = W - r.x;
     if (r.y + r.height > H) r.height = H - r.y;
     // Decide every pixel against the content alone, then draw, so the lines
-    // don't push each other away.
+    // don't push each other away. "Clear" is: no content within kHalo px (a
+    // square, inside the rect). The panel is read once into a row-dilated
+    // mask, so a line pixel costs 2*kHalo+1 byte reads, not (2*kHalo+1)^2
+    // rotated pixel reads — the difference on the ESP32 is most of a frame.
     const int n = r.width * r.height;
+    if (n <= 0) return;
+    uint8_t* near = (uint8_t*)bigAlloc((size_t)n);   // content within kHalo along the row
     uint8_t* put = (uint8_t*)bigAlloc((size_t)(n + 7) / 8);
-    if (!put) return;
+    uint8_t* ink = (uint8_t*)malloc((size_t)r.width);
+    if (!near || !put || !ink) { free(near); free(put); free(ink); return; }
     memset(put, 0, (size_t)(n + 7) / 8);
-    for (int y = r.y; y < r.y + r.height; ++y)
-        for (int x = r.x; x < r.x + r.width; ++x) {
-            const bool idx = getBit(g_index, x, y);
-            if (!idx && !getBit(g_line, x, y)) continue;
-            if (!clear(x, y, fb, r)) continue;
-            const int k = (y - r.y) * r.width + (x - r.x);
+    for (int y = 0; y < r.height; ++y) {
+        for (int x = 0; x < r.width; ++x) {
+            const uint8_t p = doba_get_pixel(r.x + x, r.y + y, fb);
+            ink[x] = g_inverted ? p > 0x0F : p < 0xF0;
+        }
+        // running count of ink in the window [x-kHalo, x+kHalo]
+        uint8_t* row = near + (size_t)y * r.width;
+        int c = 0;
+        for (int x = 0; x < kHalo && x < r.width; ++x) c += ink[x];
+        for (int x = 0; x < r.width; ++x) {
+            if (x + kHalo < r.width) c += ink[x + kHalo];
+            if (x - kHalo - 1 >= 0) c -= ink[x - kHalo - 1];
+            row[x] = c > 0;
+        }
+    }
+    for (int y = 0; y < r.height; ++y)
+        for (int x = 0; x < r.width; ++x) {
+            const int gx = r.x + x, gy = r.y + y;
+            if (!getBit(g_index, gx, gy) && !getBit(g_line, gx, gy)) continue;
+            bool clear = true;
+            const int y0 = y - kHalo < 0 ? 0 : y - kHalo, y1 = y + kHalo >= r.height ? r.height - 1 : y + kHalo;
+            for (int yy = y0; yy <= y1 && clear; ++yy) clear = !near[(size_t)yy * r.width + x];
+            if (!clear) continue;
+            const int k = y * r.width + x;
             put[k >> 3] |= (uint8_t)(1 << (k & 7));
         }
+    free(near);
+    free(ink);
     for (int k = 0; k < n; ++k)
         if (put[k >> 3] >> (k & 7) & 1) {
             const int x = r.x + k % r.width, y = r.y + k / r.width;

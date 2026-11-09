@@ -145,7 +145,7 @@ void traceGlyph(const VfFont* f, const VfGlyph* g, const Xf& xf, Raster& r) {
 
 // --- face cache --------------------------------------------------------------
 
-constexpr int FACE_POOL = 16;
+constexpr int FACE_POOL = 32;   // DOBA: 16 thrashed on page changes (Inter + mono + the ladders)
 constexpr float SIZE_Q = 4.f;   // quantise em size to 1/4 px
 
 struct Face {
@@ -161,6 +161,7 @@ struct Face {
 
 Face g_faces[FACE_POOL];
 uint32_t g_clock = 0;
+uint32_t g_evictions = 0;
 
 void freeFace(Face& f) {
     vfFree(f.glyphs); vfFree(f.done); vfFree(f.arena);
@@ -264,6 +265,7 @@ Face* acquire(const VfFont* font, float scale) {
             if (!victim || !f.font || victim->font) victim = &f;
         }
     }
+    if (victim->font) ++g_evictions;   // a face in use thrown out: its glyphs will be drawn again
     freeFace(*victim);
     Face& f = *victim;
     f.font = font;
@@ -340,6 +342,8 @@ int vf_fit_digit(const VfFont* font, const char* str, int availW, int availH,
 void vf_flush() {
     for (int i = 0; i < FACE_POOL; ++i) freeFace(g_faces[i]);
 }
+
+uint32_t vf_evictions() { return g_evictions; }
 
 size_t vf_cache_bytes() {
     size_t n = 0;

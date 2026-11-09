@@ -197,6 +197,8 @@ void scan() {
 
 // Prefix search in one book, appending to g_results (up to RESULTS in all).
 void searchBook(int bi, const char* key) {
+    const uint32_t t0 = millis();
+    struct Took { uint32_t t; ~Took() { if (millis() - t > 50) Serial.printf("[perf] search %lu ms\n", (unsigned long)(millis() - t)); } } took{t0};
     const Book& b = g_books[bi];
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, b.dir);
@@ -576,6 +578,7 @@ void extractLinks() {
 
 void addRecent(const char* dir, const char* title);
 bool openArticle(const Result& r) {
+    const uint32_t t0 = millis();
     g_note = nullptr;
     if (r.book >= 0 && r.book < g_bookCount) g_book = r.book;
     const Book& b = g_books[g_book];
@@ -606,7 +609,8 @@ bool openArticle(const Result& r) {
     g_toc = false;
     layout();
     g_page = 0;
-    Serial.printf("[lib] open '%s' pages=%d links=%d\n", g_title, g_pageCount, g_linkCount);
+    Serial.printf("[lib] open '%s' pages=%d links=%d in %lu ms\n", g_title, g_pageCount, g_linkCount,
+                  (unsigned long)(millis() - t0));
     addRecent(b.dir, r.title);
     return true;
 }
@@ -1380,6 +1384,7 @@ bool oddLetter(int bi, uint8_t c) {
     return c >= 0x80;
 }
 void findKids(int bi) {
+    struct Took { uint32_t t; ~Took() { if (millis() - t > 50) Serial.printf("[perf] a-z split %lu ms\n", (unsigned long)(millis() - t)); } } took{millis()};
     g_kidCount = 0;
     const Level& lv = g_levels[g_depth - 1];
     if (lv.to - lv.from <= (uint32_t)LIST_MAX) return;

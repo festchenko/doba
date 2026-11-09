@@ -58,5 +58,7 @@ const EpdGlyph* vf_glyph(const EpdFont* font, uint32_t cp);
 
 // Drop every cached face (tests; or when the arena must be reclaimed).
 void vf_flush();
+// How many faces in use were evicted for a new one (the pool thrashing).
+uint32_t vf_evictions();
 // Bytes currently held by rendered glyph bitmaps, all faces.
 size_t vf_cache_bytes();
