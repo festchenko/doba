@@ -1003,7 +1003,7 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
     // DOBA: dragged away from where you are: CENTRE brings the map back.
     if (map.panned) {
         const EpdRect r = {kMapZoom.zoomX, mapCentreY(), kMapZoom.size, kMapZoom.size};
-        epd_fill_rect(r, 0x00, fb);
+        ui::fillRound(r, 10, 0x00, fb);
         const int cx = r.x + r.width / 2, cy = r.y + r.height / 2;
         for (int t = 0; t < 3; ++t) epd_draw_circle(cx, cy, 15 - t, 0xFF, fb);
         epd_fill_circle(cx, cy, 5, 0xFF, fb);

@@ -287,17 +287,16 @@ void drawTarget(const MapScreenData& map, const RideState& s, uint8_t* fb) {
 }
 
 void drawCross(uint8_t* fb) {
-    const int cx = SCREEN_W / 2, cy = kCrossY;
-    for (int t = -1; t <= 1; ++t) {   // white under black, readable on any map
-        epd_fill_rect({cx - 22, cy - 3 + t, 16, 7}, 0xFF, fb);
-        epd_fill_rect({cx + 7, cy - 3 + t, 16, 7}, 0xFF, fb);
-        epd_fill_rect({cx - 3 + t, cy - 22, 7, 16}, 0xFF, fb);
-        epd_fill_rect({cx - 3 + t, cy + 7, 7, 16}, 0xFF, fb);
-    }
-    epd_fill_rect({cx - 20, cy - 1, 14, 3}, 0x00, fb);
-    epd_fill_rect({cx + 7, cy - 1, 14, 3}, 0x00, fb);
-    epd_fill_rect({cx - 1, cy - 20, 3, 14}, 0x00, fb);
-    epd_fill_rect({cx - 1, cy + 7, 3, 14}, 0x00, fb);
+    const int cx = SCREEN_W / 2, cy = kCrossY, g = 6, L = 30;   // gap in the middle, arm length
+    // white under black, so it reads on any map
+    epd_fill_rect({cx - L - 2, cy - 4, L - g + 4, 9}, 0xFF, fb);
+    epd_fill_rect({cx + g - 2, cy - 4, L - g + 4, 9}, 0xFF, fb);
+    epd_fill_rect({cx - 4, cy - L - 2, 9, L - g + 4}, 0xFF, fb);
+    epd_fill_rect({cx - 4, cy + g - 2, 9, L - g + 4}, 0xFF, fb);
+    epd_fill_rect({cx - L, cy - 2, L - g, 5}, 0x00, fb);
+    epd_fill_rect({cx + g, cy - 2, L - g, 5}, 0x00, fb);
+    epd_fill_rect({cx - 2, cy - L, 5, L - g}, 0x00, fb);
+    epd_fill_rect({cx - 2, cy + g, 5, L - g}, 0x00, fb);
 }
 
 // DOBA: the strip under the map, in the calm style: the grid reference big,
