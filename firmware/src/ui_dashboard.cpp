@@ -409,7 +409,7 @@ void renderFarewell(uint8_t* fb) {
         for (float mpp = 16.0f; mpp >= 2.0f; mpp /= 2.0f) {
             if (!map_store::coversView(map.centerLat, map.centerLon, mpp)) continue;
             mapMpp = mpp;
-            map = {};
+            map = MapScreenData();
             buildMapScreenData(s, map, /*finalFrame=*/true);
             break;
         }
@@ -2010,7 +2010,7 @@ void mapPrerenderStep() {
 
 // One full map frame through the cache, as the UI task would make it.
 void mapTestFrame(const RideState& s, MapScreenData& map, uint8_t* fb) {
-    map = {};
+    map = MapScreenData();
     for (int i = 0; i < 3; ++i) map.stripFields[i] = dash_config::mapField(i);
     memset(fb, 0xFF, fbSize);
     mapFullPass = true;
