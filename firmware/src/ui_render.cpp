@@ -189,77 +189,73 @@ static int stealthMark(int rightEdge, int cy, uint8_t fg, uint8_t* fb) {
     return rightEdge - 40;
 }
 
+// DOBA: the light band from the design canvas — no black bar. A sub-page:
+// "‹ Back" on the left (the tap target, x < BACK_W), its name in the middle,
+// clock and battery in grey on the right.
 void statusBarBack(const RideState& s, uint8_t* fb, const char* title) {
     const int W = epd_rotated_display_width();
     const int H = STATUS_H;
-    const uint8_t BG = 0x00, FG = 0xFF;
-    epd_fill_rect({0, 0, W, H}, BG, fb);
-    const int base = 42;
-    // Back: a bold chevron and a hairline, the whole left 96 px is the target.
-    const int cx = 30, cy = H / 2;
-    for (int t = -3; t <= 3; ++t) {
-        epd_draw_line(cx + 14 + t, cy - 16, cx + t, cy, FG, fb);
-        epd_draw_line(cx + t, cy, cx + 14 + t, cy + 16, FG, fb);
+    const uint8_t FG = 0x00, DIM = GREY;
+    epd_fill_rect({0, 0, W, H}, 0xFF, fb);
+    const int base = 40;
+    const EpdFont* f = ui::font(ui::F_SMALL);
+    const EpdFont* fb2 = ui::font(ui::F_LABEL);
+    // a thin chevron, then the word
+    const int cx = 22, cy = base - 8;
+    for (int t = 0; t < 2; ++t) {
+        epd_draw_line(cx + 9 + t, cy - 10, cx + t, cy, FG, fb);
+        epd_draw_line(cx + t, cy, cx + 9 + t, cy + 10, FG, fb);
     }
-    text(&Arial_L, cx + 24, base, "BACK", fb, EPD_DRAW_ALIGN_LEFT, FG);
-    epd_fill_rect({BACK_W + 20, 14, 2, H - 28}, FG, fb);
-    if (title && title[0]) text(&Arial_B, (BACK_W + 22 + W - 120) / 2, base, title, fb, EPD_DRAW_ALIGN_CENTER, FG);
+    text(fb2, cx + 18, base, "Back", fb, EPD_DRAW_ALIGN_LEFT, FG);
     char clock[10];
     formatClock(clock, sizeof(clock), s);
     char right[32];
-    if (s.batteryPercent == 0) snprintf(right, sizeof right, "%s  --%%", clock);
-    else snprintf(right, sizeof right, "%s  %u%%%s", clock, s.batteryPercent, s.charging ? "+" : "");
-    text(&Arial_L, W - 14, base, right, fb, EPD_DRAW_ALIGN_RIGHT, FG);
-    stealthMark(W - 14 - textWidth(&Arial_L, right) - 6, H / 2, FG, fb);
+    if (s.batteryPercent == 0) snprintf(right, sizeof right, "%s", clock);
+    else snprintf(right, sizeof right, "%s · %u%%%s", clock, s.batteryPercent, s.charging ? "+" : "");
+    text(f, W - 18, base, right, fb, EPD_DRAW_ALIGN_RIGHT, DIM);
+    const int rx = W - 18 - textWidth(f, right) - 10;
+    if (title && title[0]) {
+        // the name, between the back word and the clock, cut if it must be
+        char t[48];
+        sentence(title, t, sizeof t);
+        const int lx = BACK_W + 16, room = rx - lx - 10;
+        while (textWidth(fb2, t) > room && strlen(t) > 3) {
+            size_t n = strlen(t) - 4;
+            while (n > 0 && ((uint8_t)t[n] & 0xC0) == 0x80) --n;
+            memcpy(t + n, "...", 4);
+        }
+        text(fb2, (lx + rx) / 2, base, t, fb, EPD_DRAW_ALIGN_CENTER, FG);
+    }
+    stealthMark(rx, cy, FG, fb);
 }
 
 void statusBar(const RideState& s, uint8_t* fb, const char* title) {
     const int W = epd_rotated_display_width();
     const int H = STATUS_H;
-    const uint8_t BG = 0x00, FG = 0xFF;
-    epd_fill_rect({0, 0, W, H}, BG, fb);
+    const uint8_t FG = 0x00, DIM = GREY;
+    epd_fill_rect({0, 0, W, H}, 0xFF, fb);
     const int base = 42;
-
     char clock[10];
     formatClock(clock, sizeof(clock), s);
-    text(&Arial_B, 14, base, clock, fb, EPD_DRAW_ALIGN_LEFT, FG);
-    int x = 14 + textWidth(&Arial_B, clock) + 16;
-
-    // Left cluster, only when the middle is not a page title.
-    if (!title) {
-        char gps[16];
-        if (s.gpsFix) snprintf(gps, sizeof(gps), "GPS %u", (unsigned)s.satellites);
-        else snprintf(gps, sizeof(gps), "NO FIX");
-        text(&Arial_L, x, base, gps, fb, EPD_DRAW_ALIGN_LEFT, FG);
-        x += textWidth(&Arial_L, gps) + 14;
-        const char* flag = nullptr;
-        if (s.sdCard == SD_CARD_UNREADABLE) flag = "SD ERR";
-        else if (s.sdCard != SD_CARD_OK) flag = "NO SD";
-        else if (s.recording && s.cardFull) flag = "SD FULL";
-        else if (s.ridePaused) flag = "PAUSE";
-        else if (s.recording) flag = "REC";
-        if (flag) {
-            // Inverted chip: white box, black word — the one thing to notice.
-            const int w = textWidth(&Arial_L, flag) + 12;
-            epd_fill_rect({x, 18, w, 30}, FG, fb);
-            text(&Arial_L, x + 6, base, flag, fb, EPD_DRAW_ALIGN_LEFT, BG);
-            x += w + 10;
-        }
-        if (s.phoneConnected) text(&Arial_L, x, base, "LINK", fb, EPD_DRAW_ALIGN_LEFT, FG);
-    } else if (title[0]) {
-        char titled[32];
-        if (s.ridePaused) {
-            snprintf(titled, sizeof(titled), "%s / PAUSE", title);
-            title = titled;
-        }
-        text(&Arial_B, W / 2, base, title, fb, EPD_DRAW_ALIGN_CENTER, FG);
-    }
-
-    char bat[16];
-    if (s.batteryPercent == 0) snprintf(bat, sizeof(bat), "BAT --%%");
-    else snprintf(bat, sizeof(bat), "BAT %u%%%s", s.batteryPercent, s.charging ? "+" : "");
-    text(&Arial_B, W - 14, base, bat, fb, EPD_DRAW_ALIGN_RIGHT, FG);
-    stealthMark(W - 14 - textWidth(&Arial_B, bat) - 6, H / 2, FG, fb);
+    const EpdFont* cf = vf_face_digit(VF_MONO, 18);
+    text(cf, 26, base, clock, fb, EPD_DRAW_ALIGN_LEFT, FG);
+    const EpdFont* f = ui::font(ui::F_SMALL);
+    // right: what matters about the device, in grey, worst news first
+    char right[64];
+    const char* flag = nullptr;
+    if (s.sdCard == SD_CARD_UNREADABLE) flag = "SD error";
+    else if (s.sdCard != SD_CARD_OK) flag = "No SD";
+    char gps[16];
+    if (s.gpsFix) snprintf(gps, sizeof gps, "GPS %u", (unsigned)s.satellites);
+    else snprintf(gps, sizeof gps, "No fix");
+    char bat[12];
+    if (s.batteryPercent == 0) snprintf(bat, sizeof bat, "--%%");
+    else snprintf(bat, sizeof bat, "%u%%%s", s.batteryPercent, s.charging ? "+" : "");
+    if (title && title[0]) snprintf(right, sizeof right, "%s · %s", title, bat);
+    else if (flag) snprintf(right, sizeof right, "%s · %s · %s", flag, gps, bat);
+    else snprintf(right, sizeof right, "%s · %s", gps, bat);
+    text(f, W - 26, base, right, fb, EPD_DRAW_ALIGN_RIGHT, flag ? FG : DIM);
+    stealthMark(W - 26 - textWidth(f, right) - 10, base - 8, FG, fb);
 }
 
 void statusBarOtp(const RideState& s, uint8_t* fb, const char* title) {
@@ -4068,11 +4064,66 @@ void ui_render_grey_test(uint8_t* fb) {
 }
 
 
+void ui::fillRound(const EpdRect& r, int rad, uint8_t color, uint8_t* fb) {
+    rad = std::max(0, std::min(rad, std::min(r.width, r.height) / 2));
+    if (!rad) { epd_fill_rect(r, color, fb); return; }
+    epd_fill_rect({r.x + rad, r.y, r.width - 2 * rad, r.height}, color, fb);
+    epd_fill_rect({r.x, r.y + rad, rad, r.height - 2 * rad}, color, fb);
+    epd_fill_rect({r.x + r.width - rad, r.y + rad, rad, r.height - 2 * rad}, color, fb);
+    epd_fill_circle(r.x + rad, r.y + rad, rad, color, fb);
+    epd_fill_circle(r.x + r.width - rad - 1, r.y + rad, rad, color, fb);
+    epd_fill_circle(r.x + rad, r.y + r.height - rad - 1, rad, color, fb);
+    epd_fill_circle(r.x + r.width - rad - 1, r.y + r.height - rad - 1, rad, color, fb);
+}
+void ui::frameRound(const EpdRect& r, int rad, int t, uint8_t* fb, uint8_t color, uint8_t inside) {
+    fillRound(r, rad, color, fb);
+    fillRound({r.x + t, r.y + t, r.width - 2 * t, r.height - 2 * t}, rad - t, inside, fb);
+}
+
+const char* ui::sentence(const char* in, char* out, size_t n) {
+    snprintf(out, n, "%s", in ? in : "");
+    for (const char* c = out; *c; ++c) if (*c >= 'a' && *c <= 'z') return out;   // already mixed
+    static const char* const kKeep[] = {"GPS", "USB", "SOS", "UTC", "MGRS", "EU", "UA", "US", "RU", "BT",
+                                        "SD", "LED", "ID", "OK", "AZ", "DEM", "MHZ", "LORA", "QR", "DM", "UK"};
+    bool first = true;
+    for (char* w = out; *w;) {
+        if (!((*w >= 'A' && *w <= 'Z') || (*w >= '0' && *w <= '9'))) { ++w; continue; }
+        char* e = w;
+        while ((*e >= 'A' && *e <= 'Z') || (*e >= '0' && *e <= '9')) ++e;
+        bool keep = false;
+        for (const char* k : kKeep)
+            if ((size_t)(e - w) == strlen(k) && !strncmp(w, k, e - w)) keep = true;
+        for (char* c = w; c < e && !keep; ++c)
+            if (*c >= '0' && *c <= '9') keep = true;   // "6400", "EU_868": codes
+        if (*e == '_') keep = true;
+        if (!keep)
+            for (char* c = (first ? w + 1 : w); c < e; ++c) if (*c >= 'A' && *c <= 'Z') *c += 32;
+        first = false;
+        w = e;
+    }
+    return out;
+}
+
+const EpdFont* ui::monoFont(int px) {
+#ifdef VFONT
+    return vf_face_digit(VF_MONO, px);
+#else
+    return &Arial_B;
+#endif
+}
+const EpdFont* ui::valueFont(int px) {
+#ifdef VFONT
+    return vf_face_digit(VF_VALUES, px);
+#else
+    return &Impact_V;
+#endif
+}
+
 // DOBA: see ui_render.h.
 const EpdFont* ui::font(ui::FontRole r) {
     switch (r) {
 #ifdef VFONT
-        case F_TINY:   return vf_face_digit(VF_LABELS, 13);   // DOBA: 11 was hard to read
+        case F_TINY:   return vf_face_digit(VF_LABELS, 11.5f);   // DOBA: Inter, small grey lines
 #else
         case F_TINY:   return &Arial_L;
 #endif
@@ -4086,7 +4137,17 @@ const EpdFont* ui::font(ui::FontRole r) {
         case F_BODY:   return &ArialBold_14;
         case F_BODY_H: return &ArialBold_20;
 #endif
+#ifdef VFONT
+        case F_TITLE:  return vf_face_digit(VF_STRONG, 21);   // DOBA: headings in Inter
+        case F_MONO:   return vf_face_digit(VF_MONO, 15);     // coordinates, times
+        case F_H1:     return vf_face_digit(VF_STRONG, 28);
+        case F_STRONG: return vf_face_digit(VF_STRONG, 13);
+#else
+        case F_H1:     return &Impact_T;
+        case F_STRONG: return &Arial_B;
         case F_TITLE:  return &Impact_T;
+        case F_MONO:   return &Arial_B;
+#endif
         case F_BIG:    return &Impact_V;
     }
     return &Arial_B;

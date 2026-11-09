@@ -13,7 +13,7 @@ namespace topo_bg {
 
 // Light grey on the panel's 4-level LUT (8-12 = light). Check with `greytest`
 // on the real glass; if light greys vanish there, drop to 0x77.
-constexpr uint8_t kLine  = 0xAA;
+constexpr uint8_t kLine  = 0xBB;
 constexpr uint8_t kIndex = 0xAA;   // index contours: same tone, 2 px wide
 constexpr int     kHalo  = 3;      // px kept clear round drawn content
 

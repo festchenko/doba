@@ -48,9 +48,10 @@ bool hit(const EpdRect& r, int x, int y) {
 }
 
 void button(const EpdRect& r, const char* label, bool dark, uint8_t* fb) {
-    if (dark) epd_fill_rect(r, INK, fb);
-    else frame(r, 3, fb);
-    ui::text(ui::font(ui::F_LABEL), r.x + r.width / 2, r.y + r.height / 2 + 10, label, fb,
+    if (dark) ui::fillRound(r, 8, INK, fb);
+    else ui::frameRound(r, 8, 2, fb);
+    char l[48];
+    ui::text(ui::font(ui::F_LABEL), r.x + r.width / 2, r.y + r.height / 2 + 10, ui::sentence(label, l, sizeof l), fb,
              EPD_DRAW_ALIGN_CENTER, dark ? PAPER : INK);
 }
 
@@ -96,24 +97,25 @@ struct Tile { EpdRect r; const char* title; Go go; };
 void sosSubtitle(char* out, size_t n);
 void renderStealthBar(uint8_t* fb);
 void sunSubtitle(const RideState& s, char* out, size_t n);
-constexpr int TILE_GAP = 10;
-constexpr int TILE_W = (W - 3 * TILE_GAP) / 2;
-constexpr int STEALTH_H = 82;
-constexpr int TILE_H = (H - TOP - STEALTH_H - 6 * TILE_GAP) / 4;
-const EpdRect kStealthBar = {TILE_GAP, H - TILE_GAP - STEALTH_H, W - 2 * TILE_GAP, STEALTH_H};
+// The design canvas's home: 24 px margins, 14 px gaps, rounded tiles.
+constexpr int MARGIN = 24, TILE_GAP = 14;
+constexpr int TILE_W = (W - 2 * MARGIN - TILE_GAP) / 2;
+constexpr int STEALTH_H = 72;
+constexpr int TILE_TOP = TOP + 6;
+constexpr int TILE_H = (H - 24 - STEALTH_H - TILE_GAP - TILE_TOP - 3 * TILE_GAP) / 4;
+const EpdRect kStealthBar = {MARGIN, H - 24 - STEALTH_H, W - 2 * MARGIN, STEALTH_H};
 uint32_t g_stealthOffAsk = 0;   // first tap on a lit stealth bar: ask again
 
 EpdRect tileRect(int col, int row) {
-    return {TILE_GAP + col * (TILE_W + TILE_GAP), TOP + TILE_GAP + row * (TILE_H + TILE_GAP),
-            TILE_W, TILE_H};
+    return {MARGIN + col * (TILE_W + TILE_GAP), TILE_TOP + row * (TILE_H + TILE_GAP), TILE_W, TILE_H};
 }
 
 // DOBA is for survival, not a navigator: no routes, no recorded tracks.
 const Tile kTiles[8] = {
-    {tileRect(0, 0), "MAP", TO_MAP},         {tileRect(1, 0), "POSITION", TO_POINTS},
-    {tileRect(0, 1), "LIBRARY", TO_LIBRARY}, {tileRect(1, 1), "COMMS", TO_COMMS},
-    {tileRect(0, 2), "SOS", TO_SOS},         {tileRect(1, 2), "SUN", TO_SUN},
-    {tileRect(0, 3), "SETTINGS", TO_SETUP},  {tileRect(1, 3), "POWER", TO_POWER},
+    {tileRect(0, 0), "Map", TO_MAP},         {tileRect(1, 0), "Position", TO_POINTS},
+    {tileRect(0, 1), "Library", TO_LIBRARY}, {tileRect(1, 1), "Comms", TO_COMMS},
+    {tileRect(0, 2), "SOS", TO_SOS},         {tileRect(1, 2), "Sun", TO_SUN},
+    {tileRect(0, 3), "Settings", TO_SETUP},  {tileRect(1, 3), "Power", TO_POWER},
 };
 
 void renderHome(const RideState& s, uint8_t* fb) {
@@ -124,15 +126,14 @@ void renderHome(const RideState& s, uint8_t* fb) {
         // SOS is always the one black tile: found without reading. Sending, it
         // gets a white inner ring as well.
         const bool sos = t.go == TO_SOS, dark = sos;
-        if (dark) epd_fill_rect(t.r, INK, fb); else frame(t.r, 3, fb);
+        if (dark) ui::fillRound(t.r, 8, INK, fb); else ui::frameRound(t.r, 8, 2, fb);
         if (sos && sosActive()) {
             const EpdRect in = {t.r.x + 8, t.r.y + 8, t.r.width - 16, t.r.height - 16};
-            epd_fill_rect(in, PAPER, fb);
-            epd_fill_rect({in.x + 5, in.y + 5, in.width - 10, in.height - 10}, INK, fb);
+            ui::frameRound(in, 5, 4, fb, PAPER, INK);
         }
         const uint8_t fg = dark ? PAPER : INK;
-        const char* title = sos && sosActive() ? "SOS ON" : t.title;
-        ui::text(ui::font(ui::F_TITLE), t.r.x + 16, t.r.y + 52, title, fb, EPD_DRAW_ALIGN_LEFT, fg);
+        const char* title = sos && sosActive() ? "SOS on" : t.title;
+        ui::text(ui::font(ui::F_TITLE), t.r.x + 18, t.r.y + 46, title, fb, EPD_DRAW_ALIGN_LEFT, fg);
         sub[0] = 0;
         switch (t.go) {
             case TO_MAP: snprintf(sub, sizeof sub, "topo + MGRS grid"); break;
@@ -168,18 +169,22 @@ void renderHome(const RideState& s, uint8_t* fb) {
             default: break;
         }
         // Subtitle may be long (MGRS): shrink to fit the tile.
-        const EpdFont* sf = ui::font(ui::F_SMALL);
-        if (ui::textWidth(sf, sub) > t.r.width - 32) sf = ui::font(ui::F_TINY);
-        ui::text(sf, t.r.x + 16, t.r.y + t.r.height - 24, sub, fb, EPD_DRAW_ALIGN_LEFT, fg);
+        const bool mono = t.go == TO_POINTS && sub[0] >= '0' && sub[0] <= '9';   // a grid reference
+        const EpdFont* sf = mono ? ui::font(ui::F_MONO) : ui::font(ui::F_SMALL);
+        if (ui::textWidth(sf, sub) > t.r.width - 36) sf = ui::font(ui::F_TINY);
+        ui::text(sf, t.r.x + 18, t.r.y + t.r.height - 20, sub, fb, EPD_DRAW_ALIGN_LEFT, dark ? PAPER : 0x30);
         // Unread badge on COMMS.
         if (t.go == TO_COMMS && mesh_service::enabled() && mesh_service::unreadCount() > 0) {
-            epd_fill_circle(t.r.x + t.r.width - 34, t.r.y + 36, 18, INK, fb);
+            epd_fill_circle(t.r.x + t.r.width - 30, t.r.y + 34, 16, INK, fb);
             char nb[8];
             snprintf(nb, sizeof nb, "%d", mesh_service::unreadCount() > 99 ? 99 : mesh_service::unreadCount());
-            ui::text(ui::font(ui::F_SMALL), t.r.x + t.r.width - 34, t.r.y + 44, nb, fb,
+            ui::text(ui::font(ui::F_SMALL), t.r.x + t.r.width - 30, t.r.y + 41, nb, fb,
                      EPD_DRAW_ALIGN_CENTER, PAPER);
         }
     }
+    // the contour lines inside the light tiles only: one map, seen through them
+    for (const Tile& t : kTiles)
+        if (t.go != TO_SOS) topo_bg::draw({t.r.x + 3, t.r.y + 3, t.r.width - 6, t.r.height - 6}, fb, 0);
     renderStealthBar(fb);
 }
 
@@ -189,20 +194,17 @@ void renderStealthBar(uint8_t* fb) {
     const EpdRect r = kStealthBar;
     const bool on = stealth::active();
     const bool asking = on && g_stealthOffAsk && millis() - g_stealthOffAsk < 5000;
-    if (on) epd_fill_rect(r, INK, fb); else frame(r, 3, fb);
+    if (on) ui::fillRound(r, 8, INK, fb); else ui::frameRound(r, 8, 2, fb);
     const uint8_t fg = on ? PAPER : INK;
-    // an eye, crossed out when hidden
-    const int ex = r.x + 52, ey = r.y + r.height / 2;
-    for (int t = 0; t < 3; ++t) {
-        epd_draw_circle(ex, ey, 14 + t, fg, fb);
-    }
-    epd_fill_circle(ex, ey, 6, fg, fb);
-    if (on) for (int t = -2; t <= 2; ++t) epd_draw_line(ex - 24, ey + 20 + t, ex + 24, ey - 20 + t, fg, fb);
-    ui::text(ui::font(ui::F_TITLE), r.x + 96, r.y + 40, on ? "STEALTH ON" : "STEALTH", fb, EPD_DRAW_ALIGN_LEFT, fg);
-    const char* sub = asking ? "tap again to go loud" :
-                      on ? (stealth::listen() ? "silent, still listening" : "radio, BT, light off")
-                         : "tap to go silent";
-    ui::text(ui::font(ui::F_SMALL), r.x + 96, r.y + r.height - 14, sub, fb, EPD_DRAW_ALIGN_LEFT, fg);
+    ui::text(ui::font(ui::F_KEY), r.x + 20, r.y + 34, on ? "Stealth on" : "Stealth", fb, EPD_DRAW_ALIGN_LEFT, fg);
+    const char* sub = asking ? "Tap again to go loud" :
+                      on ? (stealth::listen() ? "Silent, still listening" : "Radio, Bluetooth and light off")
+                         : "Radio and light off, screen dim";
+    ui::text(ui::font(ui::F_SMALL), r.x + 20, r.y + r.height - 14, sub, fb, EPD_DRAW_ALIGN_LEFT, on ? PAPER : ui::GREY);
+    // the switch, its knob where the state is
+    const EpdRect sw = {r.x + r.width - 82, r.y + r.height / 2 - 17, 60, 34};
+    ui::frameRound(sw, 17, 2, fb, fg, on ? INK : PAPER);
+    epd_fill_circle(on ? sw.x + sw.width - 17 : sw.x + 17, sw.y + 17, 11, fg, fb);
 }
 
 Go tapHome(int x, int y) {
@@ -223,7 +225,8 @@ const char* onOff(bool b) { return b ? "ON" : "OFF"; }
 
 // A page row: caption on the left, value on the right, ruled underneath.
 void row(int y, int h, const char* caption, const char* value, uint8_t* fb, bool hint = true) {
-    ui::text(ui::font(ui::F_LABEL), 18, y + h / 2 + 10, caption, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char cap[48];
+    ui::text(ui::font(ui::F_LABEL), 24, y + h / 2 + 10, ui::sentence(caption, cap, sizeof cap), fb, EPD_DRAW_ALIGN_LEFT, INK);
     char v[48];
     snprintf(v, sizeof v, hint ? "%s  >" : "%s", value);
     // The value takes what the caption leaves; a long one steps down a size.
@@ -231,8 +234,8 @@ void row(int y, int h, const char* caption, const char* value, uint8_t* fb, bool
     const EpdFont* f = ui::font(ui::F_KEY);
     if (ui::textWidth(f, v) > room) f = ui::font(ui::F_LABEL);
     if (ui::textWidth(f, v) > room) f = ui::font(ui::F_SMALL);
-    ui::text(f, W - 18, y + h / 2 + 12, v, fb, EPD_DRAW_ALIGN_RIGHT, INK);
-    epd_fill_rect({10, y + h - 2, W - 20, 2}, INK, fb);
+    ui::text(f, W - 24, y + h / 2 + 12, v, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+    epd_fill_rect({24, y + h - 1, W - 48, 1}, ui::HAIR, fb);
 }
 
 // The current position, if there is one worth using.
@@ -273,31 +276,32 @@ void shortName(const char* lng, char* out, size_t n) {
 // --- controls: a switch, segments, a stepper -----------------------------------
 // One visual language for every setting: what you see is what a tap does.
 
-constexpr int CTRL_W = 250, CTRL_H = 56, CTRL_X = W - 14 - CTRL_W;
+constexpr int CTRL_W = 250, CTRL_H = 52, CTRL_X = W - 24 - CTRL_W;
 
 void section(int y, const char* name, uint8_t* fb) {
-    ui::text(ui::font(ui::F_TINY), 16, y + 24, name, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    epd_fill_rect({16 + ui::textWidth(ui::font(ui::F_TINY), name) + 10, y + 16, W - 46 - ui::textWidth(ui::font(ui::F_TINY), name), 2}, INK, fb);
+    ui::text(ui::font(ui::F_TINY), 24, y + 26, name, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
 
 void caption(int y, int h, const char* name, const char* hint, uint8_t* fb) {
-    ui::text(ui::font(ui::F_LABEL), 16, y + (hint ? h / 2 - 2 : h / 2 + 10), name, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    if (hint) ui::text(ui::font(ui::F_TINY), 16, y + h / 2 + 26, hint, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char n[48];
+    ui::text(ui::font(ui::F_LABEL), 24, y + (hint ? h / 2 - 2 : h / 2 + 10), ui::sentence(name, n, sizeof n), fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (hint) ui::text(ui::font(ui::F_TINY), 24, y + h / 2 + 24, hint, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
 
 // n labels side by side, the chosen one filled.
 void segments(int y, int h, const char* const* labels, int n, int sel, uint8_t* fb, int x0 = CTRL_X, int w = CTRL_W) {
     const int top = y + (h - CTRL_H) / 2;
-    frame({x0, top, w, CTRL_H}, 3, fb);
+    ui::frameRound({x0, top, w, CTRL_H}, 8, 2, fb);
     for (int i = 0; i < n; ++i) {
         const int sx = x0 + w * i / n, sw = w * (i + 1) / n - w * i / n;
-        if (i == sel) epd_fill_rect({sx, top, sw, CTRL_H}, INK, fb);
-        else if (i) epd_fill_rect({sx, top + 8, 2, CTRL_H - 16}, INK, fb);
+        if (i == sel) ui::fillRound({sx + 4, top + 4, sw - 8, CTRL_H - 8}, 6, INK, fb);
+        else if (i && i != sel + 1) epd_fill_rect({sx, top + 12, 1, CTRL_H - 24}, ui::HAIR, fb);
         // One size for the whole control: the smaller one if any label needs it.
         const EpdFont* lf = ui::font(ui::F_SMALL);
         for (int j = 0; j < n; ++j)
             if (ui::textWidth(ui::font(ui::F_SMALL), labels[j]) > w / n - 12) lf = ui::font(ui::F_TINY);
-        ui::text(lf, sx + sw / 2, top + CTRL_H / 2 + (lf == ui::font(ui::F_TINY) ? 6 : 9), labels[i], fb, EPD_DRAW_ALIGN_CENTER,
+        char lb[24];
+        ui::text(lf, sx + sw / 2, top + CTRL_H / 2 + (lf == ui::font(ui::F_TINY) ? 6 : 9), ui::sentence(labels[i], lb, sizeof lb), fb, EPD_DRAW_ALIGN_CENTER,
                  i == sel ? PAPER : INK);
     }
 }
@@ -310,12 +314,19 @@ int segmentHit(int x, int n, int x0 = CTRL_X, int w = CTRL_W) {
 // "‹  value  ›": the halves step back and forward.
 void stepper(int y, int h, const char* value, uint8_t* fb) {
     const int top = y + (h - CTRL_H) / 2;
-    frame({CTRL_X, top, CTRL_W, CTRL_H}, 3, fb);
-    epd_fill_rect({CTRL_X + 52, top + 8, 2, CTRL_H - 16}, INK, fb);
-    epd_fill_rect({CTRL_X + CTRL_W - 54, top + 8, 2, CTRL_H - 16}, INK, fb);
-    ui::text(ui::font(ui::F_KEY), CTRL_X + 26, top + CTRL_H / 2 + 11, "<", fb, EPD_DRAW_ALIGN_CENTER, INK);
-    ui::text(ui::font(ui::F_KEY), CTRL_X + CTRL_W - 26, top + CTRL_H / 2 + 11, ">", fb, EPD_DRAW_ALIGN_CENTER, INK);
-    ui::text(ui::font(ui::F_SMALL), CTRL_X + CTRL_W / 2, top + CTRL_H / 2 + 9, value, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    ui::frameRound({CTRL_X, top, CTRL_W, CTRL_H}, 8, 2, fb);
+    epd_fill_rect({CTRL_X + 52, top + 12, 1, CTRL_H - 24}, ui::HAIR, fb);
+    epd_fill_rect({CTRL_X + CTRL_W - 53, top + 12, 1, CTRL_H - 24}, ui::HAIR, fb);
+    const int cy = top + CTRL_H / 2;
+    for (int t = -1; t <= 1; ++t) {
+        const int lx = CTRL_X + 26, rx = CTRL_X + CTRL_W - 26;
+        epd_draw_line(lx + 4 + t, cy - 9, lx - 4 + t, cy, INK, fb);
+        epd_draw_line(lx - 4 + t, cy, lx + 4 + t, cy + 9, INK, fb);
+        epd_draw_line(rx - 4 + t, cy - 9, rx + 4 + t, cy, INK, fb);
+        epd_draw_line(rx + 4 + t, cy, rx - 4 + t, cy + 9, INK, fb);
+    }
+    char v[32];
+    ui::text(ui::font(ui::F_SMALL), CTRL_X + CTRL_W / 2, top + CTRL_H / 2 + 8, ui::sentence(value, v, sizeof v), fb, EPD_DRAW_ALIGN_CENTER, INK);
 }
 int stepperHit(int x) {   // -1, +1, or 0 (the middle: also forward)
     if (x < CTRL_X - 10) return 0;
@@ -435,13 +446,13 @@ void renderSetup(const RideState& s, uint8_t* fb) {
             case R_MORE: {
                 caption(y, SROW_H, "MORE", "USB, GPS, radio", fb);
                 const int top = y + (SROW_H - CTRL_H) / 2;
-                frame({CTRL_X, top, CTRL_W, CTRL_H}, 1, fb);
-                ui::text(ui::font(ui::F_SMALL), CTRL_X + CTRL_W / 2, top + CTRL_H / 2 + 9, "OPEN  >", fb,
+                ui::frameRound({CTRL_X, top, CTRL_W, CTRL_H}, 8, 2, fb);
+                ui::text(ui::font(ui::F_SMALL), CTRL_X + CTRL_W / 2, top + CTRL_H / 2 + 8, "Open  \xE2\x80\xBA", fb,
                          EPD_DRAW_ALIGN_CENTER, INK);
                 break;
             }
         }
-        epd_fill_rect({16, y + SROW_H - 1, W - 32, 1}, INK, fb);
+        epd_fill_rect({24, y + SROW_H - 1, W - 48, 1}, ui::HAIR, fb);
     }
     char f[64];
     snprintf(f, sizeof f, "%d nodes heard · settings save at once", mesh_service::nodeCount());
@@ -531,11 +542,13 @@ constexpr int MAX_SEEN = 24;
 Seen g_seen[MAX_SEEN];
 int g_seenCount = 0;
 
-constexpr int TAB_Y = TOP + 8, TAB_H = 56, LIST_Y = TOP + 76, ROW_H = 100;
-constexpr int BAR_Y = H - 92, BAR_H = 80;
-const EpdRect kRadioOn = {120, 420, 300, 96};
-const EpdRect kPrev = {12, BAR_Y, 110, BAR_H};
-const EpdRect kNext = {W - 122, BAR_Y, 110, BAR_H};
+// The design canvas's comms: a big "Comms", the radio in a line, the tabs as
+// words, the chats as rows.
+constexpr int TAB_Y = TOP + 96, TAB_H = 46, LIST_Y = TOP + 150, ROW_H = 96;
+constexpr int BAR_Y = H - 80, BAR_H = 56;
+const EpdRect kRadioOn = {24, TOP + 260, W - 48, 64};
+const EpdRect kPrev = {W - 24 - 56 - 12 - 56, H - 78, 56, 52};
+const EpdRect kNext = {W - 24 - 56, H - 78, 56, 52};
 const EpdRect kQuick = {130, BAR_Y, 120, BAR_H};
 const EpdRect kWrite = {258, BAR_Y, 150, BAR_H};
 const EpdRect kOlder = {12, BAR_Y, 110, BAR_H};
@@ -564,7 +577,7 @@ void nameOf(uint32_t num, char* out, size_t n) {
 }
 void chatTitle(uint8_t ch, uint32_t dm, char* out, size_t n) {
     if (dm) { nameOf(dm, out, n); return; }
-    if (ch == 0) { snprintf(out, n, "EVERYONE"); return; }
+    if (ch == 0) { snprintf(out, n, "Everyone"); return; }
     mesh_service::ChannelInfo ci;
     if (mesh_service::channelAt(ch, ci) && ci.name[0]) snprintf(out, n, "# %s", ci.name);
     else snprintf(out, n, "# channel %u", (unsigned)ch);
@@ -629,20 +642,35 @@ int collectChats(Chat* out) {
     return n;
 }
 
+void chevButton(const EpdRect& r, bool live, bool vertical, int d, uint8_t* fb);
+void commsHead(uint8_t* fb) {
+    ui::text(ui::font(ui::F_H1), 24, TOP + 44, "Comms", fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char sub[96];
+    snprintf(sub, sizeof sub, "Mesh radio \xC2\xB7 %s \xC2\xB7 %d heard", mesh_service::presetName(), mesh_service::nodeCount());
+    ui::text(ui::font(ui::F_SMALL), 24, TOP + 78, sub, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+}
 void tabs(uint8_t* fb) {
+    commsHead(fb);
     char nodes[24];
-    snprintf(nodes, sizeof nodes, "NODES  %d", mesh_service::nodeCount());
-    const char* const l[] = {"CHATS", nodes};
-    segments(TAB_Y, TAB_H, l, 2, g_cv == CV_NODES ? 1 : 0, fb, 12, W - 24);
+    snprintf(nodes, sizeof nodes, "Nodes %d", mesh_service::nodeCount());
+    const char* const l[] = {"Chats", nodes};
+    int x = 28;
+    for (int t = 0; t < 2; ++t) {
+        const bool on = (g_cv == CV_NODES) == (t == 1);
+        const int w = ui::textWidth(ui::font(ui::F_LABEL), l[t]);
+        ui::text(ui::font(ui::F_LABEL), x, TAB_Y + 26, l[t], fb, EPD_DRAW_ALIGN_LEFT, on ? INK : ui::GREY);
+        if (on) epd_fill_rect({x, TAB_Y + 36, w, 3}, INK, fb);
+        x += w + 32;
+    }
 }
 
 void pager(int page, int pages, uint8_t* fb) {
     if (pages <= 1) return;
-    button(kPrev, "<", false, fb);
-    button(kNext, ">", false, fb);
     char p[16];
-    snprintf(p, sizeof p, "%d / %d", page + 1, pages);
-    ui::text(ui::font(ui::F_LABEL), W / 2, BAR_Y + BAR_H / 2 + 10, p, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    snprintf(p, sizeof p, "%d of %d", page + 1, pages);
+    ui::text(ui::font(ui::F_SMALL), 28, kPrev.y + 34, p, fb, EPD_DRAW_ALIGN_LEFT, 0x40);
+    chevButton(kPrev, page > 0, false, -1, fb);
+    chevButton(kNext, page + 1 < pages, false, 1, fb);
 }
 int rowsPerPage() { return (BAR_Y - 8 - LIST_Y) / ROW_H; }
 
@@ -660,9 +688,6 @@ void renderChats(uint8_t* fb) {
         char t[48], pv[160], when[12] = "";
         chatTitle(c.ch, c.dm, t, sizeof t);
         // a mark for what it is: a person, the open channel, a private one
-        if (c.dm) { epd_fill_circle(36, y + 30, 12, INK, fb); epd_fill_rect({22, y + 46, 29, 12}, INK, fb); epd_fill_circle(36, y + 46, 14, INK, fb); epd_fill_rect({18, y + 58, 40, 6}, PAPER, fb); }
-        else if (c.ch == 0) { for (int k = 0; k < 3; ++k) epd_draw_circle(36, y + 42, 8 + k * 7, INK, fb), epd_draw_circle(36, y + 42, 9 + k * 7, INK, fb); epd_fill_circle(36, y + 42, 5, INK, fb); }
-        else { epd_fill_rect({22, y + 34, 28, 22}, INK, fb); for (int k = 0; k < 3; ++k) epd_draw_circle(36, y + 32, 9 - k, INK, fb); epd_fill_rect({24, y + 36, 24, 18}, INK, fb); }
         pv[0] = 0;
         if (c.lastIdx >= 0) {
             mesh_service::Message m;
@@ -676,26 +701,26 @@ void renderChats(uint8_t* fb) {
         } else {
             snprintf(pv, sizeof pv, c.ch == 0 ? "everyone in range · %s" : "private channel", mesh_service::presetName());
         }
-        const int tx = 70, right = W - 16;
-        ui::text(small, right, y + 36, when, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        const int tx = 24, right = W - 24;
+        ui::text(small, right, y + 38, when, fb, EPD_DRAW_ALIGN_RIGHT, ui::GREY);
         fit(big, t, right - tx - ui::textWidth(small, when) - 16);
         ui::text(big, tx, y + 38, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
         int pw = right - tx;
         if (c.unread) {
             char u[8];
             snprintf(u, sizeof u, "%d", c.unread > 99 ? 99 : c.unread);
-            const int bw = ui::textWidth(small, u) + 22;
-            epd_fill_rect({right - bw, y + 54, bw, 32}, INK, fb);
-            ui::text(small, right - bw / 2, y + 77, u, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+            const int bw = std::max(32, ui::textWidth(small, u) + 20);
+            ui::fillRound({right - bw, y + 52, bw, 32}, 16, INK, fb);
+            ui::text(small, right - bw / 2, y + 75, u, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
             pw -= bw + 10;
         }
         fit(small, pv, pw);
-        ui::text(small, tx, y + 78, pv, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        epd_fill_rect({tx, y + ROW_H - 1, W - tx - 12, 1}, INK, fb);
+        ui::text(small, tx, y + 76, pv, fb, EPD_DRAW_ALIGN_LEFT, c.unread ? 0x20 : ui::GREY);
+        epd_fill_rect({24, y + ROW_H - 1, W - 48, 1}, ui::HAIR, fb);
     }
     pager(g_listPage, pages, fb);
     if (pages <= 1)
-        ui::text(ui::font(ui::F_TINY), W / 2, BAR_Y + 44, "tap a chat to read and write", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), 24, BAR_Y + 34, "Tap a chat to read and write", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
 
 void renderNodes(uint8_t* fb) {
@@ -716,14 +741,14 @@ void renderNodes(uint8_t* fb) {
         // the short name in a box, as Meshtastic shows it
         char sh[8];
         snprintf(sh, sizeof sh, "%.4s", nd.shortName[0] ? nd.shortName : "?");
-        epd_fill_rect({12, y + 16, 76, 64}, INK, fb);
-        ui::text(small, 50, y + 56, sh, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+        ui::fillRound({24, y + 18, 68, 56}, 8, INK, fb);
+        ui::text(small, 58, y + 54, sh, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
         char nm[48], when[12], where[40], meta[96];
         snprintf(nm, sizeof nm, "%s", nd.longName[0] ? nd.longName : sh);
         ago(nd.lastHeardMs, when, sizeof when);
         whereIs(nd, where, sizeof where);
-        const int tx = 104, right = W - 16;
-        ui::text(small, right, y + 40, when, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        const int tx = 110, right = W - 24;
+        ui::text(small, right, y + 40, when, fb, EPD_DRAW_ALIGN_RIGHT, ui::GREY);
         fit(big, nm, right - tx - ui::textWidth(small, when) - 16);
         ui::text(big, tx, y + 42, nm, fb, EPD_DRAW_ALIGN_LEFT, INK);
         if (nd.hops == 0) snprintf(meta, sizeof meta, "%s%sdirect · %d dB", where, where[0] ? " · " : "", nd.snr);
@@ -872,22 +897,19 @@ void renderComms(const RideState& s, uint8_t* fb) {
     const EpdFont* small = ui::font(ui::F_SMALL);
     const EpdFont* tiny = ui::font(ui::F_TINY);
     if (!mesh_service::enabled()) {
-        // Contours behind, a clear card in front: the words stay readable.
-        topo_bg::draw({0, TOP, W, H - TOP}, fb, 1);
-        const EpdRect card = {40, 280, W - 80, 330};
-        epd_fill_rect(card, PAPER, fb);
-        frame(card, 2, fb);
+        ui::text(ui::font(ui::F_H1), 24, TOP + 44, "Comms", fb, EPD_DRAW_ALIGN_LEFT, INK);
         if (stealth::active()) {
-            ui::text(ui::font(ui::F_TITLE), W / 2, 360, "STEALTH", fb, EPD_DRAW_ALIGN_CENTER, INK);
-            ui::text(small, W / 2, 410, "Nothing in, nothing out.", fb, EPD_DRAW_ALIGN_CENTER, INK);
-            ui::text(tiny, W / 2, 450, stealth::listen() ? "To listen, turn RADIO on in SETTINGS."
-                                                         : "STEALTH: LISTEN in SETTINGS receives.", fb, EPD_DRAW_ALIGN_CENTER, INK);
-            ui::text(tiny, W / 2, 560, "End stealth on HOME (two taps)", fb, EPD_DRAW_ALIGN_CENTER, INK);
+            ui::text(small, 24, TOP + 78, "Stealth: nothing in, nothing out", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+            ui::text(small, 24, TOP + 150, stealth::listen() ? "To listen, turn the radio on in Settings."
+                                                             : "Stealth: listen (in Settings) receives.", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
+            ui::text(small, 24, TOP + 182, "End stealth on Home, with two taps.", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
             return;
         }
-        ui::text(ui::font(ui::F_TITLE), W / 2, 360, "RADIO OFF", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        button(kRadioOn, "TURN ON", true, fb);
-        ui::text(tiny, W / 2, 570, "messages and nodes need the radio", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(small, 24, TOP + 78, "The radio is off", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        ui::text(small, 24, TOP + 150, "Messages and nodes need the radio.", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
+        ui::text(small, 24, TOP + 182, "It uses more battery while on.", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        button(kRadioOn, "Turn the radio on", true, fb);
+        (void)tiny;
         return;
     }
     switch (g_cv) {
@@ -898,8 +920,8 @@ void renderComms(const RideState& s, uint8_t* fb) {
     }
     if (stealth::active() && g_cv != CV_QUICK) {
         // Listening in stealth: a dark band says nothing is going out.
-        epd_fill_rect({0, BAR_Y - 46, W, 38}, INK, fb);
-        ui::text(small, W / 2, BAR_Y - 20, "STEALTH: listening, nothing is sent", fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+        ui::fillRound({24, BAR_Y - 50, W - 48, 40}, 8, INK, fb);
+        ui::text(small, W / 2, BAR_Y - 23, "Stealth: listening, nothing is sent", fb, EPD_DRAW_ALIGN_CENTER, PAPER);
     }
 }
 
@@ -919,7 +941,7 @@ Go tapComms(int x, int y) {
         case CV_CHATS:
         case CV_NODES: {
             if (y >= TAB_Y && y < TAB_Y + TAB_H) {
-                const CommsView v = x < W / 2 ? CV_CHATS : CV_NODES;
+                const CommsView v = x < 130 ? CV_CHATS : CV_NODES;
                 if (v != g_cv) { g_cv = v; g_listPage = 0; }
                 return STAY;
             }
@@ -1098,75 +1120,117 @@ int g_pointsScroll = 0;
 int g_pointSel = -1;
 bool g_deleteArmed = false;
 const char* g_pointsNote = nullptr;     // a one-off line ("no fix yet")
-constexpr int PROW_TOP = TOP + 262, PROW_H = 88, PROW_N = 6;
-const EpdRect kMark = {12, TOP + 158, 250, 88};
-const EpdRect kAdd = {278, TOP + 158, 250, 88};
-const EpdRect kUp = {12, H - 92, 250, 80};
-const EpdRect kDown = {278, H - 92, 250, 80};
+constexpr int PROW_TOP = TOP + 436, PROW_H = 80, PROW_N = 4;
+const EpdRect kMark = {24, TOP + 306, (W - 48 - 14) / 2, 64};
+const EpdRect kAdd = {24 + (W - 48 - 14) / 2 + 14, TOP + 306, (W - 48 - 14) / 2, 64};
+const EpdRect kUp = {W - 24 - 56 - 12 - 56, H - 78, 56, 52};
+const EpdRect kDown = {W - 24 - 56, H - 78, 56, 52};
+
+// A small square button with a chevron: d -1 left/up, +1 right/down.
+void chevButton(const EpdRect& r, bool live, bool vertical, int d, uint8_t* fb) {
+    const uint8_t c = live ? INK : 0xA0;
+    ui::frameRound(r, 8, 2, fb, c, PAPER);
+    const int cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+    for (int t = -1; t <= 1; ++t) {
+        if (vertical) {
+            epd_draw_line(cx - 10, cy - d * 4 + t, cx, cy + d * 5 + t, c, fb);
+            epd_draw_line(cx, cy + d * 5 + t, cx + 10, cy - d * 4 + t, c, fb);
+        } else {
+            epd_draw_line(cx - d * 4 + t, cy - 10, cx + d * 5 + t, cy, c, fb);
+            epd_draw_line(cx + d * 5 + t, cy, cx - d * 4 + t, cy + 10, c, fb);
+        }
+    }
+}
 
 void renderPoints(const RideState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     double lat, lon;
     const bool have = here(s, lat, lon);
-    ui::text(ui::font(ui::F_TINY), 14, TOP + 30, s.gpsFix ? "MY POSITION" : have ? "LAST POSITION (NO FIX)" : "MY POSITION",
-             fb, EPD_DRAW_ALIGN_LEFT, INK);
-    char m[32] = "--";
-    if (have) milgeo::mgrs(lat, lon, m, sizeof m);
-    ui::text(ui::font(ui::F_BODY_H), 14, TOP + 76, have ? m : "NO FIX YET", fb, EPD_DRAW_ALIGN_LEFT, INK);
-    char ll[64];
-    float dep;
-    if (have && doba_dem::depth(lat, lon, dep))   // on water: depth under you (EMODnet)
-        snprintf(ll, sizeof ll, "%c%.5f %c%.5f  DEPTH %dm  GPS %d", lat >= 0 ? 'N' : 'S', fabs(lat),
-                 lon >= 0 ? 'E' : 'W', fabs(lon), (int)lroundf(dep), s.satellites);
-    else if (have) snprintf(ll, sizeof ll, "%c%.5f %c%.5f  ALT %dm  GPS %d", lat >= 0 ? 'N' : 'S', fabs(lat),
-                       lon >= 0 ? 'E' : 'W', fabs(lon), (int)lroundf(groundAlt(s)), s.satellites);
-    else snprintf(ll, sizeof ll, "waiting for satellites · GPS %d", s.satellites);
-    ui::text(ui::font(ui::F_SMALL), 14, TOP + 116, ll, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(ui::font(ui::F_SMALL), 24, TOP + 34,
+             s.gpsFix ? "Your position \xC2\xB7 MGRS" : have ? "Last position \xC2\xB7 no fix now" : "Your position",
+             fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     if (g_pointsNote) {
-        ui::text(ui::font(ui::F_TINY), W - 14, TOP + 30, g_pointsNote, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        ui::text(ui::font(ui::F_SMALL), W - 24, TOP + 34, g_pointsNote, fb, EPD_DRAW_ALIGN_RIGHT, INK);
         g_pointsNote = nullptr;
     }
-    button(kMark, "MARK HERE", true, fb);
-    button(kAdd, "ENTER COORDS", false, fb);
+    char m[32] = "";
+    if (have) milgeo::mgrs(lat, lon, m, sizeof m);
+    // the grid reference as big as it reads: zone small, the two numbers large
+    char zone[16] = "", e[12] = "", nn[12] = "";
+    {
+        char t[32];
+        snprintf(t, sizeof t, "%s", m);
+        char* tok[4] = {};
+        int k = 0;
+        for (char* p = strtok(t, " "); p && k < 4; p = strtok(nullptr, " ")) tok[k++] = p;
+        if (k == 4) {
+            snprintf(zone, sizeof zone, "%s %s", tok[0], tok[1]);
+            snprintf(e, sizeof e, "%s", tok[2]);
+            snprintf(nn, sizeof nn, "%s", tok[3]);
+        }
+    }
+    if (zone[0]) {
+        ui::text(ui::monoFont(22), 24, TOP + 84, zone, fb, EPD_DRAW_ALIGN_LEFT, 0x40);
+        ui::text(ui::valueFont(46), 20, TOP + 152, e, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::valueFont(46), 20, TOP + 216, nn, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    } else {
+        ui::text(ui::font(ui::F_H1), 24, TOP + 120, have ? m : "No fix yet", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        if (!have) ui::text(ui::font(ui::F_SMALL), 24, TOP + 160, "Waiting for satellites", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    }
+    char ll[64], info[64];
+    float dep;
+    if (have) {
+        snprintf(ll, sizeof ll, "%.4f\xC2\xB0 %c, %.4f\xC2\xB0 %c", fabs(lat), lat >= 0 ? 'N' : 'S', fabs(lon), lon >= 0 ? 'E' : 'W');
+        if (doba_dem::depth(lat, lon, dep))   // on water: depth under you (EMODnet)
+            snprintf(info, sizeof info, "%d satellites \xC2\xB7 %d m deep", s.satellites, (int)lroundf(dep));
+        else
+            snprintf(info, sizeof info, "%d satellites \xC2\xB7 %d m high", s.satellites, (int)lroundf(groundAlt(s)));
+        ui::text(ui::font(ui::F_SMALL), 24, TOP + 252, ll, fb, EPD_DRAW_ALIGN_LEFT, 0x30);
+        ui::text(ui::font(ui::F_SMALL), 24, TOP + 280, info, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    }
+    button(kMark, "Mark here", true, fb);
+    button(kAdd, "Enter coords", false, fb);
 
     const int n = doba_points::count();
     if (g_pointsScroll > n - 1) g_pointsScroll = n > 0 ? ((n - 1) / PROW_N) * PROW_N : 0;
-    if (n == 0)
-    {
-        ui::text(ui::font(ui::F_KEY), W / 2, PROW_TOP + 100, "No points yet", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(ui::font(ui::F_SMALL), W / 2, PROW_TOP + 150, "MARK HERE saves where you stand,", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(ui::font(ui::F_SMALL), W / 2, PROW_TOP + 182, "ENTER COORDS takes a grid reference,", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(ui::font(ui::F_SMALL), W / 2, PROW_TOP + 214, "or hold a finger on the map.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    ui::text(ui::font(ui::F_TINY), 24, PROW_TOP - 14, "SAVED POINTS", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    if (n == 0) {
+        ui::text(ui::font(ui::F_SMALL), 24, PROW_TOP + 34, "Mark here saves where you stand,", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
+        ui::text(ui::font(ui::F_SMALL), 24, PROW_TOP + 62, "Enter coords takes a grid reference,", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
+        ui::text(ui::font(ui::F_SMALL), 24, PROW_TOP + 90, "or hold a finger on the map.", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
     }
     for (int k = 0; k < PROW_N && g_pointsScroll + k < n; ++k) {
         const int i = g_pointsScroll + k;
         const doba_points::Point* p = doba_points::at(i);
         const int y = PROW_TOP + k * PROW_H;
         const bool tgt = doba_points::target() == i;
-        if (tgt) epd_fill_rect({10, y + 4, W - 20, PROW_H - 8}, INK, fb);
-        const uint8_t fg = tgt ? PAPER : INK;
+        if (tgt) ui::fillRound({16, y + 4, W - 32, PROW_H - 8}, 8, INK, fb);
+        const uint8_t fg = tgt ? PAPER : INK, dim = tgt ? PAPER : ui::GREY;
         char nm[40];
-        snprintf(nm, sizeof nm, tgt ? "> %s" : "%s", p->name);
-        ui::text(ui::font(ui::F_LABEL), 22, y + 38, nm, fb, EPD_DRAW_ALIGN_LEFT, fg);
+        snprintf(nm, sizeof nm, tgt ? "\xE2\x80\xBA %s" : "%s", p->name);
+        ui::text(ui::font(ui::F_LABEL), 28, y + 36, nm, fb, EPD_DRAW_ALIGN_LEFT, fg);
         char pm[32];
         milgeo::mgrs(p->lat, p->lon, pm, sizeof pm);
-        ui::text(ui::font(ui::F_TINY), 22, y + 70, pm, fb, EPD_DRAW_ALIGN_LEFT, fg);
+        ui::text(ui::font(ui::F_TINY), 28, y + 64, pm, fb, EPD_DRAW_ALIGN_LEFT, dim);
         if (have) {
             double b, d;
             doba_points::fromHere(i, lat, lon, b, d);
             char az[16], ds[24];
             azText(b, az, sizeof az);
             doba_points::formatDistance(d, ds, sizeof ds);
-            ui::text(ui::font(ui::F_KEY), W - 22, y + 40, az, fb, EPD_DRAW_ALIGN_RIGHT, fg);
-            ui::text(ui::font(ui::F_TINY), W - 30 - ui::textWidth(ui::font(ui::F_KEY), az), y + 38, "AZ", fb,
-                     EPD_DRAW_ALIGN_RIGHT, fg);
-            ui::text(ui::font(ui::F_SMALL), W - 22, y + 72, ds, fb, EPD_DRAW_ALIGN_RIGHT, fg);
+            ui::text(ui::font(ui::F_LABEL), W - 28, y + 36, ds, fb, EPD_DRAW_ALIGN_RIGHT, fg);
+            char azl[24];
+            snprintf(azl, sizeof azl, "az %s", az);
+            ui::text(ui::font(ui::F_SMALL), W - 28, y + 64, azl, fb, EPD_DRAW_ALIGN_RIGHT, dim);
         }
-        if (!tgt) epd_fill_rect({10, y + PROW_H - 2, W - 20, 1}, INK, fb);
+        if (!tgt) epd_fill_rect({24, y + PROW_H - 1, W - 48, 1}, ui::HAIR, fb);
     }
     if (n > PROW_N) {
-        button(kUp, "UP", false, fb);
-        button(kDown, "DOWN", false, fb);
+        char pg[24];
+        snprintf(pg, sizeof pg, "%d of %d", g_pointsScroll / PROW_N + 1, (n + PROW_N - 1) / PROW_N);
+        ui::text(ui::font(ui::F_SMALL), 28, kUp.y + 34, pg, fb, EPD_DRAW_ALIGN_LEFT, 0x40);
+        chevButton(kUp, g_pointsScroll > 0, false, -1, fb);
+        chevButton(kDown, g_pointsScroll + PROW_N < n, false, 1, fb);
     }
 }
 
@@ -1429,12 +1493,12 @@ void renderSos(const RideState& s, uint8_t* fb) {
     sosMessage(s, msg, sizeof msg);
     if (!g_sosOn) {
         ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 60, "Broadcasts on the mesh, every 5 min:", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        frame({20, TOP + 84, W - 40, 150}, 1, fb);
+        ui::frameRound({24, TOP + 84, W - 48, 150}, 8, 2, fb, 0x90, PAPER);
         wrapAt(ui::font(ui::F_BODY), 36, TOP + 124, W - 72, 34, msg, fb);
         const bool armed = g_sosArmed && millis() - g_sosArmedAt < 6000;
-        epd_fill_rect(kSosBtn, INK, fb);
+        ui::fillRound(kSosBtn, 10, INK, fb);
         ui::text(ui::font(ui::F_BIG), W / 2, kSosBtn.y + 120, "SOS", fb, EPD_DRAW_ALIGN_CENTER, PAPER);
-        ui::text(ui::font(ui::F_SMALL), W / 2, kSosBtn.y + 180, armed ? "TAP AGAIN TO SEND" : "tap, then tap again", fb,
+        ui::text(ui::font(ui::F_SMALL), W / 2, kSosBtn.y + 180, armed ? "Tap again to send" : "Tap, then tap again", fb,
                  EPD_DRAW_ALIGN_CENTER, PAPER);
         ui::text(ui::font(ui::F_TINY), W / 2, kSosBtn.y + kSosBtn.height + 50,
                  stealth::active() ? "STEALTH IS ON: sending ends it and reveals you" :
@@ -1450,7 +1514,7 @@ void renderSos(const RideState& s, uint8_t* fb) {
     snprintf(line, sizeof line, "sent %d · next in %lu:%02lu", g_sosSent, (unsigned long)(left / 60),
              (unsigned long)(left % 60));
     ui::text(ui::font(ui::F_LABEL), W / 2, TOP + 210, line, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
-    frame({20, TOP + 320, W - 40, 150}, 1, fb);
+    ui::frameRound({24, TOP + 320, W - 48, 150}, 8, 2, fb, 0x90, PAPER);
     wrapAt(ui::font(ui::F_BODY), 36, TOP + 360, W - 72, 34, msg, fb);
     ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 530, "Stay with the device. Replies show in COMMS.", fb,
              EPD_DRAW_ALIGN_CENTER, INK);
@@ -1515,7 +1579,7 @@ void renderSun(const RideState& s, uint8_t* fb) {
     int y = TOP + 40;
     if (d.riseOk && d.setOk && s.utc >= d.rise && s.utc < d.set) {
         const long left = (long)(d.set - s.utc) / 60;
-        ui::text(ui::font(ui::F_TINY), 20, y + 6, "DAYLIGHT LEFT", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_SMALL), 24, y + 6, "Daylight left", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
         snprintf(line, sizeof line, "%ld h %02ld min", left / 60, left % 60);
         ui::text(ui::font(ui::F_BIG), 20, y + 80, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
         if (d.duskOk) {
@@ -1524,7 +1588,7 @@ void renderSun(const RideState& s, uint8_t* fb) {
             ui::text(ui::font(ui::F_SMALL), 20, y + 120, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
         }
     } else {
-        ui::text(ui::font(ui::F_TINY), 20, y + 6, "NIGHT", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_SMALL), 24, y + 6, "Night", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
         const doba_sun::Day nx = s.utc > d.rise ? doba_sun::day(s.latitude, s.longitude, s.utc + 86400) : d;
         if (nx.riseOk) {
             const long to = (long)(nx.rise - s.utc) / 60;
@@ -1535,17 +1599,18 @@ void renderSun(const RideState& s, uint8_t* fb) {
     }
     // The day's table.
     y = TOP + 200;
-    epd_fill_rect({20, y, W - 40, 2}, INK, fb);
+    epd_fill_rect({24, y, W - 48, 1}, ui::HAIR, fb);
     struct Row { const char* name; bool ok; time_t t; } rows[] = {
         {"FIRST LIGHT", d.dawnOk, d.dawn}, {"SUNRISE", d.riseOk, d.rise},
         {"SUNSET", d.setOk, d.set},        {"LAST LIGHT", d.duskOk, d.dusk},
     };
     for (int i = 0; i < 4; ++i) {
         const int ry = y + 16 + i * 72;
-        ui::text(ui::font(ui::F_LABEL), 24, ry + 44, rows[i].name, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        char rn[32];
+        ui::text(ui::font(ui::F_LABEL), 24, ry + 44, ui::sentence(rows[i].name, rn, sizeof rn), fb, EPD_DRAW_ALIGN_LEFT, INK);
         if (rows[i].ok) hhmm(rows[i].t, a, sizeof a); else snprintf(a, sizeof a, "--");
         ui::text(ui::font(ui::F_TITLE), W - 24, ry + 48, a, fb, EPD_DRAW_ALIGN_RIGHT, INK);
-        epd_fill_rect({20, ry + 70, W - 40, 1}, INK, fb);
+        epd_fill_rect({24, ry + 70, W - 48, 1}, ui::HAIR, fb);
     }
     // Sun's bearing at rise and set? Keep it simple: the moon.
     y += 16 + 4 * 72 + 30;
@@ -1562,7 +1627,10 @@ void renderSun(const RideState& s, uint8_t* fb) {
         if (xs > term) epd_fill_rect({mx + dx, my - h, 1, 2 * h}, PAPER, fb);
     }
     epd_draw_circle(mx, my, mr, INK, fb);
-    ui::text(ui::font(ui::F_KEY), 170, y + 66, doba_sun::moonName(s.utc), fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char mn[32];
+    snprintf(mn, sizeof mn, "%s", doba_sun::moonName(s.utc));
+    if (mn[0] >= 'a' && mn[0] <= 'z') mn[0] -= 32;
+    ui::text(ui::font(ui::F_KEY), 170, y + 66, mn, fb, EPD_DRAW_ALIGN_LEFT, INK);
     snprintf(line, sizeof line, "%d%% lit · day %d of 29", (int)lround(lit * 100), (int)age);
     ui::text(ui::font(ui::F_SMALL), 170, y + 104, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
     hhmm(s.utc, b, sizeof b);
@@ -1590,7 +1658,7 @@ void renderMore(const RideState& s, uint8_t* fb) {
             case M_GPS:
                 snprintf(sub, sizeof sub, s.gpsFix ? "fix · %u satellites" : "no fix yet", (unsigned)s.satellites);
                 caption(y, SROW_H, "GPS", sub, fb);
-                button({CTRL_X, y + (SROW_H - CTRL_H) / 2, CTRL_W, CTRL_H}, "DETAILS  >", false, fb);
+                button({CTRL_X, y + (SROW_H - CTRL_H) / 2, CTRL_W, CTRL_H}, "Details  \xE2\x80\xBA", false, fb);
                 break;
             case M_MODE:
                 // Meshtastic's modem preset. Every node on the mesh has to match;
@@ -1607,7 +1675,7 @@ void renderMore(const RideState& s, uint8_t* fb) {
                 caption(y, SROW_H, "DOBA", "offline backcountry assistant · " __DATE__, fb);
                 break;
         }
-        epd_fill_rect({16, y + SROW_H - 1, W - 32, 1}, INK, fb);
+        epd_fill_rect({24, y + SROW_H - 1, W - 48, 1}, ui::HAIR, fb);
     }
     ui::text(ui::font(ui::F_TINY), W / 2, H - 24, "USB DRIVE: copy books and maps from a computer", fb,
              EPD_DRAW_ALIGN_CENTER, INK);
@@ -1633,7 +1701,7 @@ Go tapMore(int x, int y) {
 
 void render(Page p, const RideState& s, uint8_t* fb) {
     switch (p) {
-        case HOME:    renderHome(s, fb); topo_bg::draw({0, TOP, W, H - TOP}, fb, 0); break;
+        case HOME:    renderHome(s, fb); break;
         case COMMS:   renderComms(s, fb); break;
         case COMPOSE: renderCompose(s, fb); break;
         case LIBRARY:
@@ -1672,18 +1740,18 @@ void openPoint(int i) {
 const char* title(Page p) {
     switch (p) {
         case HOME: return nullptr;
-        case COMMS: return "COMMS";
-        case COMPOSE: return "WRITE";
+        case COMMS: return (g_cv == CV_CHATS || g_cv == CV_NODES || !mesh_service::enabled()) ? "" : "Comms";   // the page says "Comms" big
+        case COMPOSE: return "Write";
         case LIBRARY: return doba_lib::libraryTitle();
-        case ARTICLE: return "LIBRARY";
-        case SETUP: case SETUP_NAME: return "SETTINGS";
-        case POINTS: return "POSITION";
-        case POINT: return "POINT";
-        case POINT_NEW: return "NEW POINT";
+        case ARTICLE: return "";
+        case SETUP: case SETUP_NAME: return "Settings";
+        case POINTS: return "Position";
+        case POINT: return "Point";
+        case POINT_NEW: return "New point";
         case MAPOPTS: return "MAP";
         case SOS: return "SOS";
-        case SUN: return "SUN & MOON";
-        case MORE: return "MORE";
+        case SUN: return "Sun & moon";
+        case MORE: return "More";
     }
     return nullptr;
 }

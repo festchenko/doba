@@ -151,16 +151,17 @@ void Keyboard::render(uint8_t* fb) const {
     Key keys[48];
     const int n = layoutKeys(*this, keys);
     epd_fill_rect({0, top - 6, W, H - top + 6}, 0xFF, fb);
-    epd_fill_rect({0, top - 6, W, 3}, 0x00, fb);
+    epd_fill_rect({0, top - 6, W, 1}, ui::HAIR, fb);
+    // DOBA: keys as soft grey caps (a phone's keyboard), the action key black.
     for (int i = 0; i < n; ++i) {
         const Key& k = keys[i];
         const EpdRect r = {k.x + GAP, k.y + GAP, k.w - 2 * GAP, k.h - 2 * GAP};
         const bool dark = k.kind == 6 || (k.kind == 1 && shift);
-        if (dark) epd_fill_rect(r, 0x00, fb);
-        else { epd_draw_rect(r, 0x00, fb); epd_draw_rect({r.x + 1, r.y + 1, r.width - 2, r.height - 2}, 0x00, fb); }
+        ui::fillRound(r, 7, dark ? 0x00 : k.kind == 0 ? 0xE6 : 0xC8, fb);
         if (!k.label[0]) continue;
         const EpdFont* f = ui::font(k.kind == 0 ? ui::F_KEY : ui::F_SMALL);
-        ui::text(f, k.x + k.w / 2, k.y + k.h / 2 + (k.kind == 0 ? 12 : 8), k.label, fb,
+        char lb[16];
+        ui::text(f, k.x + k.w / 2, k.y + k.h / 2 + (k.kind == 0 ? 12 : 8), k.kind == 0 ? k.label : ui::sentence(k.label, lb, sizeof lb), fb,
                  EPD_DRAW_ALIGN_CENTER, dark ? 0xFF : 0x00);
     }
 }

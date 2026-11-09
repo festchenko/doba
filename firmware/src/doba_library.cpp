@@ -797,18 +797,18 @@ int g_scope = -1;         // search scope: -1 all books, else a section
 int g_scopeBook = -1;     // or one book
 View g_searchFrom = V_HOME;
 
-constexpr int EM_Y = TOP + 72, EM_H = 108;
-int gridTop() { return g_emergCount ? EM_Y + 28 + EM_H + 16 : TOP + 76; }
+constexpr int EM_Y = TOP + 194, EM_H = 108;
+int gridTop() { return g_emergCount ? EM_Y + 28 + EM_H + 18 : TOP + 200; }
 int gridRows() { return g_secCount > 12 ? 5 : 4; }
 EpdRect cellRect(int i) {
     const int rows = gridRows();
-    const int top = gridTop(), gap = 8, cw = (W - 28 - 2 * gap) / 3;
-    const int ch = (H - 98 - top - (rows - 1) * gap) / rows;   // above the search bar
-    return {14 + (i % 3) * (cw + gap), top + (i / 3) * (ch + gap), cw, ch};
+    const int top = gridTop(), gap = 12, cw = (W - 48 - 2 * gap) / 3;
+    const int ch = (H - 24 - top - (rows - 1) * gap) / rows;
+    return {24 + (i % 3) * (cw + gap), top + (i / 3) * (ch + gap), cw, ch};
 }
 EpdRect emergRect(int i) {
-    const int gap = 10, w = (W - 28 - (g_emergCount - 1) * gap) / g_emergCount;
-    return {14 + i * (w + gap), EM_Y + 28, w, EM_H};
+    const int gap = 12, w = (W - 48 - (g_emergCount - 1) * gap) / g_emergCount;
+    return {24 + i * (w + gap), EM_Y + 28, w, EM_H};
 }
 
 // --- BOOKS: the shelf, a book's page, its lists ----------------------------------
@@ -881,131 +881,102 @@ void countText(uint32_t c, char* out, size_t n) {
     else snprintf(out, n, "%lu", (unsigned long)c);
 }
 
-const EpdRect kTabs = {12, TOP + 8, W - 24, 56};
-const EpdRect kAllSearch = {12, H - 86, W - 24, 74};
-constexpr int SHELF_TOP = TOP + 76, COLS = 3, ROWS = 4, CELL_GAP = 10;
+// The library's head (the design canvas): a big "Library", the tabs as words
+// underlined when chosen, the search box under them.
+const EpdRect kTabs = {24, TOP + 64, W - 48, 50};
+const EpdRect kAllSearch = {24, TOP + 122, W - 48, 56};
+constexpr int SHELF_TOP = TOP + 204, COLS = 3, ROWS = 2, CELL_GAP = 22, COVER_H = 150, CELL_H = 212;
 int g_shelfPage = 0;
-EpdRect coverRect(int i) {
-    const int cw = (W - 24 - (COLS - 1) * CELL_GAP) / COLS;
-    const int ch = (kAllSearch.y - 10 - SHELF_TOP - (ROWS - 1) * CELL_GAP) / ROWS;
+EpdRect coverRect(int i) {   // the cover; its name and count go under it
+    const int cw = (W - 48 - (COLS - 1) * CELL_GAP) / COLS;
     const int k = i % (COLS * ROWS);
-    return {12 + (k % COLS) * (cw + CELL_GAP), SHELF_TOP + (k / COLS) * (ch + CELL_GAP), cw, ch};
+    return {24 + (k % COLS) * (cw + CELL_GAP), SHELF_TOP + (k / COLS) * (CELL_H + 22), cw, COVER_H};
 }
 int shelfPages() { return (g_bookCount + COLS * ROWS - 1) / (COLS * ROWS); }
 
-// BOOKS | TOPICS | RECENT
-int tabAt(int x) { return std::min(2, std::max(0, (x - kTabs.x) * 3 / kTabs.width)); }
-void tabs(int which, uint8_t* fb) {
-    static const char* const kNames[3] = {"BOOKS", "TOPICS", "RECENT"};
-    const int third = kTabs.width / 3;
+const char* const kTabNames[3] = {"Books", "Topics", "Recent"};
+int tabX(int t) {
+    int x = 28;
+    for (int i = 0; i < t; ++i) x += ui::textWidth(ui::font(ui::F_LABEL), kTabNames[i]) + 32;
+    return x;
+}
+int tabAt(int x) {
+    for (int t = 2; t > 0; --t) if (x >= tabX(t) - 16) return t;
+    return 0;
+}
+void libHead(int which, uint8_t* fb) {
+    ui::text(ui::font(ui::F_H1), 24, TOP + 44, "Library", fb, EPD_DRAW_ALIGN_LEFT, INK);
     for (int t = 0; t < 3; ++t) {
-        const EpdRect r = {kTabs.x + t * third, kTabs.y, t == 2 ? kTabs.width - 2 * third : third, kTabs.height};
-        const bool on = t == which;
-        if (on) epd_fill_rect(r, INK, fb); else frame(r, 2, fb);
-        ui::text(ui::font(ui::F_LABEL), r.x + r.width / 2, r.y + 38, kNames[t], fb, EPD_DRAW_ALIGN_CENTER, on ? PAPER : INK);
+        const int x = tabX(t), w = ui::textWidth(ui::font(ui::F_LABEL), kTabNames[t]);
+        ui::text(ui::font(ui::F_LABEL), x, TOP + 96, kTabNames[t], fb, EPD_DRAW_ALIGN_LEFT, t == which ? INK : ui::GREY);
+        if (t == which) epd_fill_rect({x, TOP + 106, w, 3}, INK, fb);
     }
 }
+void tabs(int which, uint8_t* fb) { libHead(which, fb); }
 void searchBar(const EpdRect& r, const char* label, uint8_t* fb) {
-    frame(r, 3, fb);
-    doba_icons::draw(doba_icons::I_SEARCH, r.x + 38, r.y + r.height / 2, 36, INK, PAPER, fb);
-    const EpdFont* f = ui::font(ui::F_LABEL);
+    ui::frameRound(r, 8, 2, fb, 0x90, PAPER);
+    const int cx = r.x + 30, cy = r.y + r.height / 2 - 2;
+    epd_draw_circle(cx, cy, 8, INK, fb);
+    epd_draw_circle(cx, cy, 9, INK, fb);
+    for (int t = 0; t < 3; ++t) epd_draw_line(cx + 6 + t, cy + 7, cx + 13 + t, cy + 14, INK, fb);
     char t[80];
     snprintf(t, sizeof t, "%s", label);
-    ui::text(f, r.x + 72, r.y + r.height / 2 + 10, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    fitText(ui::font(ui::F_SMALL), t, r.width - 70);
+    ui::text(ui::font(ui::F_SMALL), r.x + 54, r.y + r.height / 2 + 8, t, fb, EPD_DRAW_ALIGN_LEFT, 0x40);
 }
 
 // A cover: a spine, the monogram big, the name, the count.
 void cover(int bi, const EpdRect& r, uint8_t* fb, bool label = true) {
-    frame(r, 2, fb);
-    epd_fill_rect({r.x, r.y, 12, r.height}, INK, fb);
-    epd_fill_rect({r.x + 16, r.y + 6, 2, r.height - 12}, INK, fb);
+    ui::frameRound(r, 3, 2, fb);
+    epd_fill_rect({r.x, r.y, 9, r.height}, INK, fb);
     char mono[16], cnt[16];
     monogram(bi, mono, sizeof mono);
     // the monogram in the book face: it has Cyrillic, and reads as a cover
 #ifdef VFONT
-    const EpdFont* mf = vf_face_cap(&Literata_700, label ? 34.f : 30.f);
-    // a wide monogram ("УКР", "SOS") shrinks to stay off the spine
-    for (float sz = label ? 32.f : 28.f; sz >= 18.f && ui::textWidth(mf, mono) > r.width - 30; sz -= 2.f)
+    const EpdFont* mf = vf_face_cap(&Literata_700, 34.f);
+    for (float sz = 32.f; sz >= 18.f && ui::textWidth(mf, mono) > r.width - 30; sz -= 2.f)
         mf = vf_face_cap(&Literata_700, sz);
 #else
     const EpdFont* mf = ui::font(ui::F_TITLE);
 #endif
-    // The name under the monogram, inside the cover (right of the spine):
-    // one line if it fits, else two at a space, smaller only if it must be.
-    const int cx = r.x + 18 + (r.width - 24) / 2, room = r.width - 30;
-    const char* nm = shortName(bi);
-    char l1[48], l2[48] = "";
-    snprintf(l1, sizeof l1, "%s", nm);
-    const EpdFont* nf = ui::font(ui::F_SMALL);
-    if (label && ui::textWidth(nf, l1) > room) {
-        // the space that leaves the longer half shortest
-        int best = -1, bestW = 1 << 30;
-        for (int i = 1; nm[i]; ++i) {
-            if (nm[i] != ' ') continue;
-            char a[48], b[48];
-            snprintf(a, sizeof a, "%.*s", i, nm);
-            snprintf(b, sizeof b, "%s", nm + i + 1);
-            const int w = std::max(ui::textWidth(nf, a), ui::textWidth(nf, b));
-            if (w < bestW) { bestW = w; best = i; }
-        }
-        if (best > 0) {
-            snprintf(l1, sizeof l1, "%.*s", best, nm);
-            snprintf(l2, sizeof l2, "%s", nm + best + 1);
-        }
-        if (ui::textWidth(nf, l1) > room || ui::textWidth(nf, l2) > room) nf = ui::font(ui::F_TINY);
-        fitText(nf, l1, room);
-        fitText(nf, l2, room);
-    }
-    const bool two = l2[0] != 0;
-    const int my = !label ? r.y + r.height / 2 + 15 : r.y + r.height / 2 - 14;   // one height for the whole shelf
-    ui::text(mf, cx, my, mono, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    ui::text(mf, r.x + 5 + r.width / 2, r.y + r.height / 2 + 17, mono, fb, EPD_DRAW_ALIGN_CENTER, INK);
     if (!label) return;
-    if (two) {
-        ui::text(nf, cx, r.y + r.height - 58, l1, fb, EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(nf, cx, r.y + r.height - 34, l2, fb, EPD_DRAW_ALIGN_CENTER, INK);
-    } else {
-        ui::text(nf, cx, r.y + r.height - 34, l1, fb, EPD_DRAW_ALIGN_CENTER, INK);
-    }
+    // under the cover: the name, then the count in grey
+    char nm[48];
+    snprintf(nm, sizeof nm, "%s", shortName(bi));
+    fitText(ui::font(ui::F_STRONG), nm, r.width);
+    ui::text(ui::font(ui::F_STRONG), r.x, r.y + r.height + 28, nm, fb, EPD_DRAW_ALIGN_LEFT, INK);
     const Book& b = g_books[bi];
     countText(b.shown ? b.shown : b.count, cnt, sizeof cnt);
     char line[40];
-    const char* unit = !b.unit[0] ? "" : !strcmp(b.unit, "documents") ? "docs" : b.unit;
-    snprintf(line, sizeof line, "%s %s", cnt, unit);
-    fitText(ui::font(ui::F_TINY), line, room);
-    ui::text(ui::font(ui::F_TINY), cx, r.y + r.height - 12, line, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    snprintf(line, sizeof line, "%s %s", cnt, b.unit[0] ? b.unit : "articles");
+    fitText(ui::font(ui::F_TINY), line, r.width);
+    ui::text(ui::font(ui::F_TINY), r.x, r.y + r.height + 52, line, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
 
+void pagerRow(int page, int pages, uint8_t* fb);
 void renderShelf(uint8_t* fb) {
-    tabs(0, fb);
+    libHead(0, fb);
+    char lbl[48];
+    snprintf(lbl, sizeof lbl, "Search %d books", g_bookCount);
+    searchBar(kAllSearch, lbl, fb);
     sortShelf();
-    const int pages = shelfPages();
+    const int pages = shelfPages(), per = COLS * ROWS;
     if (g_shelfPage >= pages) g_shelfPage = pages - 1;
-    const int per = COLS * ROWS;
-    // with more than one page, the last cell of each page turns it
-    const int shown = pages > 1 ? per - 1 : per;
-    for (int k = 0; k < shown; ++k) {
-        const int i = g_shelfPage * shown + k;
+    for (int k = 0; k < per; ++k) {
+        const int i = g_shelfPage * per + k;
         if (i >= g_bookCount) break;
         cover(g_order[i], coverRect(k), fb);
     }
-    if (pages > 1) {
-        const EpdRect r = coverRect(per - 1);
-        frame(r, 2, fb);
-        char t[16];
-        snprintf(t, sizeof t, "%d / %d", g_shelfPage + 1, pages);
-        ui::text(ui::font(ui::F_KEY), r.x + r.width / 2, r.y + r.height / 2 - 4, "MORE >", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(ui::font(ui::F_TINY), r.x + r.width / 2, r.y + r.height / 2 + 30, t, fb, EPD_DRAW_ALIGN_CENTER, INK);
-    }
-    char lbl[48];
-    snprintf(lbl, sizeof lbl, "Search all %d books", g_bookCount);
-    searchBar(kAllSearch, lbl, fb);
+    pagerRow(g_shelfPage, pages, fb);
 }
-int shelfHit(int x, int y) {   // book index, -2 the page turn, -1 nothing
-    const int pages = shelfPages(), per = COLS * ROWS, shown = pages > 1 ? per - 1 : per;
+int shelfHit(int x, int y) {   // book index, -1 nothing
+    const int per = COLS * ROWS;
     for (int k = 0; k < per; ++k) {
-        if (!hit(coverRect(k), x, y)) continue;
-        if (pages > 1 && k == per - 1) return -2;
-        const int i = g_shelfPage * shown + k;
+        EpdRect r = coverRect(k);
+        r.height = CELL_H;
+        if (!hit(r, x, y)) continue;
+        const int i = g_shelfPage * per + k;
         return i < g_bookCount ? g_order[i] : -1;
     }
     return -1;
@@ -1018,11 +989,11 @@ struct Doc { char title[KEY + 1]; char raw[KEY + 1]; uint32_t rec; };
 Doc* g_docs = nullptr;
 int g_docCount = -1;            // -1: not looked for (this book)
 int g_docBook = -1;
-const EpdRect kBookSearch = {12, TOP + 132, W - 24, 70};
-constexpr int BODY_Y = TOP + 216;
-const EpdRect kListPrev = {12, H - 86, 110, 74};
-const EpdRect kListNext = {W - 122, H - 86, 110, 74};
-constexpr int LIST_ROW = 70;
+const EpdRect kBookSearch = {24, TOP + 104, W - 48, 56};
+constexpr int BODY_Y = TOP + 214;     // under the search box (and the A-Z / random links)
+const EpdRect kListPrev = {W - 24 - 56 - 12 - 56, H - 78, 56, 52};
+const EpdRect kListNext = {W - 24 - 56, H - 78, 56, 52};
+constexpr int LIST_ROW = 64;
 
 bool readRec(File& f, uint32_t i, uint8_t* rec) {
     return f.seek(HDR + (uint64_t)i * REC) && f.read(rec, REC) == REC;
@@ -1112,49 +1083,51 @@ const char* const kUkr[] = {"А","Б","В","Г","Ґ","Д","Е","Є","Ж","З","�
 int letterCount(int bi) { return cyrillicBook(bi) ? 33 : 27; }
 const char* letterAt(int bi, int i) { return cyrillicBook(bi) ? kUkr[i] : kLatin[i]; }
 EpdRect letterRect(int bi, int i) {
-    const int cols = 6, rows = (letterCount(bi) + cols - 1) / cols, gap = 8;
-    const int cw = (W - 24 - (cols - 1) * gap) / cols;
-    const int ch = std::min(86, (H - 20 - BODY_Y - 40 - (rows - 1) * gap) / rows);
-    return {12 + (i % cols) * (cw + gap), BODY_Y + 40 + (i / cols) * (ch + gap), cw, ch};
+    const int cols = 6, rows = (letterCount(bi) + cols - 1) / cols, gap = 10;
+    const int cw = (W - 48 - (cols - 1) * gap) / cols;
+    const int ch = std::min(80, (H - 24 - BODY_Y - (rows - 1) * gap) / rows);
+    return {24 + (i % cols) * (cw + gap), BODY_Y + (i / cols) * (ch + gap), cw, ch};
 }
 
 void renderBookHead(int bi, uint8_t* fb) {
-    cover(bi, {12, TOP + 10, 100, 112}, fb, false);
-    ui::text(ui::font(ui::F_TITLE), 128, TOP + 52, shortName(bi), fb, EPD_DRAW_ALIGN_LEFT, INK);
-    char cnt[16], sub[96];
+    char t[48];
+    snprintf(t, sizeof t, "%s", shortName(bi));
+    fitText(ui::font(ui::F_H1), t, W - 48);
+    ui::text(ui::font(ui::F_H1), 24, TOP + 44, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char cnt[16], sub[160];
     const Book& b = g_books[bi];
     countText(b.shown ? b.shown : b.count, cnt, sizeof cnt);
-    snprintf(sub, sizeof sub, "%s %s", cnt, b.unit[0] ? b.unit : "articles");
-    ui::text(ui::font(ui::F_SMALL), 128, TOP + 86, sub, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    snprintf(sub, sizeof sub, "%s", b.about[0] ? b.about : b.source);
-    fitText(ui::font(ui::F_TINY), sub, W - 140);
-    ui::text(ui::font(ui::F_TINY), 128, TOP + 112, sub, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    snprintf(sub, sizeof sub, "%s %s%s%s", cnt, b.unit[0] ? b.unit : "articles", b.about[0] ? " · " : "", b.about);
+    fitText(ui::font(ui::F_SMALL), sub, W - 48);
+    ui::text(ui::font(ui::F_SMALL), 24, TOP + 80, sub, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
 
 int g_listPage = 0;
-int listRows() { return (kListPrev.y - 8 - (BODY_Y + 40)) / LIST_ROW; }
+int listRows() { return (kListPrev.y - 8 - BODY_Y) / LIST_ROW; }
 void pagerRow(int page, int pages, uint8_t* fb) {
     if (pages <= 1) return;
-    frame(kListPrev, 2, fb);
-    frame(kListNext, 2, fb);
-    if (page > 0) ui::text(ui::font(ui::F_KEY), kListPrev.x + 55, kListPrev.y + 48, "<", fb, EPD_DRAW_ALIGN_CENTER, INK);
-    if (page + 1 < pages) ui::text(ui::font(ui::F_KEY), kListNext.x + 55, kListNext.y + 48, ">", fb, EPD_DRAW_ALIGN_CENTER, INK);
-    char p[16];
-    snprintf(p, sizeof p, "%d / %d", page + 1, pages);
-    ui::text(ui::font(ui::F_LABEL), W / 2, kListPrev.y + 46, p, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    char p[24];
+    snprintf(p, sizeof p, "%d of %d", page + 1, pages);
+    ui::text(ui::font(ui::F_SMALL), 28, kListPrev.y + 34, p, fb, EPD_DRAW_ALIGN_LEFT, 0x40);
+    auto btn = [&](const EpdRect& r, bool live, bool left) {
+        const uint8_t c = live ? INK : 0xA0;
+        ui::frameRound(r, 8, 2, fb, c, PAPER);
+        const int cx = r.x + r.width / 2, cy = r.y + r.height / 2, d = left ? 1 : -1;
+        for (int t = -1; t <= 1; ++t) {
+            epd_draw_line(cx + d * 5 + t, cy - 10, cx - d * 5 + t, cy, c, fb);
+            epd_draw_line(cx - d * 5 + t, cy, cx + d * 5 + t, cy + 10, c, fb);
+        }
+    };
+    btn(kListPrev, page > 0, true);
+    btn(kListNext, page + 1 < pages, false);
 }
 void listRow(int y, const char* title, uint8_t* fb) {
     char t[KEY + 8];
     snprintf(t, sizeof t, "%s", title);
-    const EpdFont* f = ui::font(ui::F_LABEL);
-    while (ui::textWidth(f, t) > W - 70 && strlen(t) > 4) {
-        size_t n = strlen(t) - 4;
-        while (n > 0 && ((uint8_t)t[n] & 0xC0) == 0x80) --n;
-        memcpy(t + n, "...", 4);
-    }
-    ui::text(f, 20, y + 44, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    ui::text(ui::font(ui::F_KEY), W - 22, y + 46, ">", fb, EPD_DRAW_ALIGN_RIGHT, INK);
-    epd_fill_rect({14, y + LIST_ROW - 2, W - 28, 1}, INK, fb);
+    fitText(ui::font(ui::F_LABEL), t, W - 90);
+    ui::text(ui::font(ui::F_LABEL), 24, y + 40, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(ui::font(ui::F_KEY), W - 26, y + 42, "\xE2\x80\xBA", fb, EPD_DRAW_ALIGN_RIGHT, 0x80);   // ›
+    epd_fill_rect({24, y + LIST_ROW - 1, W - 48, 1}, ui::HAIR, fb);
 }
 
 // --- a book's first page: its menu ------------------------------------------------
@@ -1187,14 +1160,14 @@ void addMenu(const char* title, const char* sub, bool header, int32_t rec = -1) 
     m.cut = 0;
     // A long title (a question) wraps once, at a space.
     const EpdFont* f = ui::font(ui::F_LABEL);
-    if (!header && ui::textWidth(f, m.title) > W - 70) {
+    if (!header && ui::textWidth(f, m.title) > W - 90) {
         int best = 0;
         char t[160];
         for (int i = 1; m.title[i] && i < 150; ++i) {
             if (m.title[i] != ' ') continue;
             memcpy(t, m.title, i);
             t[i] = 0;
-            if (ui::textWidth(f, t) <= W - 70) best = i; else break;
+            if (ui::textWidth(f, t) <= W - 90) best = i; else break;
         }
         m.cut = (uint8_t)(best ? best + 1 : 0);
     }
@@ -1250,11 +1223,12 @@ void findMenu(int bi) {
     for (int i = 0; i < g_docCount; ++i) addMenu(g_docs[i].title, "", false, (int32_t)g_docs[i].rec);
 }
 
-const EpdRect kBigAZ = {12, BODY_Y - 6, (W - 32) / 2, 58};
-const EpdRect kBigRandom = {20 + (W - 32) / 2, BODY_Y - 6, (W - 32) / 2, 58};
-constexpr int MENU_HEAD_H = 46, MENU_ROW_H = 64, MENU_ROW2_H = 86;
-int menuTop(int bi) { return bigBook(bi) ? BODY_Y + 64 : BODY_Y - 2; }
-int itemH(const MenuItem& m) { return m.header ? MENU_HEAD_H : (m.sub[0] ? MENU_ROW2_H : MENU_ROW_H) + (m.cut ? 32 : 0); }
+// a big book's two links, as words under the search box
+const EpdRect kBigAZ = {24, TOP + 166, 170, 44};
+const EpdRect kBigRandom = {214, TOP + 166, 190, 44};
+constexpr int MENU_HEAD_H = 50, MENU_ROW_H = 66, MENU_ROW2_H = 88;
+int menuTop(int bi) { return bigBook(bi) ? BODY_Y + 8 : TOP + 176; }
+int itemH(const MenuItem& m) { return m.header ? MENU_HEAD_H : (m.sub[0] ? MENU_ROW2_H : MENU_ROW_H) + (m.cut ? 30 : 0); }
 // Page starts: as many rows as fit above the pager; a header never ends a page.
 int g_menuPageStart[64];
 int g_menuPages = 0;
@@ -1285,9 +1259,8 @@ void renderMenu(int bi, uint8_t* fb) {
         if (m.header) {
             snprintf(t, sizeof t, "%s", m.title);
             for (char* c = t; *c; ++c) if (*c >= 'a' && *c <= 'z') *c -= 32;
-            fitText(ui::font(ui::F_TINY), t, W - 40);
-            ui::text(ui::font(ui::F_TINY), 16, y + 32, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
-            epd_fill_rect({14, y + MENU_HEAD_H - 6, W - 28, 3}, INK, fb);
+            fitText(ui::font(ui::F_TINY), t, W - 48);
+            ui::text(ui::font(ui::F_TINY), 24, y + 38, t, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
         } else {
             const int h = itemH(m);
             const EpdFont* lf = ui::font(ui::F_LABEL);
@@ -1295,22 +1268,22 @@ void renderMenu(int bi, uint8_t* fb) {
             int ty = y + (m.sub[0] ? 38 : 42);
             if (m.cut) {
                 snprintf(two, sizeof two, "%.*s", (int)m.cut - 1, m.title);
-                ui::text(lf, 20, ty, two, fb, EPD_DRAW_ALIGN_LEFT, INK);
-                ty += 32;
+                ui::text(lf, 24, ty, two, fb, EPD_DRAW_ALIGN_LEFT, INK);
+                ty += 30;
                 snprintf(two, sizeof two, "%s", m.title + m.cut);
             } else {
                 snprintf(two, sizeof two, "%s", m.title);
             }
-            fitText(lf, two, W - 70);
-            ui::text(lf, 20, ty, two, fb, EPD_DRAW_ALIGN_LEFT, INK);
+            fitText(lf, two, W - 90);
+            ui::text(lf, 24, ty, two, fb, EPD_DRAW_ALIGN_LEFT, INK);
             if (m.sub[0]) {
                 char sub[104];
                 snprintf(sub, sizeof sub, "%s", m.sub);
-                fitText(ui::font(ui::F_SMALL), sub, W - 70);
-                ui::text(ui::font(ui::F_SMALL), 20, ty + 32, sub, fb, EPD_DRAW_ALIGN_LEFT, INK);
+                fitText(ui::font(ui::F_SMALL), sub, W - 90);
+                ui::text(ui::font(ui::F_SMALL), 24, ty + 30, sub, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
             }
-            ui::text(ui::font(ui::F_KEY), W - 22, y + h / 2 + 12, ">", fb, EPD_DRAW_ALIGN_RIGHT, INK);
-            epd_fill_rect({14, y + h - 2, W - 28, 1}, INK, fb);
+            ui::text(ui::font(ui::F_KEY), W - 26, y + h / 2 + 12, "\xE2\x80\xBA", fb, EPD_DRAW_ALIGN_RIGHT, 0x80);
+            epd_fill_rect({24, y + h - 1, W - 48, 1}, ui::HAIR, fb);
         }
         y += itemH(m);
     }
@@ -1330,17 +1303,19 @@ int menuHit(int bi, int x, int y) {
     return -1;
 }
 void renderBigBar(uint8_t* fb) {
-    frame(kBigAZ, 2, fb);
-    ui::text(ui::font(ui::F_SMALL), kBigAZ.x + kBigAZ.width / 2, kBigAZ.y + 38, "BROWSE A-Z", fb, EPD_DRAW_ALIGN_CENTER, INK);
-    frame(kBigRandom, 2, fb);
-    ui::text(ui::font(ui::F_SMALL), kBigRandom.x + kBigRandom.width / 2, kBigRandom.y + 38, "RANDOM PAGE", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    const EpdFont* f = ui::font(ui::F_LABEL);
+    const char* az = "Browse A\xE2\x80\x93Z";
+    ui::text(f, kBigAZ.x, kBigAZ.y + 30, az, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    epd_fill_rect({kBigAZ.x, kBigAZ.y + 37, ui::textWidth(f, az), 2}, INK, fb);
+    ui::text(f, kBigRandom.x, kBigRandom.y + 30, "Random page", fb, EPD_DRAW_ALIGN_LEFT, INK);
+    epd_fill_rect({kBigRandom.x, kBigRandom.y + 37, ui::textWidth(f, "Random page"), 2}, INK, fb);
 }
 
 void renderBook(uint8_t* fb) {
     const int bi = g_open;
     renderBookHead(bi, fb);
     char lbl[64];
-    snprintf(lbl, sizeof lbl, "Search in %s", shortName(bi));
+    snprintf(lbl, sizeof lbl, "Search %s", shortName(bi));
     searchBar(kBookSearch, lbl, fb);
     findMenu(bi);
     if (!g_bookAZ && (g_menuCount || bigBook(bi))) {
@@ -1349,7 +1324,7 @@ void renderBook(uint8_t* fb) {
         else ui::text(ui::font(ui::F_SMALL), W / 2, BODY_Y + 140, "Search above, or browse A-Z.", fb, EPD_DRAW_ALIGN_CENTER, INK);
         return;
     }
-    ui::text(ui::font(ui::F_TINY), 16, BODY_Y + 26, "BROWSE A-Z", fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(ui::font(ui::F_TINY), 24, BODY_Y - 14, "BROWSE A\xE2\x80\x93Z", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     for (int i = 0; i < letterCount(bi); ++i) {
         const EpdRect r = letterRect(bi, i);
         frame(r, 2, fb);
@@ -1597,7 +1572,7 @@ bool openRecord(int bi, uint32_t i) {
     return openArticle(r);
 }
 
-constexpr int RECENT_TOP = TOP + 76, RECENT_ROW = 86;
+constexpr int RECENT_TOP = TOP + 196, RECENT_ROW = 86;
 int recentRows() { return (kListPrev.y - 8 - RECENT_TOP) / RECENT_ROW; }
 void renderRecent(uint8_t* fb) {
     tabs(2, fb);
@@ -1614,12 +1589,12 @@ void renderRecent(uint8_t* fb) {
         const int y = RECENT_TOP + r * RECENT_ROW;
         char t[KEY + 8];
         snprintf(t, sizeof t, "%s", e.title);
-        fitText(ui::font(ui::F_LABEL), t, W - 70);
-        ui::text(ui::font(ui::F_LABEL), 20, y + 38, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        fitText(ui::font(ui::F_LABEL), t, W - 90);
+        ui::text(ui::font(ui::F_LABEL), 24, y + 38, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
         const int bi = bookIndex(e.dir);
-        ui::text(ui::font(ui::F_SMALL), 20, y + 70, bi >= 0 ? shortName(bi) : e.dir, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        ui::text(ui::font(ui::F_KEY), W - 22, y + RECENT_ROW / 2 + 12, ">", fb, EPD_DRAW_ALIGN_RIGHT, INK);
-        epd_fill_rect({14, y + RECENT_ROW - 2, W - 28, 1}, INK, fb);
+        ui::text(ui::font(ui::F_SMALL), 24, y + 68, bi >= 0 ? shortName(bi) : e.dir, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        ui::text(ui::font(ui::F_KEY), W - 26, y + RECENT_ROW / 2 + 12, "\xE2\x80\xBA", fb, EPD_DRAW_ALIGN_RIGHT, 0x80);
+        epd_fill_rect({24, y + RECENT_ROW - 1, W - 48, 1}, ui::HAIR, fb);
     }
     pagerRow(g_listPage, pages, fb);
 }
@@ -1631,10 +1606,10 @@ void renderHome(uint8_t* fb) {
     searchBar(kAllSearch, lbl, fb);
     // EMERGENCY: straight to the page that matters.
     if (g_emergCount) {
-        ui::text(ui::font(ui::F_TINY), 16, EM_Y + 18, "EMERGENCY", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_TINY), 24, EM_Y + 18, "EMERGENCY", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
         for (int i = 0; i < g_emergCount; ++i) {
             const EpdRect r = emergRect(i);
-            epd_fill_rect(r, INK, fb);
+            ui::fillRound(r, 8, INK, fb);
             doba_icons::draw(g_emerg[i].icon, r.x + r.width / 2, r.y + 40, 48, PAPER, INK, fb);
             const EpdFont* ef = ui::font(ui::F_SMALL);
             if (ui::textWidth(ef, g_emerg[i].label) > r.width - 14) ef = ui::font(ui::F_TINY);
@@ -1644,7 +1619,7 @@ void renderHome(uint8_t* fb) {
     // The sections.
     for (int i = 0; i < g_secCount; ++i) {
         const EpdRect r = cellRect(i);
-        frame(r, 2, fb);
+        ui::frameRound(r, 8, 2, fb);
         const int isz = r.height > 150 ? 70 : r.height > 125 ? 58 : 50;
         doba_icons::draw(g_secs[i].icon, r.x + r.width / 2, r.y + r.height / 2 - 16, isz, INK, PAPER, fb);
         const EpdFont* f = ui::font(ui::F_SMALL);
@@ -1787,8 +1762,8 @@ void renderSection(uint8_t* fb) {
 }
 
 // SEARCH: the query, its scope, results with their book.
-const EpdRect kScope = {12, TOP + 8, W - 24, 52};
-const EpdRect kQuery = {12, TOP + 68, W - 24, 64};
+const EpdRect kScope = {24, TOP + 4, W - 48, 50};
+const EpdRect kQuery = {24, TOP + 60, W - 48, 64};
 constexpr int RES_TOP = TOP + 142, RES_H = 60;
 
 uint32_t scopeMask() { return g_scopeBook >= 0 ? 1u << g_scopeBook : g_scope < 0 ? 0xFFFFFFFFu : g_secs[g_scope].books; }
@@ -1797,19 +1772,19 @@ void renderSearchView(kbd::Keyboard& k, uint8_t* fb) {
     k.top = H - k.height();
     k.enterLabel = "OPEN";
     char line[96];
-    if (g_scopeBook >= 0) snprintf(line, sizeof line, "IN: %s   ·   all books >", shortName(g_scopeBook));
-    else if (g_scope < 0) snprintf(line, sizeof line, "IN: ALL BOOKS (%d)", g_bookCount);
-    else snprintf(line, sizeof line, "IN: %s   ·   all books >", g_secs[g_scope].name);
-    frame(kScope, 2, fb);
-    ui::text(ui::font(ui::F_SMALL), kScope.x + 14, kScope.y + 34, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    frame(kQuery, 3, fb);
+    if (g_scopeBook >= 0) snprintf(line, sizeof line, "In %s  \xC2\xB7  search all books instead", shortName(g_scopeBook));
+    else if (g_scope < 0) snprintf(line, sizeof line, "In all %d books", g_bookCount);
+    else snprintf(line, sizeof line, "In %s  \xC2\xB7  search all books instead", g_secs[g_scope].name);
+    fitText(ui::font(ui::F_SMALL), line, kScope.width - 8);
+    ui::text(ui::font(ui::F_SMALL), kScope.x + 4, kScope.y + 34, line, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    ui::frameRound(kQuery, 8, 2, fb);
     char q[300];
-    snprintf(q, sizeof q, "%s_", k.text);
+    snprintf(q, sizeof q, "%s|", k.text);
     if (k.text[0])
-        ui::text(ui::font(ui::F_KEY), kQuery.x + 14, kQuery.y + 44, q, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_KEY), kQuery.x + 18, kQuery.y + 44, q, fb, EPD_DRAW_ALIGN_LEFT, INK);
     else
-        ui::text(ui::font(ui::F_SMALL), kQuery.x + 14, kQuery.y + 42, "_  type the start of a title", fb,
-                 EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_SMALL), kQuery.x + 18, kQuery.y + 40, "Type the start of a title", fb,
+                 EPD_DRAW_ALIGN_LEFT, ui::GREY);
     char key[KEY + 1];
     fold(k.text, key, sizeof key);
     char want[KEY + 16];
@@ -1821,15 +1796,19 @@ void renderSearchView(kbd::Keyboard& k, uint8_t* fb) {
     for (int i = 0; i < g_resultCount; ++i) {
         const int y = RES_TOP + i * RES_H;
         if (y + RES_H > k.top) break;
-        ui::text(ui::font(ui::F_KEY), 24, y + 40, g_results[i].title, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        if (g_bookCount > 1 && g_scopeBook < 0) bookTag(g_results[i].book, W - 20, y + 22, INK, fb);
-        epd_fill_rect({12, y + RES_H - 2, W - 24, 1}, INK, fb);
+        char rt[KEY + 8];
+        snprintf(rt, sizeof rt, "%s", g_results[i].title);
+        fitText(ui::font(ui::F_LABEL), rt, W - 150);
+        ui::text(ui::font(ui::F_LABEL), 24, y + 40, rt, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        if (g_bookCount > 1 && g_scopeBook < 0)
+            ui::text(ui::font(ui::F_TINY), W - 24, y + 38, shortName(g_results[i].book), fb, EPD_DRAW_ALIGN_RIGHT, ui::GREY);
+        epd_fill_rect({24, y + RES_H - 1, W - 48, 1}, ui::HAIR, fb);
     }
     if (key[0] && g_resultCount == 0)
-        ui::text(ui::font(ui::F_SMALL), W / 2, RES_TOP + 60, "nothing starts with that", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), 24, RES_TOP + 50, "Nothing starts with that", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     if (!key[0]) {
-        ui::text(ui::font(ui::F_SMALL), W / 2, RES_TOP + 50, "e.g.  water, burn, knot, вогнище", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(ui::font(ui::F_TINY), W / 2, RES_TOP + 84, "case and accents don't matter", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), 24, RES_TOP + 50, "For example: water, burn, knot, вогнище", fb, EPD_DRAW_ALIGN_LEFT, 0x40);
+        ui::text(ui::font(ui::F_SMALL), 24, RES_TOP + 80, "Case and accents don\u2019t matter", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     }
     k.render(fb);
 }
@@ -1909,31 +1888,47 @@ void headingText(const Line& l, const EpdFont* f, int maxW, char* out, size_t ca
     }
 }
 
-// Two arrows and a middle, the same on every reading screen.
+// Back, the place, on: the same on every reading screen. Words, not boxes.
 void footer(const char* left, const char* mid, const char* midSub, const char* right, uint8_t* fb) {
     const int fy = H - FOOT_H;
-    epd_fill_rect({0, fy, W, 2}, INK, fb);
-    const EpdFont* k = ui::font(ui::F_KEY);
+    epd_fill_rect({24, fy, W - 48, 1}, ui::HAIR, fb);
+    const EpdFont* k = ui::font(ui::F_LABEL);
+    auto chev = [&](int cx, int cy, int d) {   // d: -1 points left
+        for (int t = -1; t <= 1; ++t) {
+            epd_draw_line(cx - d * 5 + t, cy - 9, cx + d * 4 + t, cy, INK, fb);
+            epd_draw_line(cx + d * 4 + t, cy, cx - d * 5 + t, cy + 9, INK, fb);
+        }
+    };
+    char l[16], r[16];
+    auto word = [](const char* w, char* out) {   // "PREV" -> "Prev"
+        snprintf(out, 16, "%s", w);
+        for (char* c = out + 1; *c; ++c) if (*c >= 'A' && *c <= 'Z') *c += 32;
+    };
     if (left) {
-        epd_fill_triangle(26, fy + 39, 44, fy + 27, 44, fy + 51, INK, fb);
-        ui::text(k, 56, fy + 50, left, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    }
-    if (right && strcmp(right, "CLOSE") != 0) {
-        epd_fill_triangle(W - 26, fy + 39, W - 44, fy + 27, W - 44, fy + 51, INK, fb);
+        word(left, l);
+        chev(32, fy + 38, -1);
+        ui::text(k, 46, fy + 46, l, fb, EPD_DRAW_ALIGN_LEFT, INK);
     }
     if (right) {
-        ui::text(k, strcmp(right, "CLOSE") ? W - 56 : W * 5 / 6, fy + 50, right, fb,
-                 strcmp(right, "CLOSE") ? EPD_DRAW_ALIGN_RIGHT : EPD_DRAW_ALIGN_CENTER, INK);
+        word(right, r);
+        const bool close = !strcmp(right, "CLOSE");
+        if (!close) chev(W - 32, fy + 38, 1);
+        ui::text(k, close ? W - 28 : W - 46, fy + 46, r, fb, EPD_DRAW_ALIGN_RIGHT, INK);
     }
-    epd_fill_rect({W / 3, fy + 14, 1, FOOT_H - 28}, INK, fb);
-    epd_fill_rect({W * 2 / 3, fy + 14, 1, FOOT_H - 28}, INK, fb);
-    ui::text(ui::font(ui::F_LABEL), W / 2, fy + (midSub ? 36 : 46), mid, fb, EPD_DRAW_ALIGN_CENTER, INK);
-    if (midSub) ui::text(ui::font(ui::F_TINY), W / 2, fy + 60, midSub, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    char m[32];
+    snprintf(m, sizeof m, "%s", mid);
+    if (!strcmp(mid, "CLOSE")) snprintf(m, sizeof m, "Close");
+    ui::text(ui::font(ui::F_SMALL), W / 2, fy + (midSub ? 34 : 44), m, fb, EPD_DRAW_ALIGN_CENTER, 0x30);
+    if (midSub) {
+        char ms[24];
+        snprintf(ms, sizeof ms, "%s", !strcmp(midSub, "CONTENTS") ? "Contents" : midSub);
+        ui::text(ui::font(ui::F_TINY), W / 2, fy + 58, ms, fb, EPD_DRAW_ALIGN_CENTER, ui::GREY);
+    }
 }
 
 void renderToc(uint8_t* fb) {
-    ui::text(ui::font(ui::F_LABEL), 14, TOP + 34, "CONTENTS", fb, EPD_DRAW_ALIGN_LEFT, INK);
-    epd_fill_rect({0, TOP + 52, W, 2}, INK, fb);
+    ui::text(ui::font(ui::F_LABEL), MARGIN, TOP + 34, "Contents", fb, EPD_DRAW_ALIGN_LEFT, INK);
+    epd_fill_rect({MARGIN, TOP + 52, W - 2 * MARGIN, 1}, ui::HAIR, fb);
     const int per = tocRowsPerPage();
     if (g_tocPage >= tocPages()) g_tocPage = tocPages() - 1;
     int cur = -1;   // the part being read: the last heading at or before this page
@@ -1956,10 +1951,10 @@ void renderToc(uint8_t* fb) {
         const int pw = ui::textWidth(f, pn);
         const EpdFont* tf = l.kind == 'S' ? fs : fh;
         headingText(l, tf, W - 2 * MARGIN - in - pw - 24, buf, sizeof buf);
-        if (i == cur) epd_fill_rect({0, y + 8, 8, TOC_ROW - 16}, INK, fb);   // you are here
+        if (i == cur) epd_fill_rect({MARGIN - 18, y + 10, 5, TOC_ROW - 20}, INK, fb);   // you are here
         ui::text(tf, MARGIN + in, y + TOC_ROW / 2 + 8, buf, fb, EPD_DRAW_ALIGN_LEFT, INK);
         ui::text(f, W - MARGIN, y + TOC_ROW / 2 + 8, pn, fb, EPD_DRAW_ALIGN_RIGHT, INK);
-        epd_fill_rect({MARGIN + in, y + TOC_ROW - 1, W - 2 * MARGIN - in, 1}, INK, fb);
+        epd_fill_rect({MARGIN + in, y + TOC_ROW - 1, W - 2 * MARGIN - in, 1}, ui::HAIR, fb);
         y += TOC_ROW;
     }
     char mid[24];
@@ -1978,9 +1973,9 @@ void renderArticle(uint8_t* fb) {
     char crumb[KEY + 40];
     const View from = g_view == V_SEARCH ? g_searchFrom : g_view;
     if (from == V_SECTION)
-        snprintf(crumb, sizeof crumb, "%s  >  %s", g_secs[g_sec].name, g_title);
+        snprintf(crumb, sizeof crumb, "%s  \xE2\x80\xBA  %s", g_secs[g_sec].name, g_title);
     else if (from == V_BOOK || from == V_LETTER || (g_view == V_SEARCH && g_scopeBook >= 0))
-        snprintf(crumb, sizeof crumb, "%s  >  %s", shortName(g_current.book >= 0 ? g_current.book : g_open), g_title);
+        snprintf(crumb, sizeof crumb, "%s  \xE2\x80\xBA  %s", shortName(g_current.book >= 0 ? g_current.book : g_open), g_title);
     else
         snprintf(crumb, sizeof crumb, "%s", g_title);
     // Never under the button: cut at a character, mark the cut.
@@ -1996,17 +1991,11 @@ void renderArticle(uint8_t* fb) {
             if (ui::textWidth(cf, t) <= room) { snprintf(crumb, sizeof crumb, "%s", t); break; }
         }
     }
-    ui::text(cf, 14, TOP + 34, crumb, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    frame(kSizeBtn, 2, fb);
-#ifdef VFONT
-    ui::text(vf_face_cap(&Literata_700, 12.f), kSizeBtn.x + 22, kSizeBtn.y + 30, "A", fb, EPD_DRAW_ALIGN_CENTER, INK);
-    ui::text(vf_face_cap(&Literata_700, 21.f), kSizeBtn.x + 50, kSizeBtn.y + 32, "A", fb, EPD_DRAW_ALIGN_CENTER, INK);
-#else
-    ui::text(ui::font(ui::F_LABEL), kSizeBtn.x + kSizeBtn.width / 2, kSizeBtn.y + 30, "Aa", fb, EPD_DRAW_ALIGN_CENTER, INK);
-#endif
-    // Rule doubles as a progress bar: thick for the read part.
-    epd_fill_rect({0, TOP + 54, W, 2}, INK, fb);
-    epd_fill_rect({0, TOP + 52, W * (g_page + 1) / g_pageCount, 6}, INK, fb);
+    ui::text(cf, MARGIN, TOP + 32, crumb, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    ui::text(ui::font(ui::F_LABEL), kSizeBtn.x + kSizeBtn.width - 4, kSizeBtn.y + 28, "Aa", fb, EPD_DRAW_ALIGN_RIGHT, INK);
+    // A hairline that is also the progress: black for the part read.
+    epd_fill_rect({MARGIN, TOP + 50, W - 2 * MARGIN, 1}, ui::HAIR, fb);
+    epd_fill_rect({MARGIN, TOP + 49, (W - 2 * MARGIN) * (g_page + 1) / g_pageCount, 3}, INK, fb);
 
     const int first = g_pageStarts[g_page];
     const int last = g_page + 1 < g_pageCount ? g_pageStarts[g_page + 1] : g_lineCount;
@@ -2108,8 +2097,9 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
         case V_SHELF: {
             if (hit(kTabs, x, y)) { const int t = tabAt(x); g_view = t == 1 ? V_HOME : t == 2 ? V_RECENT : V_SHELF; g_listPage = 0; return false; }
             if (hit(kAllSearch, x, y)) { g_scope = -1; g_scopeBook = -1; g_searchFrom = V_SHELF; g_view = V_SEARCH; k.clear(); return false; }
+            if (shelfPages() > 1 && hit(kListPrev, x, y)) { if (g_shelfPage > 0) --g_shelfPage; return false; }
+            if (shelfPages() > 1 && hit(kListNext, x, y)) { if (g_shelfPage + 1 < shelfPages()) ++g_shelfPage; return false; }
             const int b = shelfHit(x, y);
-            if (b == -2) { g_shelfPage = (g_shelfPage + 1) % shelfPages(); return false; }
             if (b >= 0) { g_open = b; g_listPage = 0; g_bookAZ = false; g_view = V_BOOK; Serial.printf("[lib] book %s\n", g_books[b].dir); }
             return false;
         }
@@ -2269,9 +2259,8 @@ bool libraryBack() {
 const char* libraryTitle() {
     switch (g_view) {
         case V_SECTION: return g_secs[g_sec].name;
-        case V_BOOK: case V_LETTER: return shortName(g_open);
-        case V_SEARCH: return "SEARCH";
-        default: return "LIBRARY";
+        case V_SEARCH: return "Search";
+        default: return "";        // the page names itself, big
     }
 }
 

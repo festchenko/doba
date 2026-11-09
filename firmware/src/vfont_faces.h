@@ -12,8 +12,14 @@
 // tick, and every screen reads like the map's coordinate strip.
 #include "fonts/vf/jbmono_800.h"
 #include "fonts/vf/jbmono_700.h"
+// DOBA: words in Inter (OFL, Latin + Cyrillic), numbers stay JetBrains Mono —
+// the calm look from the design canvas: proportional text, columns for digits.
+#include "fonts/vf/inter_500.h"
+#include "fonts/vf/inter_700.h"
 #define VF_VALUES (&JBMono_800)
-#define VF_LABELS (&JBMono_700)
+#define VF_MONO   (&JBMono_700)
+#define VF_LABELS (&Inter_500)
+#define VF_STRONG (&Inter_700)
 #define Impact_S     (*vf_face_digit(VF_VALUES, 20))
 #define Impact_T     (*vf_face_digit(VF_VALUES, 30))
 #define Impact_V     (*vf_face_digit(VF_VALUES, 46))
@@ -26,9 +32,9 @@
 #define Impact_XL    (*vf_face_digit(VF_VALUES, 158))
 #define Impact_128   (*vf_face_digit(VF_VALUES, 219))
 #define Arial_L      (*vf_face_digit(VF_LABELS, 11))
-#define Arial_B      (*vf_face_digit(VF_LABELS, 15))
-#define ArialBold_14 (*vf_face_digit(VF_LABELS, 21))
-#define ArialBold_20 (*vf_face_digit(VF_LABELS, 30))
+#define Arial_B      (*vf_face_digit(VF_LABELS, 13))
+#define ArialBold_14 (*vf_face_digit(VF_STRONG, 16))
+#define ArialBold_20 (*vf_face_digit(VF_STRONG, 22))
 #else
 #include "fonts/arial_l.h"
 #include "fonts/arial_b.h"

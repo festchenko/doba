@@ -139,8 +139,23 @@ enum FontRole : uint8_t {
     F_BODY_H,   // article headings
     F_TITLE,    // Impact_T, list titles
     F_BIG,      // Impact_V
+    F_MONO,     // DOBA: digits in columns (MGRS, clock)
+    F_H1,       // DOBA: a page's own big name ("Library", "Wikipedia")
+    F_STRONG,   // DOBA: small bold (names under covers)
 };
+constexpr uint8_t GREY = 0x60;   // DOBA: secondary text
+constexpr uint8_t HAIR = 0xB0;   // DOBA: hairlines between rows
+// DOBA: rounded boxes (the design canvas's 8 px corners).
+void fillRound(const EpdRect& r, int rad, uint8_t color, uint8_t* fb);
+// An outline `t` px wide; the inside is filled with `inside`.
+void frameRound(const EpdRect& r, int rad, int t, uint8_t* fb, uint8_t color = 0x00, uint8_t inside = 0xFF);
 const EpdFont* font(FontRole r);
+// DOBA: "RADIO MODE" -> "Radio mode"; strings with lower case, and acronyms
+// (GPS, USB, SOS...), stay as they are. Returns out.
+const char* sentence(const char* in, char* out, size_t n);
+// DOBA: digits at a given ink height: mono (JetBrains Mono 700) or heavy (800).
+const EpdFont* monoFont(int digitPx);
+const EpdFont* valueFont(int digitPx);
 }  // namespace ui
 
 // Main ride screen. The fields, their order and their sizes come from `layout`

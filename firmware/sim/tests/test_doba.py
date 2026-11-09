@@ -68,7 +68,7 @@ def test_an_article_link_opens_its_article_and_back_returns(doba, book):
     boot(doba)
     doba.console("screen library", 800)
     time.sleep(0.6)
-    doba.tap(270, 960 - 49)                                 # "Search all books", at the bottom
+    doba.tap(270, TOP + 150)                                # "Search all books", under the tabs
     time.sleep(0.6)
     for c in "wat":
         doba.tap(*key(c))
@@ -96,14 +96,14 @@ def test_points_from_the_card_show_azimuth_and_go_to_sets_the_map(doba):
     time.sleep(2)
     doba.console("screen points", 800)
     time.sleep(0.8)
-    doba.tap(270, TOP + 262 + 40)                           # CAMP
+    doba.tap(270, TOP + 436 + 40)                           # CAMP
     time.sleep(0.8)
     doba.tap(270, 960 - 196 + 40)                           # GO TO
     doba.wait_status(lambda s: s["screen"] == "map", timeout=5)
     # MARK HERE appends a point to the card's file.
     doba.console("screen points", 800)
     time.sleep(0.8)
-    doba.tap(130, TOP + 158 + 40)
+    doba.tap(130, TOP + 306 + 30)
     time.sleep(1.5)
     with open(os.path.join(doba.sd, "doba", "points.txt")) as f:
         lines = f.read().splitlines()
@@ -185,7 +185,7 @@ def test_a_manual_pdf_becomes_chapters_found_by_their_own_words(doba, tmp_path):
     boot(doba)
     doba.console("screen library", 800)
     time.sleep(0.6)
-    doba.tap(270, 960 - 49)                                 # "Search all books", at the bottom
+    doba.tap(270, TOP + 150)                                # "Search all books", under the tabs
     time.sleep(0.6)
     for c in "shel":
         doba.tap(*key(c))
@@ -239,14 +239,14 @@ def test_library_sections_open_their_guides_and_emergency_buttons_jump(doba, boo
     doba.console("screen library", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(270, TOP + 36)                                 # TOPICS tab (middle)
+    doba.tap(150, TOP + 96)                                 # Topics tab
     time.sleep(0.6)
-    doba.tap(96, TOP + 72 + 28 + 54)                        # BLEEDING
+    doba.tap(96, TOP + 194 + 28 + 54)                        # BLEEDING
     doba.wait_log(r"\[lib\] open 'Tourniquet'", since=since)
     time.sleep(0.6)
     doba.tap(50, 30)                                        # BACK: to the sections
     time.sleep(0.8)
-    doba.tap(96, TOP + 72 + 28 + 108 + 16 + 40)             # WATER, first cell
+    doba.tap(96, TOP + 194 + 28 + 108 + 18 + 40)             # WATER, first cell
     time.sleep(0.8)
     since = doba.log_seq()
     doba.tap(270, TOP + 120 + 50)                           # START HERE card
@@ -279,9 +279,9 @@ def test_a_figure_in_a_manual_is_shown_as_a_picture_in_its_article(doba, tmp_pat
     doba.console("screen library", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(270, TOP + 36)                                 # TOPICS tab (middle)
+    doba.tap(150, TOP + 96)                                 # Topics tab
     time.sleep(0.6)
-    doba.tap(96, TOP + 72 + 28 + 54)
+    doba.tap(96, TOP + 194 + 28 + 54)
     doba.wait_log(r"\[lib\] open 'Knots \(US Army\)'", since=since)
     doba.wait_log(r"\[lib\] picture \d+ \d+x\d+", since=since)
 
@@ -305,9 +305,9 @@ def test_a_picture_in_a_zim_article_reaches_the_screen_from_its_pack(doba, book)
     doba.console("screen library", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(270, TOP + 36)                                 # TOPICS tab (middle)
+    doba.tap(150, TOP + 96)                                 # Topics tab
     time.sleep(0.6)
-    doba.tap(96, TOP + 72 + 28 + 54)
+    doba.tap(96, TOP + 194 + 28 + 54)
     doba.wait_log(r"\[lib\] picture [0-9a-f]{10} 480x320", since=since)
 
 
@@ -347,7 +347,7 @@ def test_reader_text_size_and_contents(doba, book):
     boot(doba)
     doba.console("screen library", 800)
     time.sleep(0.6)
-    doba.tap(270, 960 - 49)
+    doba.tap(270, TOP + 150)
     time.sleep(0.6)
     for c in "wat":
         doba.tap(*key(c))
@@ -390,7 +390,7 @@ def test_the_library_opens_on_its_books_and_a_book_opens_its_documents(doba, boo
     doba.console("screen library", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(100, TOP + 76 + 80)                            # the first cover
+    doba.tap(100, TOP + 204 + 75)                            # the first cover
     doba.wait_log(r"\[lib\] book field", since=since)
     time.sleep(0.8)
     since = doba.log_seq()
@@ -446,20 +446,20 @@ def test_a_big_book_opens_on_its_picks_and_a_z_splits_until_it_lists(doba, book)
     doba.console("screen library", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(100, TOP + 76 + 80)                            # the cover
+    doba.tap(100, TOP + 204 + 75)                            # the cover
     doba.wait_log(r"\[lib\] book field", since=since)
     time.sleep(0.8)
     doba.screenshot(os.path.join(doba.dir, "big.png"))
     since = doba.log_seq()
-    doba.tap(200, TOP + 216 + 104 + 30)                     # the first pick
+    doba.tap(200, TOP + 300)                                # the first pick
     doba.wait_log(r"\[lib\] open 'Knots'", since=since)
     time.sleep(0.6)
     doba.tap(50, 30)                                        # BACK to the book
     time.sleep(0.8)
-    doba.tap(130, TOP + 216 + 30)                           # BROWSE A-Z
+    doba.tap(100, TOP + 186)                                # Browse A-Z
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(50, TOP + 216 + 40 + 40)                       # A
+    doba.tap(50, TOP + 250)                                 # A
     doba.wait_log(r"\[lib\] index 'A': \d+ entries, \d+ tabs", since=since)
     time.sleep(0.8)
     doba.screenshot(os.path.join(doba.dir, "tabs.png"))
@@ -488,12 +488,12 @@ def test_a_book_opens_on_its_menu_and_a_row_opens_its_page(doba, book):
     doba.console("screen library", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(100, TOP + 76 + 80)                            # the cover
+    doba.tap(100, TOP + 204 + 75)                            # the cover
     doba.wait_log(r"\[lib\] book field", since=since)
     time.sleep(0.8)
     doba.screenshot(os.path.join(doba.dir, "menu.png"))
     since = doba.log_seq()
-    doba.tap(200, TOP + 214 + 46 + 40)                      # under START HERE: Knots
+    doba.tap(200, TOP + 176 + 50 + 40)                      # under START HERE: Knots
     doba.wait_log(r"\[lib\] open 'Knots'", since=since)
 
 
@@ -503,7 +503,7 @@ def test_recent_lists_what_was_read_and_opens_it_again(doba, book):
     boot(doba)
     doba.console("screen library", 800)
     time.sleep(0.6)
-    doba.tap(270, 960 - 49)                                 # search all books
+    doba.tap(270, TOP + 150)                                 # search all books
     time.sleep(0.6)
     for c in "kno":
         doba.tap(*key(c))
@@ -518,8 +518,8 @@ def test_recent_lists_what_was_read_and_opens_it_again(doba, book):
     time.sleep(0.6)
     doba.tap(50, 30)                                        # BACK: the shelf
     time.sleep(0.6)
-    doba.tap(450, TOP + 36)                                 # RECENT
+    doba.tap(240, TOP + 96)                                 # Recent tab
     time.sleep(0.6)
     since = doba.log_seq()
-    doba.tap(200, TOP + 76 + 40)                            # the first row
+    doba.tap(200, TOP + 196 + 40)                           # the first row
     doba.wait_log(r"\[lib\] open 'Knots'", since=since)
