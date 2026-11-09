@@ -704,16 +704,14 @@ void ui_map_draw_zoom_button(bool zoomIn, bool pressed, uint8_t* fb) {
 // MAP LAYERS button: same box as the zoom buttons, stacked above them, with a
 // "stack of sheets" glyph — two offset outlined squares, the front one filled.
 static void drawLayersButton(uint8_t* fb) {
+    // DOBA: rounded like the zoom buttons; opens the map options and legend.
     EpdRect r = {kMapZoom.zoomX, kMapZoom.layersY, kMapZoom.size, kMapZoom.size};
-    epd_fill_rect(r, 0xFF, fb);
-    epd_draw_rect(r, 0x00, fb);
-    epd_draw_rect({r.x + 1, r.y + 1, r.width - 2, r.height - 2}, 0x00, fb);
+    ui::frameRound(r, 10, 2, fb, 0x00, 0xFF);
     const int cx = r.x + r.width / 2, cy = r.y + r.height / 2;
-    // Back sheet (outline), then the front sheet offset down-left (solid).
-    for (int b = 0; b < 3; ++b)
-        epd_draw_rect({cx - 10 + b, cy - 20 + b, 30 - 2 * b, 26 - 2 * b}, 0x00, fb);
-    epd_fill_rect({cx - 20, cy - 6, 30, 26}, 0xFF, fb);
-    epd_fill_rect({cx - 18, cy - 4, 26, 22}, 0x00, fb);
+    // two stacked sheets: the back one outlined, the front one solid
+    ui::frameRound({cx - 10, cy - 18, 28, 24}, 4, 2, fb, 0x00, 0xFF);
+    ui::fillRound({cx - 19, cy - 6, 30, 26}, 5, 0xFF, fb);
+    ui::fillRound({cx - 17, cy - 4, 26, 22}, 4, 0x00, fb);
 }
 
 // ---- MAP LAYERS screen -------------------------------------------------------
@@ -993,7 +991,7 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
     // Zoom buttons (design 1f, right edge). At the end of its range a button
     // goes grey: a tap that cannot do anything should look like it.
     ui_map_draw_zoom_button(true, false, fb);
-    if (!map.topo) drawLayersButton(fb);   // DOBA: bike layers mean nothing on topo
+    drawLayersButton(fb);   // DOBA: map options (grid, points, places, legend)
     ui_map_draw_zoom_button(false, false, fb);
     for (int k = 0; k < 2; ++k) {
         if (!(k ? map.zoomOutEnd : map.zoomInEnd)) continue;
