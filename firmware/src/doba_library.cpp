@@ -1012,20 +1012,45 @@ bool g_bookAZ = false;          // the A-Z grid of a big book is up
 const EpdRect kBigAZ = {12, BODY_Y - 4, (W - 32) / 2, 70};
 const EpdRect kBigRandom = {20 + (W - 32) / 2, BODY_Y - 4, (W - 32) / 2, 70};
 constexpr int PICK_TOP = BODY_Y + 104;
-int* g_picks = nullptr;
+// Picks: the book's own picks.txt (library/picks.py) if it has one, else
+// the titles the topics (sections.txt) take from it.
+typedef char PickTitle[KEY + 1];
+PickTitle* g_picks = nullptr;
 int g_pickCount = 0, g_pickBook = -1;
+void addPick(const char* t) {
+    if (g_pickCount >= MAX_ENTRIES || !t[0]) return;
+    for (int k = 0; k < g_pickCount; ++k)
+        if (!strcmp(g_picks[k], t)) return;
+    snprintf(g_picks[g_pickCount++], KEY + 1, "%s", t);
+}
 void findPicks(int bi) {
     if (g_pickBook == bi) return;
     g_pickBook = bi;
     g_pickCount = 0;
-    if (!g_picks) g_picks = (int*)heap_caps_malloc(sizeof(int) * MAX_ENTRIES, MALLOC_CAP_SPIRAM);
-    if (!g_picks || !g_entries) return;
-    for (int i = 0; i < g_entryCount; ++i) {
-        if (g_entries[i].book != bi) continue;
-        bool seen = false;
-        for (int k = 0; k < g_pickCount && !seen; ++k) seen = !strcmp(g_entries[g_picks[k]].title, g_entries[i].title);
-        if (!seen) g_picks[g_pickCount++] = i;
+    if (!g_picks) g_picks = (PickTitle*)heap_caps_malloc(sizeof(PickTitle) * MAX_ENTRIES, MALLOC_CAP_SPIRAM);
+    if (!g_picks) return;
+    char path[96];
+    snprintf(path, sizeof path, "%s/%s/picks.txt", kRoot, g_books[bi].dir);
+    sdLock();
+    File f = SD.open(path, FILE_READ);
+    if (f) {
+        char line[KEY + 8];
+        size_t n = 0;
+        for (int c = f.read();; c = f.read()) {
+            if (c < 0 || c == '\n') {
+                while (n && line[n - 1] == '\r') --n;
+                line[n] = 0;
+                addPick(line);
+                n = 0;
+                if (c < 0) break;
+            } else if (n + 1 < sizeof line) line[n++] = (char)c;
+        }
+        f.close();
     }
+    sdUnlock();
+    if (g_pickCount || !g_entries) return;
+    for (int i = 0; i < g_entryCount; ++i)
+        if (g_entries[i].book == bi) addPick(g_entries[i].title);
 }
 int pickRows() { return (kListPrev.y - 8 - PICK_TOP) / LIST_ROW; }
 void renderBigBook(int bi, uint8_t* fb) {
@@ -1044,7 +1069,7 @@ void renderBigBook(int bi, uint8_t* fb) {
     const int per = pickRows(), pages = (g_pickCount + per - 1) / per;
     if (g_listPage >= pages) g_listPage = pages - 1;
     for (int r = 0; r < per && g_listPage * per + r < g_pickCount; ++r)
-        listRow(PICK_TOP + r * LIST_ROW, g_entries[g_picks[g_listPage * per + r]].title, fb);
+        listRow(PICK_TOP + r * LIST_ROW, g_picks[g_listPage * per + r], fb);
     pagerRow(g_listPage, pages, fb);
 }
 
@@ -1117,6 +1142,11 @@ void keyLabel(const char* key, size_t len, const char* tail, char* out, size_t c
     snprintf(out, cap, "%s%s%s", len ? first : "", p, tail);
     for (char* c = out; *c; ++c) if (*c == ' ') *c = '_';
 }
+// Not of the book's alphabet: Cyrillic in a Latin book, Latin in a Ukrainian one.
+bool oddLetter(int bi, uint8_t c) {
+    if (cyrillicBook(bi)) return (c >= 'a' && c <= 'z') || (c >= 0x80 && (c < 0xD0 || c > 0xD2));
+    return c >= 0x80;
+}
 void findKids(int bi) {
     g_kidCount = 0;
     const Level& lv = g_levels[g_depth - 1];
@@ -1144,8 +1174,8 @@ void findKids(int bi) {
         if (rec[L] == 0) {                      // the prefix itself
             key[L] = 1; kl = L + 1;
             keyLabel(lv.key, L, "", k.label, sizeof k.label);
-        } else if (!lv.group && rec[L] >= 0x80 && !cyrillicBook(bi)) {   // a Latin book's odd letters: one tab
-            kl = 0;
+        } else if (!lv.group && oddLetter(bi, rec[L])) {   // letters of another alphabet: one tab
+            if (cyrillicBook(bi) && rec[L] < 0xD0) { key[L] = (char)0xD0; kl = L + 1; } else kl = 0;
             snprintf(k.label, sizeof k.label, "OTHER");
         } else if (!lv.group && rec[L] > ' ' && rec[L] < 'a') {   // signs and digits: one tab each kind
             const bool digit = rec[L] >= '0' && rec[L] <= '9';
@@ -1161,7 +1191,7 @@ void findKids(int bi) {
         }
         k.from = pos;
         k.to = kl ? lowerIn(f, key, kl, pos + 1, lv.to) : lv.to;
-        k.more = !lv.group && ((rec[L] > ' ' && rec[L] < 'a') || !kl);   // a group: its records share only the prefix
+        k.more = !lv.group && ((rec[L] > ' ' && rec[L] < 'a') || oddLetter(bi, rec[L]));   // a group: its records share only the prefix
         if (!k.label[0]) snprintf(k.label, sizeof k.label, "?");
         pos = k.to;
         ++g_kidCount;
@@ -1823,7 +1853,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
                 if (pages > 1 && hit(kListNext, x, y)) { if (g_listPage + 1 < pages) ++g_listPage; return false; }
                 const int r = (y - PICK_TOP) / LIST_ROW, i = g_listPage * per + r;
                 if (y >= PICK_TOP && r < per && i < g_pickCount)
-                    return openEntry(bi, g_entries[g_picks[i]].title);
+                    return openEntry(bi, g_picks[i]);
                 return false;
             }
             for (int i = 0; i < letterCount(bi); ++i)

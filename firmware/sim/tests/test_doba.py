@@ -436,6 +436,12 @@ def test_a_big_book_opens_on_its_picks_and_a_z_splits_until_it_lists(doba, book)
                 "  - Knots | tie | field:Knots\n")
     subprocess.run([sys.executable, os.path.join(LIB, "sections.py"), lib, "--src", src],
                    check=True, capture_output=True, text=True)
+    picks = os.path.join(doba.sd, "picks.src")
+    with open(picks, "w") as f:
+        f.write("No such page|Knots\nMissing too\n")
+    r = subprocess.run([sys.executable, os.path.join(LIB, "picks.py"), os.path.join(lib, "field"), picks],
+                       check=True, capture_output=True, text=True)
+    assert "1 picks, 1 missing" in r.stdout          # its own picks before the topics'
     boot(doba)
     doba.console("screen library", 800)
     time.sleep(0.8)
@@ -446,7 +452,7 @@ def test_a_big_book_opens_on_its_picks_and_a_z_splits_until_it_lists(doba, book)
     doba.screenshot(os.path.join(doba.dir, "big.png"))
     since = doba.log_seq()
     doba.tap(200, TOP + 216 + 104 + 30)                     # the first pick
-    doba.wait_log(r"\[lib\] open '(Knots|Water purification)'", since=since)
+    doba.wait_log(r"\[lib\] open 'Knots'", since=since)
     time.sleep(0.6)
     doba.tap(50, 30)                                        # BACK to the book
     time.sleep(0.8)
