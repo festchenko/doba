@@ -4071,7 +4071,11 @@ void ui_render_grey_test(uint8_t* fb) {
 // DOBA: see ui_render.h.
 const EpdFont* ui::font(ui::FontRole r) {
     switch (r) {
+#ifdef VFONT
+        case F_TINY:   return vf_face_digit(VF_LABELS, 13);   // DOBA: 11 was hard to read
+#else
         case F_TINY:   return &Arial_L;
+#endif
         case F_SMALL:  return &Arial_B;
         case F_LABEL:  return &ArialBold_14;
         case F_KEY:    return &ArialBold_20;

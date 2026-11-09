@@ -428,12 +428,12 @@ void renderSetup(const RideState& s, uint8_t* fb) {
             }
             case R_MILS: {
                 static const char* const kM[] = {"60-00", "6400"};
-                caption(y, SROW_H, "ANGLES", milspec::milsSystem() == 6400 ? "NATO mils" : "6000 mils (UA/RU)", fb);
+                caption(y, SROW_H, "ANGLES", milspec::milsSystem() == 6400 ? "NATO mils" : "6000 mils (UA)", fb);
                 segments(y, SROW_H, kM, 2, milspec::milsSystem() == 6400 ? 1 : 0, fb);
                 break;
             }
             case R_MORE: {
-                caption(y, SROW_H, "MORE", "USB drive, GPS, radio mode", fb);
+                caption(y, SROW_H, "MORE", "USB, GPS, radio", fb);
                 const int top = y + (SROW_H - CTRL_H) / 2;
                 frame({CTRL_X, top, CTRL_W, CTRL_H}, 1, fb);
                 ui::text(ui::font(ui::F_SMALL), CTRL_X + CTRL_W / 2, top + CTRL_H / 2 + 9, "OPEN  >", fb,
@@ -540,6 +540,7 @@ const EpdRect kQuick = {130, BAR_Y, 120, BAR_H};
 const EpdRect kWrite = {258, BAR_Y, 150, BAR_H};
 const EpdRect kOlder = {12, BAR_Y, 110, BAR_H};
 const EpdRect kNewer = {416, BAR_Y, 112, BAR_H};
+const EpdRect kOnMap = {W - 132, TOP + 8, 120, 56};
 // In a chat: ^ older, QUICK, WRITE, v newer.
 
 bool isDm(const mesh_service::Message& m) {
@@ -746,10 +747,12 @@ void renderChat(uint8_t* fb) {
     // Header: who, and for a person how far and which way.
     char t[48], sub[80] = "";
     chatTitle(g_chatCh, g_chatDm, t, sizeof t);
+    bool onMap = false;
     if (g_chatDm) {
         for (int i = 0; i < mesh_service::nodeCount(); ++i) {
             mesh_service::Node nd;
             if (mesh_service::nodeAt(i, nd) && nd.num == g_chatDm) {
+                onMap = nd.hasPosition;
                 char when[12], where[40];
                 ago(nd.lastHeardMs, when, sizeof when);
                 whereIs(nd, where, sizeof where);
@@ -760,7 +763,10 @@ void renderChat(uint8_t* fb) {
     } else {
         snprintf(sub, sizeof sub, g_chatCh == 0 ? "everyone in range can read this" : "only those with the key");
     }
-    fit(body, t, W - 28);
+    // A person with a known position: ON MAP marks them and points the way.
+    if (onMap) button(kOnMap, "ON MAP", false, fb);
+    fit(body, t, onMap ? kOnMap.x - 24 : W - 28);
+    fit(tiny, sub, onMap ? kOnMap.x - 24 : W - 28);
     ui::text(body, 14, TOP + 34, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
     ui::text(tiny, 14, TOP + 58, sub, fb, EPD_DRAW_ALIGN_LEFT, INK);
     epd_fill_rect({0, TOP + 70, W, 2}, INK, fb);
@@ -935,6 +941,24 @@ Go tapComms(int x, int y) {
             return STAY;
         }
         case CV_CHAT:
+            if (g_chatDm && hit(kOnMap, x, y)) {
+                // the node as a waypoint (one per node, moved to where it is now), targeted
+                for (int i = 0; i < mesh_service::nodeCount(); ++i) {
+                    mesh_service::Node nd;
+                    if (!mesh_service::nodeAt(i, nd) || nd.num != g_chatDm || !nd.hasPosition) continue;
+                    char nm[doba_points::NAME_LEN];
+                    snprintf(nm, sizeof nm, "@%.20s", nd.shortName[0] ? nd.shortName : nd.longName);
+                    for (int k = doba_points::count() - 1; k >= 0; --k)
+                        if (!strcmp(doba_points::at(k)->name, nm)) doba_points::remove(k);
+                    const int idx = doba_points::add(nm, nd.latitude, nd.longitude);
+                    if (idx >= 0) {
+                        doba_points::setTarget(idx);
+                        Serial.printf("[comms] %s on the map\n", nm);
+                        return TO_MAP;
+                    }
+                }
+                return STAY;
+            }
             if (hit(kWrite, x, y)) { g_compose.clear(); return TO_COMPOSE; }
             if (hit(kQuick, x, y)) { g_cv = CV_QUICK; return STAY; }
             if (hit(kOlder, x, y)) { g_chatScroll += 3; return STAY; }
