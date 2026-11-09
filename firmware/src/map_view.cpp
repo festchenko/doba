@@ -943,7 +943,9 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
     }
     if (map.topo && milspec::gridOn()) milspec::drawGrid(map, fb);   // DOBA: km grid under route + rider
     renderMapTop(map, fb);
+    if (map.topo) milspec::drawPois(map, fb);   // DOBA: hospitals, water, food...
     milspec::drawTarget(map, s, fb);   // DOBA: the active waypoint
+    if (map.topo && map.panned) milspec::drawMeasure(map, fb);   // DOBA: A -> the cross
     drawScaleBar(map.metersPerPixel, s.useMiles, fb);
     // The turn banner occupies the top of the map, exactly where the compass
     // lives (compass spans y 78..146; the banner runs to y 202), so the north
@@ -1028,8 +1030,13 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
         if (ratio >= 1000) snprintf(scale, sizeof scale, "1:%ld %03ld", ratio / 1000, ratio % 1000);
         else snprintf(scale, sizeof scale, "1:%ld", ratio);
         ui::text(ui::font(ui::F_SMALL), W - 24, y0 + 22, scale, fb, EPD_DRAW_ALIGN_RIGHT, ui::INK);
-        ui::text(ui::font(ui::F_TINY), W - 24, y0 + 44, map.metersPerPixel < 20.0f ? "grid 1 km" : map.metersPerPixel < 200.0f ? "grid 10 km" : "grid 100 km",
-                 fb, EPD_DRAW_ALIGN_RIGHT, ui::GREY);
+        {   // the grid spacing and the 100 km square letters, as on a sheet's margin
+            char sq[4], gl[40];
+            milspec::square(map.centerLat, map.centerLon, sq, sizeof sq);
+            snprintf(gl, sizeof gl, "%s%s%s", map.metersPerPixel < 20.0f ? "grid 1 km" : map.metersPerPixel < 200.0f ? "grid 10 km" : "grid 100 km",
+                     sq[0] ? " \xC2\xB7 square " : "", sq);
+            ui::text(ui::font(ui::F_TINY), W - 24, y0 + 44, gl, fb, EPD_DRAW_ALIGN_RIGHT, ui::GREY);
+        }
         const int room = W - 24 - ui::textWidth(ui::font(ui::F_SMALL), scale) - 16;
         if (map.place[0]) {
             char up[40];

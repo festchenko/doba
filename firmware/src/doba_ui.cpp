@@ -1067,42 +1067,169 @@ Go tapCompose(int x, int y) {
     return STAY;
 }
 
-// --- MAPOPTS: what the map shows ----------------------------------------------------
+// --- MAPOPTS: what the map shows, and its legend --------------------------------------
 
-constexpr int MROW_TOP = TOP + 30, MROW_H = 96;
-const EpdRect kOpenPoints = {14, TOP + 30 + 3 * 96 + 36, W - 28, 80};
+constexpr int MROW_TOP = TOP + 20, MROW_H = 90, MROWS = 4;
+const EpdRect kOpenLegend = {24, TOP + 20 + 4 * 90 + 30, W - 48, 64};
+const EpdRect kOpenPoints = {24, TOP + 20 + 4 * 90 + 30 + 64 + 16, W - 48, 64};
+bool g_legend = false;
+
+// A row that opens a page: the words left, a chevron right, in a hairline box.
+void linkRow(const EpdRect& r, const char* label, const char* hint, uint8_t* fb) {
+    ui::frameRound(r, 10, 2, fb);
+    ui::text(ui::font(ui::F_LABEL), r.x + 20, r.y + (hint ? 28 : r.height / 2 + 9), label, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (hint) ui::text(ui::font(ui::F_TINY), r.x + 20, r.y + 52, hint, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    const int cx = r.x + r.width - 26, cy = r.y + r.height / 2;
+    for (int t = -1; t <= 1; ++t) {
+        epd_draw_line(cx - 4 + t, cy - 9, cx + 4 + t, cy, INK, fb);
+        epd_draw_line(cx + 4 + t, cy, cx - 4 + t, cy + 9, INK, fb);
+    }
+}
+
+// One line of the legend: a sample drawn at x 24..96, the words after it.
+void legendLine(int y, const char* what, const char* hint, uint8_t* fb) {
+    ui::text(ui::font(ui::F_SMALL), 116, y + (hint ? 4 : 14), what, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (hint) ui::text(ui::font(ui::F_TINY), 116, y + 28, hint, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+}
+
+void poiTag(int cx, int cy, int kind, uint8_t* fb) {
+    const EpdFont* f = ui::monoFont(13);
+    const char* c = milspec::poiCode(kind);
+    const int w = ui::textWidth(f, c) + 12;
+    ui::fillRound({cx - w / 2, cy - 12, w, 24}, 6, INK, fb);
+    ui::text(f, cx, cy + 6, c, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+}
+
+void renderLegend(const RideState& s, uint8_t* fb) {
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    double lat = 50, lon = 30;
+    float mpp = 8;
+    milspec::lastView(lat, lon, mpp);
+    if (s.gpsFix || s.everHadFix) { lat = s.latitude; lon = s.longitude; }
+    float ev, ix, fev, fix;
+    milspec::contourInterval(lat, mpp, false, ev, ix);
+    milspec::contourInterval(lat, mpp, true, fev, fix);
+    char t1[64], t2[64];
+    int y = TOP + 6;
+
+    section(y, "RELIEF AT THIS ZOOM", fb);
+    y += 52;
+    epd_fill_rect({24, y, 72, 1}, 0x44, fb);
+    snprintf(t1, sizeof t1, "Contour every %g m", ev);
+    snprintf(t2, sizeof t2, "flat country: every %g m", fev);
+    legendLine(y - 6, t1, t2, fb);
+    y += 56;
+    epd_fill_rect({24, y - 1, 72, 3}, 0x44, fb);
+    ui::text(ui::font(ui::F_TINY), 60, y - 6, "120", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    snprintf(t1, sizeof t1, "Bold every %g m, height on it", ix);
+    snprintf(t2, sizeof t2, "flat country: every %g m \xC2\xB7 zoom in for finer", fix);
+    legendLine(y - 6, t1, t2, fb);
+
+    y += 48;
+    section(y, "GRID AND COMPASS", fb);
+    y += 52;
+    epd_fill_rect({24, y, 72, 2}, 0x22, fb);
+    epd_fill_rect({58, y - 18, 2, 38}, 0x22, fb);
+    char sq[4];
+    milspec::square(lat, lon, sq, sizeof sq);
+    snprintf(t2, sizeof t2, "square %s: the 100 km letters, said before the numbers", sq[0] ? sq : "LC");
+    legendLine(y - 6, "MGRS lines, 1 km apart", t2, fb);
+    y += 56;
+    {
+        const float d = milgeo::declination(lat, lon);
+        snprintf(t1, sizeof t1, "Magnetic north %.1f\xC2\xB0 %s of true", fabsf(d), d >= 0 ? "east" : "west");
+        // a needle: N up, turned by the declination
+        const float a = d * (float)M_PI / 180.0f;
+        const int cx = 60, cy = y + 4;
+        for (int k = -1; k <= 1; ++k)
+            epd_draw_line(cx + k, cy + 18, cx + (int)(sinf(a) * 22) + k, cy - (int)(cosf(a) * 22), INK, fb);
+        ui::text(ui::font(ui::F_TINY), cx + (int)(sinf(a) * 22) + 10, cy - 12, "N", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        legendLine(y - 6, t1, "compass az on the map already allows for it", fb);
+    }
+
+    y += 48;
+    section(y, "MARKS", fb);
+    y += 50;
+    {   // saved point · going to · the cross · measure from A
+        int x = 40;
+        for (int k = 0; k < 3; ++k) {
+            epd_draw_line(x, y - 12 + k, x - 10 + k, y + 7 - k, INK, fb);
+            epd_draw_line(x - 10 + k, y + 7 - k, x + 10 - k, y + 7 - k, INK, fb);
+            epd_draw_line(x + 10 - k, y + 7 - k, x, y - 12 + k, INK, fb);
+        }
+        ui::text(ui::font(ui::F_SMALL), 64, y + 8, "Saved point", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        x = 290;
+        for (int r = 0; r < 3; ++r) epd_draw_circle(x, y, 14 - r, INK, fb);
+        epd_fill_rect({x - 20, y - 1, 40, 3}, INK, fb);
+        epd_fill_rect({x - 1, y - 20, 3, 40}, INK, fb);
+        ui::text(ui::font(ui::F_SMALL), 318, y + 8, "Going to", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        y += 54;
+        x = 40;
+        epd_fill_rect({x - 16, y - 2, 11, 5}, INK, fb);
+        epd_fill_rect({x + 6, y - 2, 11, 5}, INK, fb);
+        epd_fill_rect({x - 2, y - 16, 5, 11}, INK, fb);
+        epd_fill_rect({x - 2, y + 6, 5, 11}, INK, fb);
+        ui::text(ui::font(ui::F_SMALL), 64, y - 2, "Cross", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_TINY), 64, y + 20, "drag the map: read here", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        x = 290;
+        epd_fill_circle(x, y, 13, INK, fb);
+        ui::text(ui::font(ui::F_STRONG), x, y + 6, "A", fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+        ui::text(ui::font(ui::F_SMALL), 318, y - 2, "Measure from A", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_TINY), 318, y + 20, "tap the cross to set", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    }
+
+    y += 40;
+    section(y, "PLACES", fb);
+    y += 48;
+    const int per = (doba_pois::KINDS - 1 + 1) / 2;
+    for (int k = 1; k < doba_pois::KINDS; ++k) {
+        const int col = (k - 1) / per, row = (k - 1) % per;
+        const int x = 24 + col * 258, yy = y + row * 36;
+        poiTag(x + 20, yy, k, fb);
+        ui::text(ui::font(ui::F_SMALL), x + 48, yy + 7, doba_pois::kindName(k), fb, EPD_DRAW_ALIGN_LEFT, INK);
+    }
+}
 
 void renderMapOpts(const RideState& s, uint8_t* fb) {
-    (void)s;
+    if (g_legend) { renderLegend(s, fb); return; }
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     static const char* const kO[] = {"NORTH", "COURSE"};
     int y = MROW_TOP;
-    caption(y, MROW_H, "UP IS", mapTrackUp() ? "map turns with your course" : "north always up", fb);
+    caption(y, MROW_H, "UP IS", mapTrackUp() ? "the map turns with you" : "north always up", fb);
     segments(y, MROW_H, kO, 2, mapTrackUp() ? 1 : 0, fb);
-    epd_fill_rect({16, y + MROW_H - 1, W - 32, 1}, INK, fb);
+    epd_fill_rect({24, y + MROW_H - 1, W - 48, 1}, ui::HAIR, fb);
     y += MROW_H;
     caption(y, MROW_H, "MGRS GRID", "1 km lines, 10 km zoomed out", fb);
     toggle(y, MROW_H, milspec::gridOn(), fb);
-    epd_fill_rect({16, y + MROW_H - 1, W - 32, 1}, INK, fb);
+    epd_fill_rect({24, y + MROW_H - 1, W - 48, 1}, ui::HAIR, fb);
     y += MROW_H;
-    caption(y, MROW_H, "POINTS", "your waypoints on the map", fb);
+    caption(y, MROW_H, "POINTS", "your saved points", fb);
     toggle(y, MROW_H, milspec::pointsOn(), fb);
-    epd_fill_rect({16, y + MROW_H - 1, W - 32, 1}, INK, fb);
-    button(kOpenPoints, "POINTS LIST  >", false, fb);
-    const char* tips[] = {"Hold a finger on the map 1 s", "to drop a point there.",
-                          "Tap the compass to switch", "north-up / course-up."};
+    epd_fill_rect({24, y + MROW_H - 1, W - 48, 1}, ui::HAIR, fb);
+    y += MROW_H;
+    caption(y, MROW_H, "PLACES", doba_pois::available() ? "hospitals, water, food... zoomed in" : "no places file on the card", fb);
+    toggle(y, MROW_H, milspec::poisOn(), fb);
+    linkRow(kOpenLegend, "Legend", "contours, grid, marks, place letters", fb);
+    linkRow(kOpenPoints, "Saved points", nullptr, fb);
+    const char* tips[] = {"Hold a finger on the map 1 s to drop a point.",
+                          "Drag the map: the strip reads the cross.",
+                          "Tap the cross to measure from there.",
+                          "Tap the compass: north-up or course-up."};
     for (int i = 0; i < 4; ++i)
-        ui::text(ui::font(ui::F_SMALL), W / 2, kOpenPoints.y + kOpenPoints.height + 60 + i * 34 + (i >= 2 ? 20 : 0),
-                 tips[i], fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), 24, kOpenPoints.y + kOpenPoints.height + 56 + i * 36,
+                 tips[i], fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
 
 Go tapMapOpts(int x, int y) {
+    if (g_legend) return STAY;
+    if (hit(kOpenLegend, x, y)) { g_legend = true; return STAY; }
     if (hit(kOpenPoints, x, y)) return TO_POINTS;
     const int r = (y - MROW_TOP) / MROW_H;
-    if (y < MROW_TOP || r > 2) return STAY;
+    if (y < MROW_TOP || r >= MROWS) return STAY;
     if (r == 0) { const int i = segmentHit(x, 2); if (i >= 0) setMapTrackUp(i == 1); }
     if (r == 1 && toggleHit(x)) milspec::setGridOn(x >= CTRL_X + CTRL_W - 75);
     if (r == 2 && toggleHit(x)) milspec::setPointsOn(x >= CTRL_X + CTRL_W - 75);
+    if (r == 3 && toggleHit(x)) milspec::setPoisOn(x >= CTRL_X + CTRL_W - 75);
     return STAY;
 }
 
@@ -1332,7 +1459,8 @@ void renderPoints(const RideState& s, uint8_t* fb) {
     char ll[64], info[64];
     float dep;
     if (have) {
-        snprintf(ll, sizeof ll, "%.4f\xC2\xB0 %c, %.4f\xC2\xB0 %c", fabs(lat), lat >= 0 ? 'N' : 'S', fabs(lon), lon >= 0 ? 'E' : 'W');
+        snprintf(ll, sizeof ll, "%.4f\xC2\xB0 %c, %.4f\xC2\xB0 %c \xC2\xB7 decl %+.1f\xC2\xB0", fabs(lat), lat >= 0 ? 'N' : 'S',
+                 fabs(lon), lon >= 0 ? 'E' : 'W', milgeo::declination(lat, lon));
         if (doba_dem::depth(lat, lon, dep))   // on water: depth under you (EMODnet)
             snprintf(info, sizeof info, "%d satellites \xC2\xB7 %d m deep", s.satellites, (int)lroundf(dep));
         else
@@ -1488,6 +1616,14 @@ void renderPoint(const RideState& s, uint8_t* fb) {
         ui::text(ui::font(ui::F_TINY), tx, dialY - 92, "AZIMUTH", fb, EPD_DRAW_ALIGN_LEFT, INK);
         ui::text(ui::font(ui::F_TITLE), tx, dialY - 46, az, fb, EPD_DRAW_ALIGN_LEFT, INK);
         ui::text(ui::font(ui::F_SMALL), tx, dialY - 12, deg, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        {   // what to set on the compass here: true less the declination
+            float mb = (float)b - milgeo::declination(lat, lon);
+            if (mb < 0) mb += 360.0f;
+            char cm[8], ct[32];
+            milgeo::mils(mb, milspec::milsSystem(), cm, sizeof cm);
+            snprintf(ct, sizeof ct, "compass %s", cm);
+            ui::text(ui::font(ui::F_TINY), tx, dialY + 14, ct, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        }
         ui::text(ui::font(ui::F_TINY), tx, dialY + 42, "DISTANCE", fb, EPD_DRAW_ALIGN_LEFT, INK);
         ui::text(ui::font(ui::F_TITLE), tx, dialY + 88, ds, fb, EPD_DRAW_ALIGN_LEFT, INK);
         // Height of the point (DEM) and the climb to it.
@@ -1909,7 +2045,7 @@ const char* title(Page p) {
         case POINTS: return g_nearby ? "" : "Position";
         case POINT: return "Point";
         case POINT_NEW: return "New point";
-        case MAPOPTS: return "MAP";
+        case MAPOPTS: return g_legend ? "Legend" : "Map options";
         case SOS: return "SOS";
         case SUN: return "Sun & moon";
         case MORE: return "More";
@@ -1955,7 +2091,9 @@ Go back(Page p) {
             return TO_HOME;
         case POINT:   return TO_POINTS;
         case POINT_NEW: return TO_POINTS;
-        case MAPOPTS: return TO_MAP;
+        case MAPOPTS:
+            if (g_legend) { g_legend = false; return STAY; }
+            return TO_MAP;
         case SOS:     return TO_HOME;
         case SUN:     return TO_HOME;
         case MORE:    return TO_SETUP;

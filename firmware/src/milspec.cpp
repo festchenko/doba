@@ -2,6 +2,7 @@
 #include "milspec.h"
 #include "doba_points.h"
 #include "doba_dem.h"
+#include "doba_pois.h"
 
 #include <Preferences.h>
 #include <cmath>
@@ -106,7 +107,10 @@ void setFlag(const char* key, bool on, int8_t& cache) {
     p.putBool(key, on);
     p.end();
 }
-int8_t g_grid = -1, g_points = -1;
+int8_t g_grid = -1, g_points = -1, g_pois = -1;
+// Measure: point A (lat 99 = none).
+double g_aLat = 99, g_aLon = 0;
+double g_vLat = 50, g_vLon = 30;   // the view's middle, last frame
 // The last frame's projection, for long-press -> point.
 struct Frame { bool ok; int rx, ry; float mpp, north; double lat, lon; } g_frame = {};
 }  // namespace
@@ -115,6 +119,116 @@ bool gridOn() { return flag("grid", true, g_grid); }
 void setGridOn(bool on) { setFlag("grid", on, g_grid); }
 bool pointsOn() { return flag("pts", true, g_points); }
 void setPointsOn(bool on) { setFlag("pts", on, g_points); }
+bool poisOn() { return flag("pois", true, g_pois); }
+void setPoisOn(bool on) { setFlag("pois", on, g_pois); }
+
+bool measureOn() { return g_aLat < 90; }
+void measureClear() { g_aLat = 99; }
+void measureToggleAtCross() {
+    if (measureOn()) { measureClear(); return; }
+    double lat, lon;
+    if (screenToLatLon(SCREEN_W / 2, kCrossY, lat, lon)) { g_aLat = lat; g_aLon = lon; }
+}
+
+void square(double lat, double lon, char* out, size_t n) {
+    char m[32];
+    milgeo::mgrs(lat, lon, m, sizeof m);
+    const char* sp = strchr(m, ' ');
+    if (!sp || n < 3) { if (n) out[0] = 0; return; }
+    snprintf(out, n, "%.2s", sp + 1);
+}
+
+void contourInterval(double lat, float mpp, bool flat, float& every, float& index) {
+    // maps/style.py CONTOUR_INTERVALS(_FLAT), by the tile zoom drawn
+    int z = topo::zoomFor(lat, mpp);
+    if (z < 11) z = 11;
+    if (z > 16) z = 16;
+    static const float kN[6][2] = {{100, 500}, {50, 250}, {20, 100}, {10, 50}, {10, 50}, {10, 50}};
+    static const float kF[6][2] = {{20, 100}, {10, 50}, {5, 25}, {2.5f, 10}, {2.5f, 10}, {2.5f, 10}};
+    const float(*t)[2] = flat ? kF : kN;
+    every = t[z - 11][0];
+    index = t[z - 11][1];
+}
+
+const char* poiCode(int kind) {
+    static const char* const k[doba_pois::KINDS] = {
+        "", "H", "Dr", "Rx", "W", "F", "Fm", "Sh", "B", "P", "Po", "Fi", "A", "T", "O", "C", "As"};
+    return kind > 0 && kind < doba_pois::KINDS ? k[kind] : "?";
+}
+
+void drawPois(const MapScreenData& map, uint8_t* fb) {
+    if (!poisOn() || map.metersPerPixel <= 0 || map.metersPerPixel > 25.0f) return;
+    // The SD scan is not per frame: the nearest few hundred round the view's
+    // middle, again only when the view has moved a good part of a screen.
+    static doba_pois::Poi cache[60];
+    static int cn = -1;
+    static double qLat = 99, qLon = 0;
+    static float qMpp = 0;
+    double b, moved;
+    milgeo::bearingDistance(qLat, qLon, map.centerLat, map.centerLon, b, moved);
+    if (cn < 0 || qLat > 90 || moved > 150.0 * map.metersPerPixel || qMpp != map.metersPerPixel) {
+        cn = doba_pois::nearest(map.centerLat, map.centerLon, 0, cache, 60);
+        qLat = map.centerLat; qLon = map.centerLon; qMpp = map.metersPerPixel;
+    }
+    if (cn <= 0) return;
+    const View v = viewFor(map);
+    const int top = ui::STATUS_H + (map.topo ? 56 : 0), bottom = ui::MAP_STRIP_TOP;
+    const EpdFont* f = ui::monoFont(13);
+    for (int i = cn - 1; i >= 0; --i) {   // nearest drawn last, on top
+        double x, y;
+        v.toScreen(cache[i].lat, cache[i].lon, x, y);
+        if (map.panned == false && map.northDeg != 0.0f) {
+            // course-up: turn about the rider
+            const double a = map.northDeg * M_PI / 180.0, dx = x - map.riderX, dy = y - map.riderY;
+            x = map.riderX + dx * cos(a) - dy * sin(a);
+            y = map.riderY + dx * sin(a) + dy * cos(a);
+        }
+        const char* c = poiCode(cache[i].kind);
+        const int w = ui::textWidth(f, c) + 12, h = 24;
+        const int bx = (int)x - w / 2, by = (int)y - h / 2;
+        if (bx < 2 || bx + w > SCREEN_W - 80 || by < top + 2 || by + h > bottom - 2) continue;
+        ui::fillRound({bx - 2, by - 2, w + 4, h + 4}, 7, 0xFF, fb);
+        ui::fillRound({bx, by, w, h}, 6, 0x00, fb);
+        ui::text(f, (int)x, by + 18, c, fb, EPD_DRAW_ALIGN_CENTER, 0xFF);
+        if (map.metersPerPixel < 4.0f && cache[i].name[0]) {
+            char nm[24];
+            snprintf(nm, sizeof nm, "%.20s", cache[i].name);
+            const EpdFont* nf = ui::font(ui::F_TINY);
+            const int tw = ui::textWidth(nf, nm) + 8;
+            if (bx + w + 4 + tw < SCREEN_W - 80) {
+                epd_fill_rect({bx + w + 2, by + 2, tw, 20}, 0xFF, fb);
+                ui::text(nf, bx + w + 6, by + 17, nm, fb, EPD_DRAW_ALIGN_LEFT, 0x00);
+            }
+        }
+    }
+}
+
+void drawMeasure(const MapScreenData& map, uint8_t* fb) {
+    if (!measureOn() || !g_frame.ok) return;
+    const View v = viewFor(map);
+    double ax, ay;
+    v.toScreen(g_aLat, g_aLon, ax, ay);
+    const int top = ui::STATUS_H + (map.topo ? 52 : 0), bottom = ui::MAP_STRIP_TOP;
+    // A dashed line from A to the cross
+    const double cx = SCREEN_W / 2, cy = kCrossY, len = hypot(cx - ax, cy - ay);
+    for (double k = 0; k < len - 30; k += 1.0) {
+        if (fmod(k, 18.0) > 10.0) continue;
+        const int x = (int)lround(ax + (cx - ax) * k / len), y = (int)lround(ay + (cy - ay) * k / len);
+        if (y < top + 2 || y > bottom - 3 || x < 1 || x > SCREEN_W - 2) continue;
+        epd_fill_rect({x - 1, y - 1, 3, 3}, 0x00, fb);
+    }
+    const int x = (int)ax, y = (int)ay;
+    if (x < 16 || x > SCREEN_W - 16 || y < top + 16 || y > bottom - 16) return;
+    epd_fill_circle(x, y, 15, 0xFF, fb);
+    epd_fill_circle(x, y, 12, 0x00, fb);
+    ui::text(ui::font(ui::F_STRONG), x, y + 6, "A", fb, EPD_DRAW_ALIGN_CENTER, 0xFF);
+}
+
+bool lastView(double& lat, double& lon, float& mpp) {
+    if (!g_frame.ok) return false;
+    lat = g_vLat; lon = g_vLon; mpp = g_frame.mpp;
+    return true;
+}
 
 bool screenToLatLon(int x, int y, double& lat, double& lon) {
     if (!g_frame.ok) return false;
@@ -210,6 +324,7 @@ void drawTarget(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     const double lon = have ? s.longitude : map.centerLon;
     if (map.metersPerPixel <= 0) return;
     g_frame = {true, map.riderX, map.riderY, map.metersPerPixel, map.northDeg, lat, lon};
+    g_vLat = map.centerLat; g_vLon = map.centerLon;
     const int top0 = ui::STATUS_H, bottom0 = ui::MAP_STRIP_TOP;
     const int t = doba_points::target();
     // Every waypoint: a small open triangle, its name when zoomed in.
@@ -367,24 +482,34 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     if (fix) snprintf(v3, sizeof v3, "%d", s.satellites);
     else snprintf(v3, sizeof v3, "no fix \xC2\xB7 %d", s.satellites);
     const char* caps[3] = {c1, "Course", "Satellites"};
-    if (cross) {   // the cross: how far and which way from you
-        caps[0] = "From you";
-        caps[1] = "Azimuth";
-        if (fix || s.everHadFix) {
+    if (cross) {   // the cross: how far and which way from you (or from A), its height
+        const bool fromA = measureOn();
+        caps[0] = fromA ? "From A" : "From you";
+        caps[1] = "Compass az";
+        caps[2] = "Height";
+        const bool src = fromA || fix || s.everHadFix;
+        if (src) {
             double b, d;
-            milgeo::bearingDistance(s.latitude, s.longitude, lat, lon, b, d);
+            milgeo::bearingDistance(fromA ? g_aLat : s.latitude, fromA ? g_aLon : s.longitude, lat, lon, b, d);
             doba_points::formatDistance(d, v1, sizeof v1);
-            milgeo::mils((float)b, milsSystem(), v2, sizeof v2);
+            // what to set on a compass: true azimuth less the declination here
+            float mb = (float)b - milgeo::declination(lat, lon);
+            if (mb < 0) mb += 360.0f;
+            milgeo::mils(mb, milsSystem(), v2, sizeof v2);
         } else {
             snprintf(v1, sizeof v1, "--");
             snprintf(v2, sizeof v2, "--");
         }
+        float hz, dz;
+        if (doba_dem::depth(lat, lon, dz)) { caps[2] = "Depth"; snprintf(v3, sizeof v3, "%d m", (int)lroundf(dz)); }
+        else if (doba_dem::height(lat, lon, hz)) snprintf(v3, sizeof v3, "%d m", (int)lroundf(hz));
+        else snprintf(v3, sizeof v3, "--");
     }
     const char* vals[3] = {v1, v2, v3};
     const int cols[3] = {x0, x0 + 170, x0 + 330};
     for (int i = 0; i < 3; ++i) {
         ui::text(ui::font(ui::F_TINY), cols[i], top + 104, caps[i], fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
-        ui::text(ui::font(ui::F_LABEL), cols[i], top + 134, vals[i], fb, EPD_DRAW_ALIGN_LEFT, i == 2 && !fix ? 0x77 : 0x00);
+        ui::text(ui::font(ui::F_LABEL), cols[i], top + 134, vals[i], fb, EPD_DRAW_ALIGN_LEFT, i == 2 && !fix && !cross ? 0x77 : 0x00);
     }
 }
 

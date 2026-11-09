@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 
 // DOBA: the military-style map overlay for the topo layer.
 //  - UTM/MGRS kilometre grid over the map, labelled at the map edges with the
@@ -36,9 +37,29 @@ void setPointsOn(bool on);
 
 // The map as last drawn: screen point -> lat/lon (false before a first frame).
 bool screenToLatLon(int x, int y, double& lat, double& lon);
+// The middle and scale of the map as last drawn (false before a first frame).
+bool lastView(double& lat, double& lon, float& mpp);
 
 // Mils system: 6000 ("05-33", the 60-00 dial) or 6400 (NATO). Kept in NVS.
 int milsSystem();
 void setMilsSystem(int system);
+
+// Places (doba_pois) on the map as small lettered tags, zoomed in. Kept in NVS.
+bool poisOn();
+void setPoisOn(bool on);
+void drawPois(const MapScreenData& map, uint8_t* fb);
+// The one- or two-letter tag a kind wears on the map and in the legend.
+const char* poiCode(int kind);
+
+// Measure: mark A at the cross; the strip then reads from A to the cross.
+bool measureOn();
+void measureToggleAtCross();   // set A at the cross, or clear it
+void measureClear();
+void drawMeasure(const MapScreenData& map, uint8_t* fb);
+
+// The 100 km square (MGRS letters, "LC") of a point, "" if none.
+void square(double lat, double lon, char* out, size_t n);
+// Contour interval of the sheet at this zoom: normal and index (bold) line, m.
+void contourInterval(double lat, float mpp, bool flat, float& every, float& index);
 
 }  // namespace milspec

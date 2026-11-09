@@ -43,5 +43,9 @@ void bearingDistance(double lat1, double lon1, double lat2, double lon2,
 // Degrees to mils. system = 6000 ("05-33", the Soviet/Ukrainian 60-00 dial)
 // or 6400 ("0533", NATO). `out` needs 8 bytes.
 void mils(float deg, int system, char* out, size_t n);
+// DOBA: magnetic declination here (degrees, east positive; WMM2025 table over
+// Europe, src/doba_declination.h). A compass needle points this far east of
+// true north: magnetic azimuth = true azimuth - declination. 0 outside the table.
+float declination(double lat, double lon);
 
 }  // namespace milgeo

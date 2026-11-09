@@ -7,7 +7,22 @@
 #include <cmath>
 #include <cstdio>
 
+#include "doba_declination.h"
+
 namespace milgeo {
+
+float declination(double lat, double lon) {
+    using namespace decl_table;
+    if (lat < LAT0 || lat > LAT1 || lon < LON0 || lon > LON1) return 0.f;
+    const double fy = (lat - LAT0) / STEP, fx = (lon - LON0) / STEP;
+    int y = (int)fy, x = (int)fx;
+    if (y >= NLAT - 1) y = NLAT - 2;
+    if (x >= NLON - 1) x = NLON - 2;
+    const double ty = fy - y, tx = fx - x;
+    const double a = kDecl[y][x] * (1 - tx) + kDecl[y][x + 1] * tx;
+    const double b = kDecl[y + 1][x] * (1 - tx) + kDecl[y + 1][x + 1] * tx;
+    return (float)((a * (1 - ty) + b * ty) / 10.0);
+}
 namespace {
 
 constexpr double A = 6378137.0;

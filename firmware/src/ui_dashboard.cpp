@@ -1228,6 +1228,7 @@ void handleTap(int x, int y) {
                 // cycling layers: bike routes, toilets, bike shops).
                 if (mapPanned() && y >= mapCentreY() && y < mapCentreY() + kMapZoom.size) {
                     mapPanE = mapPanN = 0;
+                    milspec::measureClear();
                     Serial.println("[map] centre");
                     break;
                 }
@@ -1258,6 +1259,14 @@ void handleTap(int x, int y) {
             // map, and on the dashboard a stray glove brush did the same. The
             // flip now has deliberate targets — that strip, and the Home key,
             // which is the only way back to the map.
+            // DOBA: a tap on the cross of a dragged map sets A there (or clears
+            // it); the strip then measures from A to wherever the cross goes.
+            if (screen == SCREEN_MAP && mapTopoActive && mapPanned() &&
+                abs(x - 270) < 56 && abs(y - milspec::kCrossY) < 56) {
+                milspec::measureToggleAtCross();
+                Serial.printf("[map] measure %s\n", milspec::measureOn() ? "A set" : "off");
+                break;
+            }
             if (y < ui::STATUS_H) screen = SCREEN_HOME;   // DOBA: was the menu
             else if (screen == SCREEN_MAP && y >= ui::MAP_STRIP_TOP) {
                 screen = SCREEN_POINTS;   // DOBA: the strip opens POSITION (no ride dashboard)
