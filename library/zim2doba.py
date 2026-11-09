@@ -68,12 +68,66 @@ def link_target(href):
         h = h[2:] if h.startswith("./") else h[3:]
     if h.startswith("A/"):
         h = h[2:]
+    if h and "/" in h and _ARCHIVE is not None and _CUR_PATH is not None:
+        return _title_of(href)
     if not h or "/" in h or h.startswith(("File:", "Special:", "Help:", "Category:", "Файл:", "Категория:")):
         return None
     t = " ".join(h.replace("_", " ").split())
     if not t or any(c in t for c in (LINK_A, LINK_B, LINK_C, "\n")):
         return None
     return t[:120]
+
+
+_CUR_PATH = None     # the article being converted (relative links resolve from it)
+_TITLES = {}         # zim path -> title (a worker's memory)
+
+
+def _title_of(href):
+    """A link into a site with folders (a Q&A site's "../../questions/2/slug"):
+    the title of the page it reaches, through redirects."""
+    import posixpath
+    from urllib.parse import unquote
+    h = unquote(href.split("#", 1)[0].split("?", 1)[0])
+    p = posixpath.normpath(posixpath.join(posixpath.dirname(_CUR_PATH), h)).lstrip("/")
+    while p.startswith("../"):
+        p = p[3:]
+    if p in _TITLES:
+        return _TITLES[p]
+    t = None
+    try:
+        e = _ARCHIVE.get_entry_by_path(p)
+        for _ in range(3):
+            if not e.is_redirect:
+                break
+            e = e.get_redirect_entry()
+        if not e.is_redirect and e.get_item().mimetype.startswith("text/html"):
+            t = " ".join((e.title or "").split())[:120] or None
+    except Exception:
+        t = None
+    if len(_TITLES) < 200000:
+        _TITLES[p] = t
+    return t
+
+
+# Stack Exchange pages (sotoki): the post, the answers; not the site's chrome,
+# the voting arrows, the user cards with their reputation, the comments.
+QA_SKIP_CLASSES = ("s-topbar", "site-header", "left-sidebar", "nav-links", "js-voting-container",
+                   "votecell", "post-taglist", "post-signature", "s-user-card", "comments",
+                   "js-post-comments", "kiwix-topbar", "fc-light", "s-pagination", "pager",
+                   "bottom-notice", "answers-subheader", "sidebar", "s-badge")
+_ANSWER_RE = re.compile(r'<div id="answer-\d+"[^>]*>')
+
+
+def qa_page(html):
+    """Marks each answer with a heading ("Accepted answer · 31 votes")."""
+    def head(m):
+        tag = m.group(0)
+        score = re.search(r'data-score="(-?\d+)"', tag)
+        votes = int(score.group(1)) if score else 0
+        name = "Accepted answer" if "accepted-answer" in tag else "Answer"
+        unit = "vote" if abs(votes) == 1 else "votes"
+        return f"<h3>{name} · {votes} {unit}</h3>" + tag
+    return _ANSWER_RE.sub(head, html)
 
 
 PIC_SKIP_TAGS = SKIP_TAGS - {"figure"}
@@ -252,6 +306,9 @@ def tidy_lines(lines):
 
 def to_text(title, html, picture=None):
     c = Cleaner(picture)
+    if "sotoki" in html[:3000]:          # a Stack Exchange page
+        html = qa_page(html)
+        c.skip_classes = tuple(c.skip_classes) + QA_SKIP_CLASSES
     try:
         c.feed(html)
         c.close()
@@ -348,6 +405,8 @@ def _work(idx):
         return None
     html = bytes(item.content).decode("utf-8", "replace")
     title = e.title or path.rsplit("/", 1)[-1].replace("_", " ")
+    global _CUR_PATH
+    _CUR_PATH = path
     _NEW.clear()
     text = to_text(title, html, _picture_for(path) if _OUT else None)
     pics = list(_NEW)
