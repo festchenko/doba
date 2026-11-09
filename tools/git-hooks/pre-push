@@ -1,0 +1,10 @@
+#!/bin/sh
+# Build the ESP32 firmware before anything leaves: the simulator compiles with
+# clang on the host, the device with GCC 8 and the Arduino headers, and code
+# that passes one can fail the other (a `word` lambda, a brace assignment).
+cd "$(git rev-parse --show-toplevel)/firmware" || exit 1
+if ! git diff --quiet HEAD~1 HEAD -- . 2>/dev/null || [ -n "$FORCE_FW_CHECK" ]; then
+  echo "pre-push: building the ESP32 firmware..."
+  pio run -e t5s3-painter -s > /tmp/pre-push-pio.log 2>&1 || { grep -E "error|Error" /tmp/pre-push-pio.log | head -20; echo "pre-push: ESP32 build failed, push stopped"; exit 1; }
+  echo "pre-push: ESP32 build ok"
+fi
