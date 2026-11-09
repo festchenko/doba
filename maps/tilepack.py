@@ -182,10 +182,15 @@ class PackLibrary:
         return self.cache[key]
 
     def get(self, z, x, y):
-        """Tile levels by absolute (z, x, y), or None."""
-        if self.flags & FLAG_RELATIVE:
-            k = 2 ** (z - self.cell_z)
-            x, y = x - self.cell_x * k, y - self.cell_y * k
+        """Tile levels by absolute (z, x, y), or None; z17 from the detail pack."""
+        if z >= DETAIL_Z:
+            s = z - self.cell_z
+            key = ("d", x >> s, y >> s)
+            if key not in self.cache:
+                p = pack_path(self.root, self.cell_z, x >> s, y >> s, detail=True)
+                self.cache[key] = PackReader(p) if os.path.exists(p) else None
+            r = self.cache[key]
+            return r.get(z, x, y) if r else None
         if z <= self.cell_z:
             r = self._reader(BASE_CELL_Z, 0, 0)
         else:
