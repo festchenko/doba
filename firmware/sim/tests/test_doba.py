@@ -239,7 +239,7 @@ def test_library_sections_open_their_guides_and_emergency_buttons_jump(doba, boo
     doba.console("screen library", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(400, TOP + 36)                                 # TOPICS tab
+    doba.tap(270, TOP + 36)                                 # TOPICS tab (middle)
     time.sleep(0.6)
     doba.tap(96, TOP + 72 + 28 + 54)                        # BLEEDING
     doba.wait_log(r"\[lib\] open 'Tourniquet'", since=since)
@@ -279,7 +279,7 @@ def test_a_figure_in_a_manual_is_shown_as_a_picture_in_its_article(doba, tmp_pat
     doba.console("screen library", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(400, TOP + 36)                                 # TOPICS tab
+    doba.tap(270, TOP + 36)                                 # TOPICS tab (middle)
     time.sleep(0.6)
     doba.tap(96, TOP + 72 + 28 + 54)
     doba.wait_log(r"\[lib\] open 'Knots \(US Army\)'", since=since)
@@ -305,7 +305,7 @@ def test_a_picture_in_a_zim_article_reaches_the_screen_from_its_pack(doba, book)
     doba.console("screen library", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(400, TOP + 36)                                 # TOPICS tab
+    doba.tap(270, TOP + 36)                                 # TOPICS tab (middle)
     time.sleep(0.6)
     doba.tap(96, TOP + 72 + 28 + 54)
     doba.wait_log(r"\[lib\] picture [0-9a-f]{10} 480x320", since=since)
@@ -494,4 +494,32 @@ def test_a_book_opens_on_its_menu_and_a_row_opens_its_page(doba, book):
     doba.screenshot(os.path.join(doba.dir, "menu.png"))
     since = doba.log_seq()
     doba.tap(200, TOP + 214 + 46 + 40)                      # under START HERE: Knots
+    doba.wait_log(r"\[lib\] open 'Knots'", since=since)
+
+
+def test_recent_lists_what_was_read_and_opens_it_again(doba, book):
+    """RECENT (the third tab): newest first, kept on the card."""
+    shutil.copytree(book, os.path.join(doba.sd, "doba", "lib", "field"))
+    boot(doba)
+    doba.console("screen library", 800)
+    time.sleep(0.6)
+    doba.tap(270, 960 - 49)                                 # search all books
+    time.sleep(0.6)
+    for c in "kno":
+        doba.tap(*key(c))
+        time.sleep(0.2)
+    time.sleep(0.6)
+    since = doba.log_seq()
+    doba.tap(200, RES_TOP + 30)
+    doba.wait_log(r"\[lib\] open 'Knots'", since=since)
+    with open(os.path.join(doba.sd, "doba", "recent.txt")) as f:
+        assert f.read().startswith("field|Knots")
+    doba.tap(50, 30)                                        # BACK: the search
+    time.sleep(0.6)
+    doba.tap(50, 30)                                        # BACK: the shelf
+    time.sleep(0.6)
+    doba.tap(450, TOP + 36)                                 # RECENT
+    time.sleep(0.6)
+    since = doba.log_seq()
+    doba.tap(200, TOP + 76 + 40)                            # the first row
     doba.wait_log(r"\[lib\] open 'Knots'", since=since)

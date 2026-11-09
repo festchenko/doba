@@ -574,6 +574,7 @@ void extractLinks() {
     g_text[w] = 0;
 }
 
+void addRecent(const char* dir, const char* title);
 bool openArticle(const Result& r) {
     g_note = nullptr;
     if (r.book >= 0 && r.book < g_bookCount) g_book = r.book;
@@ -606,7 +607,59 @@ bool openArticle(const Result& r) {
     layout();
     g_page = 0;
     Serial.printf("[lib] open '%s' pages=%d links=%d\n", g_title, g_pageCount, g_linkCount);
+    addRecent(b.dir, r.title);
     return true;
+}
+
+// --- recent: what was read last, newest first (/doba/recent.txt "book|title") -------
+constexpr int MAX_RECENT = 30;
+struct Recent { char dir[32]; char title[KEY + 1]; };
+Recent g_recent[MAX_RECENT];
+int g_recentCount = -1;      // -1: not loaded
+const char* kRecentPath = "/doba/recent.txt";
+void loadRecent() {
+    if (g_recentCount >= 0) return;
+    g_recentCount = 0;
+    sdLock();
+    File f = SD.open(kRecentPath, FILE_READ);
+    if (f) {
+        char line[120];
+        size_t n = 0;
+        for (int c = f.read();; c = f.read()) {
+            if (c < 0 || c == '\n') {
+                line[n] = 0;
+                char* bar = strchr(line, '|');
+                if (bar && g_recentCount < MAX_RECENT) {
+                    *bar = 0;
+                    Recent& r = g_recent[g_recentCount++];
+                    snprintf(r.dir, sizeof r.dir, "%s", line);
+                    snprintf(r.title, sizeof r.title, "%s", bar + 1);
+                }
+                n = 0;
+                if (c < 0) break;
+            } else if (n + 1 < sizeof line) line[n++] = (char)c;
+        }
+        f.close();
+    }
+    sdUnlock();
+}
+void addRecent(const char* dir, const char* title) {
+    loadRecent();
+    int at = g_recentCount < MAX_RECENT ? g_recentCount : MAX_RECENT - 1;
+    for (int i = 0; i < g_recentCount; ++i)
+        if (!strcmp(g_recent[i].dir, dir) && !strcmp(g_recent[i].title, title)) { at = i; break; }
+    if (at == 0 && g_recentCount > 0 && !strcmp(g_recent[0].title, title)) return;
+    for (int i = at; i > 0; --i) g_recent[i] = g_recent[i - 1];
+    snprintf(g_recent[0].dir, sizeof g_recent[0].dir, "%s", dir);
+    snprintf(g_recent[0].title, sizeof g_recent[0].title, "%s", title);
+    if (at == g_recentCount) ++g_recentCount;
+    sdLock();
+    File f = SD.open(kRecentPath, FILE_WRITE);
+    if (f) {
+        for (int i = 0; i < g_recentCount; ++i) { f.print(g_recent[i].dir); f.print("|"); f.print(g_recent[i].title); f.print("\n"); }
+        f.close();
+    }
+    sdUnlock();
 }
 
 // --- search screen geometry -------------------------------------------------------
@@ -735,7 +788,7 @@ void loadSections() {
 
 // --- views: HOME (sections), SECTION, SEARCH ----------------------------------------
 
-enum View { V_HOME, V_SECTION, V_SEARCH, V_SHELF, V_BOOK, V_LETTER };
+enum View { V_HOME, V_SECTION, V_SEARCH, V_SHELF, V_BOOK, V_LETTER, V_RECENT };
 // V_HOME is the TOPICS tab; the library opens on its books (V_SHELF).
 View g_view = V_SHELF;
 int g_sec = 0;            // the open section
@@ -840,14 +893,16 @@ EpdRect coverRect(int i) {
 }
 int shelfPages() { return (g_bookCount + COLS * ROWS - 1) / (COLS * ROWS); }
 
-void tabs(bool books, uint8_t* fb) {
-    const int half = kTabs.width / 2;
-    for (int t = 0; t < 2; ++t) {
-        const EpdRect r = {kTabs.x + t * half, kTabs.y, half, kTabs.height};
-        const bool on = (t == 0) == books;
+// BOOKS | TOPICS | RECENT
+int tabAt(int x) { return std::min(2, std::max(0, (x - kTabs.x) * 3 / kTabs.width)); }
+void tabs(int which, uint8_t* fb) {
+    static const char* const kNames[3] = {"BOOKS", "TOPICS", "RECENT"};
+    const int third = kTabs.width / 3;
+    for (int t = 0; t < 3; ++t) {
+        const EpdRect r = {kTabs.x + t * third, kTabs.y, t == 2 ? kTabs.width - 2 * third : third, kTabs.height};
+        const bool on = t == which;
         if (on) epd_fill_rect(r, INK, fb); else frame(r, 2, fb);
-        ui::text(ui::font(ui::F_LABEL), r.x + half / 2, r.y + 38, t == 0 ? "BOOKS" : "TOPICS", fb,
-                 EPD_DRAW_ALIGN_CENTER, on ? PAPER : INK);
+        ui::text(ui::font(ui::F_LABEL), r.x + r.width / 2, r.y + 38, kNames[t], fb, EPD_DRAW_ALIGN_CENTER, on ? PAPER : INK);
     }
 }
 void searchBar(const EpdRect& r, const char* label, uint8_t* fb) {
@@ -884,7 +939,7 @@ void cover(int bi, const EpdRect& r, uint8_t* fb, bool label = true) {
 }
 
 void renderShelf(uint8_t* fb) {
-    tabs(true, fb);
+    tabs(0, fb);
     sortShelf();
     const int pages = shelfPages();
     if (g_shelfPage >= pages) g_shelfPage = pages - 1;
@@ -1505,8 +1560,35 @@ bool openRecord(int bi, uint32_t i) {
     return openArticle(r);
 }
 
+constexpr int RECENT_TOP = TOP + 76, RECENT_ROW = 86;
+int recentRows() { return (kListPrev.y - 8 - RECENT_TOP) / RECENT_ROW; }
+void renderRecent(uint8_t* fb) {
+    tabs(2, fb);
+    loadRecent();
+    if (!g_recentCount) {
+        ui::text(ui::font(ui::F_LABEL), W / 2, TOP + 300, "Nothing read yet", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 344, "Pages you open show up here.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        return;
+    }
+    const int per = recentRows(), pages = (g_recentCount + per - 1) / per;
+    if (g_listPage >= pages) g_listPage = pages - 1;
+    for (int r = 0; r < per && g_listPage * per + r < g_recentCount; ++r) {
+        const Recent& e = g_recent[g_listPage * per + r];
+        const int y = RECENT_TOP + r * RECENT_ROW;
+        char t[KEY + 8];
+        snprintf(t, sizeof t, "%s", e.title);
+        fitText(ui::font(ui::F_LABEL), t, W - 70);
+        ui::text(ui::font(ui::F_LABEL), 20, y + 38, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        const int bi = bookIndex(e.dir);
+        ui::text(ui::font(ui::F_SMALL), 20, y + 70, bi >= 0 ? shortName(bi) : e.dir, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_KEY), W - 22, y + RECENT_ROW / 2 + 12, ">", fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        epd_fill_rect({14, y + RECENT_ROW - 2, W - 28, 1}, INK, fb);
+    }
+    pagerRow(g_listPage, pages, fb);
+}
+
 void renderHome(uint8_t* fb) {
-    tabs(false, fb);
+    tabs(1, fb);
     char lbl[48];
     snprintf(lbl, sizeof lbl, "Search all %d books", g_bookCount);
     searchBar(kAllSearch, lbl, fb);
@@ -1969,6 +2051,7 @@ void renderSearch(kbd::Keyboard& k, uint8_t* fb) {
     switch (g_view) {
         case V_SHELF: renderShelf(fb); break;
         case V_HOME: renderHome(fb); break;
+        case V_RECENT: renderRecent(fb); break;
         case V_SECTION: renderSection(fb); break;
         case V_BOOK: renderBook(fb); break;
         case V_LETTER: renderLetter(fb); break;
@@ -1986,7 +2069,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
     if (g_bookCount <= 0) return false;
     switch (g_view) {
         case V_SHELF: {
-            if (hit(kTabs, x, y)) { if (x >= W / 2) g_view = V_HOME; return false; }
+            if (hit(kTabs, x, y)) { const int t = tabAt(x); g_view = t == 1 ? V_HOME : t == 2 ? V_RECENT : V_SHELF; g_listPage = 0; return false; }
             if (hit(kAllSearch, x, y)) { g_scope = -1; g_scopeBook = -1; g_searchFrom = V_SHELF; g_view = V_SEARCH; k.clear(); return false; }
             const int b = shelfHit(x, y);
             if (b == -2) { g_shelfPage = (g_shelfPage + 1) % shelfPages(); return false; }
@@ -2064,8 +2147,24 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
             if (y >= top && r < per && i < g_letterTo) return openRecord(g_open, i);
             return false;
         }
+        case V_RECENT: {
+            if (hit(kTabs, x, y)) { const int t = tabAt(x); g_view = t == 1 ? V_HOME : t == 2 ? V_RECENT : V_SHELF; g_listPage = 0; return false; }
+            loadRecent();
+            const int per = recentRows(), pages = (g_recentCount + per - 1) / per;
+            if (pages > 1 && hit(kListPrev, x, y)) { if (g_listPage > 0) --g_listPage; return false; }
+            if (pages > 1 && hit(kListNext, x, y)) { if (g_listPage + 1 < pages) ++g_listPage; return false; }
+            const int r = (y - RECENT_TOP) / RECENT_ROW, i = g_listPage * per + r;
+            if (y >= RECENT_TOP && r < per && i < g_recentCount) {
+                const int bi = bookIndex(g_recent[i].dir);
+                if (bi < 0) { g_note = "book not on this card"; return false; }
+                char t[KEY + 1];
+                snprintf(t, sizeof t, "%s", g_recent[i].title);
+                return openEntry(bi, t);
+            }
+            return false;
+        }
         case V_HOME:
-            if (hit(kTabs, x, y)) { if (x < W / 2) g_view = V_SHELF; return false; }
+            if (hit(kTabs, x, y)) { const int t = tabAt(x); g_view = t == 1 ? V_HOME : t == 2 ? V_RECENT : V_SHELF; g_listPage = 0; return false; }
             if (hit(kAllSearch, x, y)) { g_scope = -1; g_scopeBook = -1; g_searchFrom = V_HOME; g_view = V_SEARCH; k.clear(); return false; }
             for (int i = 0; i < g_emergCount; ++i)
                 if (hit(emergRect(i), x, y)) return openEntry(g_emerg[i].book, g_emerg[i].title);
@@ -2117,6 +2216,7 @@ bool libraryBack() {
     switch (g_view) {
         case V_SHELF: return false;
         case V_HOME: return false;
+        case V_RECENT: return false;
         case V_SECTION: g_view = V_HOME; return true;
         case V_BOOK:
             if (g_bookAZ) { g_bookAZ = false; g_listPage = 0; return true; }
