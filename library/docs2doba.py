@@ -160,8 +160,16 @@ def merge_broken(lines):
     return out
 
 
+# A printed table of contents, list of figures or tables: "Burns ........ 45".
+LEADERS = re.compile(r"(\.\s?){8,}|…{3,}")
+# Front-matter lists as chapters: the book's own contents article replaces them.
+FRONT_LISTS = re.compile(r"(?i)^((table of )?contents|(list of )?(figures|tables|illustrations)"
+                         r"|figures and tables|tables and figures)$")
+
+
 def lines_to_text(title, lines):
-    lines = merge_broken([(k, clean(t)) for k, t in lines])
+    lines = merge_broken([(k, clean(t)) for k, t in lines if not (k != "I" and LEADERS.search(t))])
+    lines = [(k, t) for k, t in lines if not (k != "I" and LEADERS.search(t))]
     out = ["T" + clean(title)]
     for kind, t in lines:
         t = clean(t)
@@ -599,7 +607,8 @@ def read_pdf(path, title):
                 out.append(("P", t))
         return out
 
-    toc = [(lvl, clean(t), p - 1) for lvl, t, p in doc.get_toc(simple=True) if clean(t) and p >= 1]
+    toc = [(lvl, re.sub(r"^\d{1,4}B\s?(?=[A-Z])", "", clean(t)), p - 1)
+           for lvl, t, p in doc.get_toc(simple=True) if clean(t) and p >= 1]
     # Bookmarks for figures and tables ("Figure_Burn1d", "Table 2-1") are not chapters.
     toc = [m for m in toc if not re.match(r"(?i)^(fig(ure)?|table|tab)\b|^\S*_\S*$", m[1])]
     # Chapters: the bookmarks at the top one or two levels, if there are enough.
@@ -634,7 +643,7 @@ def read_pdf(path, title):
             at = f"{base} ({n})"
             n += 1
         seen.add(fold(at, 10**6))
-        if not lines:
+        if not lines or FRONT_LISTS.match(t):
             continue
         parts = split_long(at, lines_to_text(at, lines))
         # Found by the chapter's own words too: "Chapter 2 Shelter", "Shelter".

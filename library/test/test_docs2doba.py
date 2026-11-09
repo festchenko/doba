@@ -37,3 +37,31 @@ def test_chapters_of_a_long_titled_pdf_with_the_same_names_all_get_through(tmp_p
     doc.save(str(path))
     arts = docs2doba.read_pdf(str(path), long)
     assert len(arts) >= 4
+
+
+def test_printed_contents_lists_and_bookmark_ids_do_not_reach_the_device(tmp_path):
+    """US manuals: "23BFigures" chapters full of "Burns ........ 45" lines."""
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    toc = []
+    pages = [("23BFigures", "Figure 1-1. Check the pulse .................... 12"),
+             ("208BChapter 1 Bleeding", "Press hard on the wound. See also Shock ........... 30"),
+             ("209BChapter 2 Burns", "Cool the burn with water for twenty minutes."),
+             ("210BChapter 3 Shock", "Lay the casualty flat and keep them warm.")]
+    for i, (name, body) in enumerate(pages):
+        p = doc.new_page()
+        p.insert_text((72, 90), name[4:] if "B" in name[:4] else name, fontsize=18)
+        p.insert_text((72, 130), body, fontsize=10)
+        p.insert_text((72, 150), "More plain body text so the page reads as prose.", fontsize=10)
+        toc.append([1, name, i + 1])
+    doc.set_toc(toc)
+    path = tmp_path / "ATP 9-99 Test.pdf"
+    doc.save(str(path))
+    arts = docs2doba.read_pdf(str(path), "ATP 9-99 Test")
+    titles = [t for t, _ in arts]
+    text = "\n".join(x for _, x in arts)
+    assert not any("Figures" in t for t in titles), titles
+    assert any(t.endswith("— Chapter 1 Bleeding") for t in titles), titles
+    assert "........" not in text
+    assert "Press hard" not in text           # a leader line goes whole
+    assert "Cool the burn" in text
