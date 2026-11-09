@@ -288,6 +288,16 @@ def read_epub(path, title):
     return split_long(title, text)
 
 
+def bookmark_name(t):
+    """A PDF bookmark as a chapter name, or "" for a broken one."""
+    t = re.sub(r"^\d{1,4}B\s?(?=[A-Z])", "", clean(t))   # Word's bookmark ids: "23BFigures"
+    t = t.strip(" .·•-–—_")
+    letters = sum(c.isalpha() for c in t)
+    if letters < 3 or (letters < 5 and t.islower()):
+        return ""
+    return t[:1].upper() + t[1:]
+
+
 def short_title(title):
     """What a chapter's title starts with: the publication number if there is
     one ("ATP 4-02.11"), else the title cut to a few words. Keys are 55 bytes,
@@ -299,8 +309,24 @@ def short_title(title):
     head = re.split(r"[:?—–]|\s{2,}", t)[0].strip()
     if 3 <= len(head) <= 28:
         return head
-    cut = t[:28].rsplit(" ", 1)[0]
-    return cut or t[:28]
+    words = t[:28].rsplit(" ", 1)[0].split()
+    while len(words) > 1 and words[-1].lower().strip(",.;:") in STOP_WORDS:
+        words.pop()
+    return " ".join(words) or t[:28]
+
+
+STOP_WORDS = {"and", "or", "of", "the", "a", "an", "to", "for", "from", "in", "on", "with", "by", "at", "&"}
+
+
+def pretty_title(t):
+    """A title as a file or a database left it: "the-ten-bushcraft-books",
+    "checklist_1_72_hr._kit" -> "The ten bushcraft books", "Checklist 1 72 hr. kit"."""
+    t = t.replace("_", " ")
+    if " " not in t.strip() or t.count("-") >= 2 and t.count(" ") < t.count("-"):
+        t = re.sub(r"(?<=\w)-(?=\w)", " ", t)
+    t = " ".join(t.split()).strip(" -.,;")
+    t = re.sub(r"\s+\(\d+\)$", "", t)
+    return t[:1].upper() + t[1:] if t else t
 
 
 def page_blocks(page):
@@ -607,8 +633,12 @@ def read_pdf(path, title):
                 out.append(("P", t))
         return out
 
-    toc = [(lvl, re.sub(r"^\d{1,4}B\s?(?=[A-Z])", "", clean(t)), p - 1)
-           for lvl, t, p in doc.get_toc(simple=True) if clean(t) and p >= 1]
+    toc = [(lvl, bookmark_name(t), p - 1) for lvl, t, p in doc.get_toc(simple=True) if clean(t) and p >= 1]
+    # Broken bookmarks ("eli", "Tra", "d a") say nothing about the chapters.
+    junk = [m for m in toc if not m[1]]
+    if toc and len(junk) > len(toc) * 0.3:
+        toc = []
+    toc = [m for m in toc if m[1]]
     # Bookmarks for figures and tables ("Figure_Burn1d", "Table 2-1") are not chapters.
     toc = [m for m in toc if not re.match(r"(?i)^(fig(ure)?|table|tab)\b|^\S*_\S*$", m[1])]
     # Chapters: the bookmarks at the top one or two levels, if there are enough.
@@ -702,6 +732,31 @@ def write_book(out, name, source, articles, aliases=()):
     return len(records), pos
 
 
+def read_manifest(src):
+    """nautilus2dir.py's _docs.tsv: file stem -> (title, group, description, order)."""
+    p = os.path.join(src, "_docs.tsv") if os.path.isdir(src) else ""
+    out = {}
+    if p and os.path.isfile(p):
+        for line in open(p, encoding="utf-8"):
+            f = line.rstrip("\n").split("\t")
+            if len(f) >= 5:
+                out[f[0]] = (f[1], f[2], f[3], int(f[4]))
+    return out
+
+
+def write_menu(out, menu, name):
+    """<book>/menu.txt: the book's first page on the device, its documents by
+    group ("# GROUP" lines, then "Title|what it is")."""
+    groups = {}
+    for _, g, t, sub in sorted(menu, key=lambda m: m[0]):
+        groups.setdefault(g, []).append((t, sub))
+    with open(os.path.join(out, "menu.txt"), "w", encoding="utf-8") as f:
+        for g, rows in groups.items():
+            f.write(f"# {(g or 'Documents').upper()}\n")
+            for t, sub in rows:
+                f.write(f"{t}|{' '.join(sub.split())}\n")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("src", help="a folder (searched recursively) or one file")
@@ -717,19 +772,27 @@ def main():
     TITLES_FROM_FILENAMES = a.titles_from_filenames
     files = [a.src] if os.path.isfile(a.src) else sorted(
         os.path.join(d, f) for d, _, fs in os.walk(a.src) for f in fs if not f.startswith("."))
+    manifest = read_manifest(a.src)
     articles, used, renamed = [], set(), {}
+    menu = []                                    # (group, title, subtitle) per document
     for path in files:
         ext = os.path.splitext(path)[1].lower()
         reader = READERS.get(ext)
         if not reader:
             continue
-        title = os.path.splitext(os.path.basename(path))[0].replace("_", " ")
+        stem = os.path.splitext(os.path.basename(path))[0]
+        group, desc, order = "", "", len(menu)
+        if stem in manifest:
+            title, group, desc, order = manifest[stem]
+        else:
+            title = pretty_title(stem) if TITLES_FROM_FILENAMES else stem.replace("_", " ")
         try:
             got = reader(path, title)
         except Exception as e:                     # one bad file never stops the book
             print(f"!! {path}: {e}", file=sys.stderr)
             continue
         n = 0
+        first = None
         for t, text in got:
             if len(text) < len(t) + 20:
                 continue
@@ -741,12 +804,17 @@ def main():
             used.add(fold(t, 10**6))
             renamed[t0] = t
             articles.append((t, text))
+            first = first or t
             n += 1
         print(f"{os.path.basename(path)}: {n} article(s)")
+        if first:
+            chapters = f"{n - 1} chapters" if n > 2 else ""
+            menu.append((order, group, first, desc or chapters))
     if not articles:
         sys.exit("nothing readable found")
     aliases = [(renamed.get(t, t), o) for t, o in ALIASES]
     n, size = write_book(a.out, a.name, " ".join(a.source.split())[:60], articles, aliases)
+    write_menu(a.out, menu, a.name)
     print(f"done: {n} articles, {len(IMAGES)} pictures, {size / 1e6:.1f} MB -> {a.out}")
 
 

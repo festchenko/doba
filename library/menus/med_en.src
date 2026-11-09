@@ -1,0 +1,25 @@
+about=WikiMed: the medical part of Wikipedia
+unit=articles
+@sections
+# FIELD MEDICINE
+Wilderness medical emergency :: far from help
+Triage :: who to treat first
+Wound :: cleaning, closing, infection
+Infection :: signs and when to worry
+Antibiotic :: what they do and don't
+Sepsis :: the infection that kills
+Fever :: when it is dangerous
+Diarrhea :: fluids first
+Cholera :: dirty-water disease
+Tetanus :: after a dirty wound
+Rabies :: after an animal bite
+Pain management :: without a pharmacy
+Childbirth :: normal labour, step by step
+# MEDICINES
+Paracetamol :: pain and fever
+Ibuprofen :: pain, fever, swelling
+Aspirin :: pain; heart attack
+Amoxicillin :: common antibiotic
+Oral rehydration therapy :: salt and sugar
+Potassium iodide :: radiation emergencies
+Epinephrine (medication) | Adrenaline :: severe allergy

@@ -474,3 +474,24 @@ def test_a_big_book_opens_on_its_picks_and_a_z_splits_until_it_lists(doba, book)
     since = doba.log_seq()
     doba.tap(200, TOP + 216 - 30 + 30)                      # the first title
     doba.wait_log(r"\[lib\] open '", since=since)
+
+
+def test_a_book_opens_on_its_menu_and_a_row_opens_its_page(doba, book):
+    """menu.txt (library/bookmenu.py): groups, a line under each title."""
+    out = os.path.join(doba.sd, "doba", "lib", "field")
+    shutil.copytree(book, out)
+    with open(os.path.join(out, "menu.txt"), "w") as f:
+        f.write("# Start here\nKnots|tie them, untie them\n# Water\nWater purification|boil, filter\n")
+    with open(os.path.join(out, "info.txt"), "a") as f:
+        f.write("about=A test book\nunit=guides\n")
+    boot(doba)
+    doba.console("screen library", 800)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(100, TOP + 76 + 80)                            # the cover
+    doba.wait_log(r"\[lib\] book field", since=since)
+    time.sleep(0.8)
+    doba.screenshot(os.path.join(doba.dir, "menu.png"))
+    since = doba.log_seq()
+    doba.tap(200, TOP + 214 + 46 + 40)                      # under START HERE: Knots
+    doba.wait_log(r"\[lib\] open 'Knots'", since=since)

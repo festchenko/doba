@@ -37,7 +37,7 @@ constexpr int MAX_BOOKS = 32;   // one bit each in a uint32 mask
 constexpr int RESULTS = 6;
 const char* kRoot = "/doba/lib";
 
-struct Book { char dir[32]; char name[40]; char source[64]; uint32_t count; };
+struct Book { char dir[32]; char name[40]; char source[64]; uint32_t count; uint32_t shown; char unit[16]; char about[100]; };
 Book g_books[MAX_BOOKS];
 int g_bookCount = -1;      // -1 = not scanned yet
 int g_book = 0;
@@ -167,7 +167,7 @@ void scan() {
             snprintf(path, sizeof path, "%s/%s/info.txt", kRoot, b.dir);
             File info = SD.open(path, FILE_READ);
             if (info) {
-                char buf[256] = {};
+                char buf[640] = {};
                 info.read((uint8_t*)buf, sizeof buf - 1);
                 info.close();
                 auto field = [&](const char* key, char* out, size_t cap) {
@@ -178,9 +178,15 @@ void scan() {
                     const size_t len = e ? (size_t)(e - n) : strlen(n);
                     snprintf(out, cap, "%.*s", (int)len, n);
                 };
-                b.source[0] = 0;
+                b.source[0] = b.unit[0] = b.about[0] = 0;
                 field("name=", b.name, sizeof b.name);
                 field("source=", b.source, sizeof b.source);
+                field("\nunit=", b.unit, sizeof b.unit);
+                field("\nabout=", b.about, sizeof b.about);
+                char num[16] = "";
+                field("\nshown=", num, sizeof num);
+                if (!num[0]) field("\narticles=", num, sizeof num);
+                b.shown = num[0] ? (uint32_t)strtoul(num, nullptr, 10) : 0;
             }
             ++g_bookCount;
         }
@@ -209,9 +215,10 @@ void searchBook(int bi, const char* key) {
         if (memcmp(rec, want, KEY) < 0) lo = mid + 1; else hi = mid;
     }
     f.seek(HDR + (uint64_t)lo * REC);
-    for (uint32_t i = lo; i < b.count && g_resultCount < RESULTS; ++i) {
+    for (uint32_t i = lo, scanned = 0; i < b.count && g_resultCount < RESULTS && scanned < 4000; ++i, ++scanned) {
         if (f.read(rec, REC) != REC) break;
         if (memcmp(rec, want, klen) != 0) break;
+        if (rec[114] & 2) continue;            // hidden: profiles, Category: pages (library/hidejunk.py)
         Result& r = g_results[g_resultCount];
         memcpy(r.title, rec + KEY, KEY);
         r.title[KEY] = 0;
@@ -799,6 +806,22 @@ void sortShelf() {
     for (int bi = 0; bi < g_bookCount; ++bi)
         if (lookOf(bi) < 0) g_order[n++] = bi;
 }
+// Cut `t` to `w` px with "..." (whole UTF-8 characters).
+void fitText(const EpdFont* f, char* t, int w) {
+    if (ui::textWidth(f, t) <= w) return;
+    size_t n = strlen(t);
+    while (n > 1) {
+        --n;
+        while (n > 0 && ((uint8_t)t[n] & 0xC0) == 0x80) --n;
+        while (n > 0 && t[n - 1] == ' ') --n;
+        char keep[4];
+        memcpy(keep, t + n, 4);
+        memcpy(t + n, "...", 4);
+        if (ui::textWidth(f, t) <= w) return;
+        memcpy(t + n, keep, 4);
+        t[n] = 0;
+    }
+}
 void countText(uint32_t c, char* out, size_t n) {
     if (c >= 1000000) snprintf(out, n, "%.1fM", c / 1e6);
     else if (c >= 10000) snprintf(out, n, "%luk", (unsigned long)(c / 1000));
@@ -856,7 +879,7 @@ void cover(int bi, const EpdRect& r, uint8_t* fb, bool label = true) {
     const EpdFont* nf = ui::font(ui::F_SMALL);
     if (ui::textWidth(nf, nm) > r.width - 28) nf = ui::font(ui::F_TINY);
     ui::text(nf, r.x + 10 + (r.width - 10) / 2, r.y + r.height - 34, nm, fb, EPD_DRAW_ALIGN_CENTER, INK);
-    countText(g_books[bi].count, cnt, sizeof cnt);
+    countText(g_books[bi].shown ? g_books[bi].shown : g_books[bi].count, cnt, sizeof cnt);
     ui::text(ui::font(ui::F_TINY), r.x + 10 + (r.width - 10) / 2, r.y + r.height - 12, cnt, fb, EPD_DRAW_ALIGN_CENTER, INK);
 }
 
@@ -899,7 +922,7 @@ int shelfHit(int x, int y) {   // book index, -2 the page turn, -1 nothing
 // A BOOK: its cover and name, search inside, then documents or A-Z.
 int g_open = 0;                 // the book on its page
 constexpr int MAX_DOCS = 300;
-struct Doc { char title[KEY + 1]; uint32_t rec; };
+struct Doc { char title[KEY + 1]; char raw[KEY + 1]; uint32_t rec; };
 Doc* g_docs = nullptr;
 int g_docCount = -1;            // -1: not looked for (this book)
 int g_docBook = -1;
@@ -922,6 +945,38 @@ void recResult(const uint8_t* rec, int bi, Result& r) {
 }
 // Documents: books of manuals (a few thousand entries at most) list the
 // documents themselves — titles before " — " — once each, in order.
+// A document's name as a file left it: "the-ten-bushcraft-books" -> "The ten bushcraft books".
+void tidyDocName(char* t) {
+    int dashes = 0;
+    bool space = false;
+    for (char* c = t; *c; ++c) { dashes += *c == '-' || *c == '_'; space |= *c == ' '; }
+    if (dashes >= 2 || (!space && dashes)) {
+        for (char* c = t; *c; ++c) if (*c == '-' || *c == '_') *c = ' ';
+    }
+    size_t n = strlen(t);
+    while (n && (t[n - 1] == ' ' || t[n - 1] == '-' || t[n - 1] == '.')) t[--n] = 0;
+    char* c = t;
+    while (*c == '.' || *c == ' ') ++c;
+    if (c != t) memmove(t, c, strlen(c) + 1);
+    if (t[0] >= 'a' && t[0] <= 'z') t[0] -= 32;
+}
+// "2 Water" before "10 Fire": numbers by value, the rest by letters.
+int naturalCmp(const char* a, const char* b) {
+    while (*a && *b) {
+        if (isdigit((uint8_t)*a) && isdigit((uint8_t)*b)) {
+            unsigned long x = strtoul(a, (char**)&a, 10), y = strtoul(b, (char**)&b, 10);
+            if (x != y) return x < y ? -1 : 1;
+            continue;
+        }
+        const int ca = tolower((uint8_t)*a), cb = tolower((uint8_t)*b);
+        if (ca != cb) return ca - cb;
+        ++a, ++b;
+    }
+    return (uint8_t)*a - (uint8_t)*b;
+}
+// Documents: books of manuals (a few thousand entries at most) list the
+// documents themselves — the names before " — " that have chapters — once
+// each. Loose entries (headings a converter split off) stay findable by search.
 void findDocs(int bi) {
     if (g_docBook == bi && g_docCount >= 0) return;
     g_docBook = bi;
@@ -934,26 +989,29 @@ void findDocs(int bi) {
     sdLock();
     File f = SD.open(path, FILE_READ);
     uint8_t rec[REC];
-    int chapters = 0;
     for (uint32_t i = 0; f && i < g_books[bi].count && g_docCount < MAX_DOCS; ++i) {
         if (!readRec(f, i, rec)) break;
         char t[KEY + 1];
         memcpy(t, rec + KEY, KEY);
         t[KEY] = 0;
         char* dash = strstr(t, " \xE2\x80\x94 ");   // " — "
-        if (dash) { *dash = 0; ++chapters; }
+        if (dash) *dash = 0;
+        else if (g_books[bi].count > 60) continue;   // a short book lists everything
         bool seen = false;
         for (int k = g_docCount - 1; k >= 0 && k >= g_docCount - 40; --k)
-            if (!strcmp(g_docs[k].title, t)) { seen = true; break; }
+            if (!strcmp(g_docs[k].raw, t)) { seen = true; break; }
         if (seen) continue;
-        snprintf(g_docs[g_docCount].title, KEY + 1, "%s", t);
-        g_docs[g_docCount].rec = i;
-        ++g_docCount;
+        Doc& d = g_docs[g_docCount++];
+        snprintf(d.raw, sizeof d.raw, "%s", t);
+        snprintf(d.title, sizeof d.title, "%s", t);
+        tidyDocName(d.title);
+        d.rec = i;
     }
     if (f) f.close();
     sdUnlock();
-    // Not a book of documents after all (no chapters): A-Z serves better.
-    if (chapters == 0 && g_docCount > 60) g_docCount = 0;
+    // Too few to be a shelf of documents: A-Z serves better.
+    if (g_docCount < 2 && g_books[bi].count > 60) { g_docCount = 0; return; }
+    std::sort(g_docs, g_docs + g_docCount, [](const Doc& x, const Doc& y) { return naturalCmp(x.title, y.title) < 0; });
 }
 
 bool cyrillicBook(int bi) { return !strcmp(g_books[bi].dir, "wiki_uk") || !strcmp(g_books[bi].dir, "shelf_uk"); }
@@ -972,10 +1030,12 @@ void renderBookHead(int bi, uint8_t* fb) {
     cover(bi, {12, TOP + 10, 100, 112}, fb, false);
     ui::text(ui::font(ui::F_TITLE), 128, TOP + 52, shortName(bi), fb, EPD_DRAW_ALIGN_LEFT, INK);
     char cnt[16], sub[96];
-    countText(g_books[bi].count, cnt, sizeof cnt);
-    snprintf(sub, sizeof sub, "%s entries", cnt);
+    const Book& b = g_books[bi];
+    countText(b.shown ? b.shown : b.count, cnt, sizeof cnt);
+    snprintf(sub, sizeof sub, "%s %s", cnt, b.unit[0] ? b.unit : "articles");
     ui::text(ui::font(ui::F_SMALL), 128, TOP + 86, sub, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    snprintf(sub, sizeof sub, "%.44s", g_books[bi].source);
+    snprintf(sub, sizeof sub, "%s", b.about[0] ? b.about : b.source);
+    fitText(ui::font(ui::F_TINY), sub, W - 140);
     ui::text(ui::font(ui::F_TINY), 128, TOP + 112, sub, fb, EPD_DRAW_ALIGN_LEFT, INK);
 }
 
@@ -1005,72 +1065,183 @@ void listRow(int y, const char* title, uint8_t* fb) {
     epd_fill_rect({14, y + LIST_ROW - 2, W - 28, 1}, INK, fb);
 }
 
-// A book of millions (Wikipedia) opens on what the topics picked from it,
-// with A-Z and a random page a tap away; nobody pages through a million titles.
+// --- a book's first page: its menu ------------------------------------------------
+//
+// Like Kiwix opening a ZIM on its main page, or a printed book on its contents:
+// <book>/menu.txt (library/bookmenu.py, docs2doba.py) lists what the book is
+// for, by group:
+//   # GROUP                 a header
+//   Title|what it is        a row: the article's title, a line under it
+// Without one: the book's picks.txt, the topics' titles from it, its documents
+// ("Doc — chapter" titles), and for a big book A-Z and a random page.
 bool bigBook(int bi) { return g_books[bi].count > 20000; }
-bool g_bookAZ = false;          // the A-Z grid of a big book is up
-const EpdRect kBigAZ = {12, BODY_Y - 4, (W - 32) / 2, 70};
-const EpdRect kBigRandom = {20 + (W - 32) / 2, BODY_Y - 4, (W - 32) / 2, 70};
-constexpr int PICK_TOP = BODY_Y + 104;
-// Picks: the book's own picks.txt (library/picks.py) if it has one, else
-// the titles the topics (sections.txt) take from it.
-typedef char PickTitle[KEY + 1];
-PickTitle* g_picks = nullptr;
-int g_pickCount = 0, g_pickBook = -1;
-void addPick(const char* t) {
-    if (g_pickCount >= MAX_ENTRIES || !t[0]) return;
-    for (int k = 0; k < g_pickCount; ++k)
-        if (!strcmp(g_picks[k], t)) return;
-    snprintf(g_picks[g_pickCount++], KEY + 1, "%s", t);
+bool g_bookAZ = false;          // the A-Z grid is up (from the book's page)
+constexpr int MAX_MENU = 480;
+struct MenuItem { char title[160]; char sub[100]; bool header; int32_t rec; uint8_t cut; };   // cut: line 2 starts (0: one line)
+MenuItem* g_menu = nullptr;
+int g_menuCount = 0, g_menuBook = -1;
+bool g_menuPicks = false;        // the menu came from picks/topics (a big book's)
+
+void addMenu(const char* title, const char* sub, bool header, int32_t rec = -1) {
+    if (g_menuCount >= MAX_MENU || !title[0]) return;
+    if (!header)
+        for (int k = 0; k < g_menuCount; ++k)
+            if (!g_menu[k].header && !strcmp(g_menu[k].title, title)) return;
+    MenuItem& m = g_menu[g_menuCount++];
+    snprintf(m.title, sizeof m.title, "%s", title);
+    snprintf(m.sub, sizeof m.sub, "%s", sub ? sub : "");
+    m.header = header;
+    m.rec = rec;
+    m.cut = 0;
+    // A long title (a question) wraps once, at a space.
+    const EpdFont* f = ui::font(ui::F_LABEL);
+    if (!header && ui::textWidth(f, m.title) > W - 70) {
+        int best = 0;
+        char t[160];
+        for (int i = 1; m.title[i] && i < 150; ++i) {
+            if (m.title[i] != ' ') continue;
+            memcpy(t, m.title, i);
+            t[i] = 0;
+            if (ui::textWidth(f, t) <= W - 70) best = i; else break;
+        }
+        m.cut = (uint8_t)(best ? best + 1 : 0);
+    }
 }
-void findPicks(int bi) {
-    if (g_pickBook == bi) return;
-    g_pickBook = bi;
-    g_pickCount = 0;
-    if (!g_picks) g_picks = (PickTitle*)heap_caps_malloc(sizeof(PickTitle) * MAX_ENTRIES, MALLOC_CAP_SPIRAM);
-    if (!g_picks) return;
-    char path[96];
-    snprintf(path, sizeof path, "%s/%s/picks.txt", kRoot, g_books[bi].dir);
+// Lines of a small text file, one call each.
+template <typename F> bool eachLine(const char* path, F fn) {
     sdLock();
     File f = SD.open(path, FILE_READ);
-    if (f) {
-        char line[KEY + 8];
-        size_t n = 0;
-        for (int c = f.read();; c = f.read()) {
-            if (c < 0 || c == '\n') {
-                while (n && line[n - 1] == '\r') --n;
-                line[n] = 0;
-                addPick(line);
-                n = 0;
-                if (c < 0) break;
-            } else if (n + 1 < sizeof line) line[n++] = (char)c;
-        }
-        f.close();
+    if (!f) { sdUnlock(); return false; }
+    char line[300];
+    size_t n = 0;
+    for (int c = f.read();; c = f.read()) {
+        if (c < 0 || c == '\n') {
+            while (n && (line[n - 1] == '\r' || line[n - 1] == ' ')) --n;
+            line[n] = 0;
+            if (n) fn(line);
+            n = 0;
+            if (c < 0) break;
+        } else if (n + 1 < sizeof line) line[n++] = (char)c;
     }
+    f.close();
     sdUnlock();
-    if (g_pickCount || !g_entries) return;
-    for (int i = 0; i < g_entryCount; ++i)
-        if (g_entries[i].book == bi) addPick(g_entries[i].title);
+    return true;
 }
-int pickRows() { return (kListPrev.y - 8 - PICK_TOP) / LIST_ROW; }
-void renderBigBook(int bi, uint8_t* fb) {
-    frame(kBigAZ, 3, fb);
-    ui::text(ui::font(ui::F_LABEL), kBigAZ.x + kBigAZ.width / 2, kBigAZ.y + 46, "BROWSE A-Z", fb, EPD_DRAW_ALIGN_CENTER, INK);
-    frame(kBigRandom, 3, fb);
-    ui::text(ui::font(ui::F_LABEL), kBigRandom.x + kBigRandom.width / 2, kBigRandom.y + 46, "RANDOM PAGE", fb, EPD_DRAW_ALIGN_CENTER, INK);
-    findPicks(bi);
-    char h[48];
-    snprintf(h, sizeof h, "PICKED FOR SURVIVAL - %d", g_pickCount);
-    ui::text(ui::font(ui::F_TINY), 16, PICK_TOP - 12, h, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    if (!g_pickCount) {
-        ui::text(ui::font(ui::F_SMALL), W / 2, PICK_TOP + 60, "Search above, or browse A-Z.", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        return;
+void findMenu(int bi) {
+    if (g_menuBook == bi) return;
+    g_menuBook = bi;
+    g_menuCount = 0;
+    g_menuPicks = false;
+    if (!g_menu) g_menu = (MenuItem*)heap_caps_malloc(sizeof(MenuItem) * MAX_MENU, MALLOC_CAP_SPIRAM);
+    if (!g_menu) return;
+    char path[96];
+    snprintf(path, sizeof path, "%s/%s/menu.txt", kRoot, g_books[bi].dir);
+    eachLine(path, [](char* l) {
+        if (l[0] == '#') { char* t = l + 1; while (*t == ' ') ++t; addMenu(t, "", true); return; }
+        char* bar = strchr(l, '|');
+        if (bar) *bar = 0;
+        addMenu(l, bar ? bar + 1 : "", false);
+    });
+    if (g_menuCount) return;
+    g_menuPicks = true;
+    snprintf(path, sizeof path, "%s/%s/picks.txt", kRoot, g_books[bi].dir);
+    addMenu("Picked for survival", "", true);
+    eachLine(path, [](char* l) { addMenu(l, "", false); });
+    if (g_menuCount == 1 && g_entries)
+        for (int i = 0; i < g_entryCount; ++i)
+            if (g_entries[i].book == bi) addMenu(g_entries[i].title, g_entries[i].desc, false);
+    if (g_menuCount > 1) return;
+    g_menuCount = 0;
+    g_menuPicks = false;
+    findDocs(bi);
+    if (g_docCount > 0) addMenu("Documents", "", true);
+    for (int i = 0; i < g_docCount; ++i) addMenu(g_docs[i].title, "", false, (int32_t)g_docs[i].rec);
+}
+
+const EpdRect kBigAZ = {12, BODY_Y - 6, (W - 32) / 2, 58};
+const EpdRect kBigRandom = {20 + (W - 32) / 2, BODY_Y - 6, (W - 32) / 2, 58};
+constexpr int MENU_HEAD_H = 46, MENU_ROW_H = 64, MENU_ROW2_H = 86;
+int menuTop(int bi) { return bigBook(bi) ? BODY_Y + 64 : BODY_Y - 2; }
+int itemH(const MenuItem& m) { return m.header ? MENU_HEAD_H : (m.sub[0] ? MENU_ROW2_H : MENU_ROW_H) + (m.cut ? 32 : 0); }
+// Page starts: as many rows as fit above the pager; a header never ends a page.
+int g_menuPageStart[64];
+int g_menuPages = 0;
+void paginateMenu(int bi) {
+    g_menuPages = 0;
+    const int top = menuTop(bi), bottom = kListPrev.y - 6;
+    int i = 0;
+    while (i < g_menuCount && g_menuPages < 64) {
+        g_menuPageStart[g_menuPages++] = i;
+        int y = top;
+        int last = i;
+        while (i < g_menuCount && y + itemH(g_menu[i]) <= bottom) { y += itemH(g_menu[i]); last = i; ++i; }
+        if (i < g_menuCount && g_menu[last].header && last > g_menuPageStart[g_menuPages - 1]) i = last;
+        if (i == g_menuPageStart[g_menuPages - 1]) ++i;
     }
-    const int per = pickRows(), pages = (g_pickCount + per - 1) / per;
-    if (g_listPage >= pages) g_listPage = pages - 1;
-    for (int r = 0; r < per && g_listPage * per + r < g_pickCount; ++r)
-        listRow(PICK_TOP + r * LIST_ROW, g_picks[g_listPage * per + r], fb);
-    pagerRow(g_listPage, pages, fb);
+    if (!g_menuPages) g_menuPageStart[g_menuPages++] = 0;
+}
+void renderMenu(int bi, uint8_t* fb) {
+    findMenu(bi);
+    paginateMenu(bi);
+    if (g_listPage >= g_menuPages) g_listPage = g_menuPages - 1;
+    const int from = g_menuPageStart[g_listPage];
+    const int to = g_listPage + 1 < g_menuPages ? g_menuPageStart[g_listPage + 1] : g_menuCount;
+    int y = menuTop(bi);
+    for (int i = from; i < to; ++i) {
+        const MenuItem& m = g_menu[i];
+        char t[170];
+        if (m.header) {
+            snprintf(t, sizeof t, "%s", m.title);
+            for (char* c = t; *c; ++c) if (*c >= 'a' && *c <= 'z') *c -= 32;
+            fitText(ui::font(ui::F_TINY), t, W - 40);
+            ui::text(ui::font(ui::F_TINY), 16, y + 32, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
+            epd_fill_rect({14, y + MENU_HEAD_H - 6, W - 28, 3}, INK, fb);
+        } else {
+            const int h = itemH(m);
+            const EpdFont* lf = ui::font(ui::F_LABEL);
+            char two[164];
+            int ty = y + (m.sub[0] ? 38 : 42);
+            if (m.cut) {
+                snprintf(two, sizeof two, "%.*s", (int)m.cut - 1, m.title);
+                ui::text(lf, 20, ty, two, fb, EPD_DRAW_ALIGN_LEFT, INK);
+                ty += 32;
+                snprintf(two, sizeof two, "%s", m.title + m.cut);
+            } else {
+                snprintf(two, sizeof two, "%s", m.title);
+            }
+            fitText(lf, two, W - 70);
+            ui::text(lf, 20, ty, two, fb, EPD_DRAW_ALIGN_LEFT, INK);
+            if (m.sub[0]) {
+                char sub[104];
+                snprintf(sub, sizeof sub, "%s", m.sub);
+                fitText(ui::font(ui::F_SMALL), sub, W - 70);
+                ui::text(ui::font(ui::F_SMALL), 20, ty + 32, sub, fb, EPD_DRAW_ALIGN_LEFT, INK);
+            }
+            ui::text(ui::font(ui::F_KEY), W - 22, y + h / 2 + 12, ">", fb, EPD_DRAW_ALIGN_RIGHT, INK);
+            epd_fill_rect({14, y + h - 2, W - 28, 1}, INK, fb);
+        }
+        y += itemH(m);
+    }
+    pagerRow(g_listPage, g_menuPages, fb);
+}
+// The tapped menu row, or -1.
+int menuHit(int bi, int x, int y) {
+    (void)x;
+    const int from = g_menuPageStart[g_listPage];
+    const int to = g_listPage + 1 < g_menuPages ? g_menuPageStart[g_listPage + 1] : g_menuCount;
+    int ry = menuTop(bi);
+    for (int i = from; i < to; ++i) {
+        const int h = itemH(g_menu[i]);
+        if (y >= ry && y < ry + h) return g_menu[i].header ? -1 : i;
+        ry += h;
+    }
+    return -1;
+}
+void renderBigBar(uint8_t* fb) {
+    frame(kBigAZ, 2, fb);
+    ui::text(ui::font(ui::F_SMALL), kBigAZ.x + kBigAZ.width / 2, kBigAZ.y + 38, "BROWSE A-Z", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    frame(kBigRandom, 2, fb);
+    ui::text(ui::font(ui::F_SMALL), kBigRandom.x + kBigRandom.width / 2, kBigRandom.y + 38, "RANDOM PAGE", fb, EPD_DRAW_ALIGN_CENTER, INK);
 }
 
 void renderBook(uint8_t* fb) {
@@ -1079,19 +1250,13 @@ void renderBook(uint8_t* fb) {
     char lbl[64];
     snprintf(lbl, sizeof lbl, "Search in %s", shortName(bi));
     searchBar(kBookSearch, lbl, fb);
-    findDocs(bi);
-    if (g_docCount > 0) {
-        char h[32];
-        snprintf(h, sizeof h, "%d DOCUMENTS", g_docCount);
-        ui::text(ui::font(ui::F_TINY), 16, BODY_Y + 26, h, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        const int per = listRows(), pages = (g_docCount + per - 1) / per;
-        if (g_listPage >= pages) g_listPage = pages - 1;
-        for (int r = 0; r < per && g_listPage * per + r < g_docCount; ++r)
-            listRow(BODY_Y + 40 + r * LIST_ROW, g_docs[g_listPage * per + r].title, fb);
-        pagerRow(g_listPage, pages, fb);
+    findMenu(bi);
+    if (!g_bookAZ && (g_menuCount || bigBook(bi))) {
+        if (bigBook(bi)) renderBigBar(fb);
+        if (g_menuCount) renderMenu(bi, fb);
+        else ui::text(ui::font(ui::F_SMALL), W / 2, BODY_Y + 140, "Search above, or browse A-Z.", fb, EPD_DRAW_ALIGN_CENTER, INK);
         return;
     }
-    if (bigBook(bi) && !g_bookAZ) { renderBigBook(bi, fb); return; }
     ui::text(ui::font(ui::F_TINY), 16, BODY_Y + 26, "BROWSE A-Z", fb, EPD_DRAW_ALIGN_LEFT, INK);
     for (int i = 0; i < letterCount(bi); ++i) {
         const EpdRect r = letterRect(bi, i);
@@ -1831,30 +1996,32 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
         case V_BOOK: {
             const int bi = g_open;
             if (hit(kBookSearch, x, y)) { g_scope = -1; g_scopeBook = bi; g_searchFrom = V_BOOK; g_view = V_SEARCH; k.clear(); return false; }
-            findDocs(bi);
-            if (g_docCount > 0) {
-                const int per = listRows(), pages = (g_docCount + per - 1) / per;
-                if (pages > 1 && hit(kListPrev, x, y)) { if (g_listPage > 0) --g_listPage; return false; }
-                if (pages > 1 && hit(kListNext, x, y)) { if (g_listPage + 1 < pages) ++g_listPage; return false; }
-                const int r = (y - (BODY_Y + 40)) / LIST_ROW, i = g_listPage * per + r;
-                if (y >= BODY_Y + 40 && r < per && i < g_docCount) return openRecord(bi, g_docs[i].rec);
-                return false;
-            }
-            if (bigBook(bi) && !g_bookAZ) {
-                if (hit(kBigAZ, x, y)) { g_bookAZ = true; return false; }
-                if (hit(kBigRandom, x, y)) {
-                    const uint32_t i = (uint32_t)random((long)g_books[bi].count);
+            findMenu(bi);
+            if (!g_bookAZ && (g_menuCount || bigBook(bi))) {
+                if (bigBook(bi) && hit(kBigAZ, x, y)) { g_bookAZ = true; return false; }
+                if (bigBook(bi) && hit(kBigRandom, x, y)) {
+                    uint32_t i = (uint32_t)random((long)g_books[bi].count);
+                    {   // not a hidden page (a profile, a Category:) and not a redirect
+                        char path[96];
+                        snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
+                        sdLock();
+                        File f = SD.open(path, FILE_READ);
+                        uint8_t rec[REC];
+                        for (int t = 0; f && t < 40 && readRec(f, i, rec) && (rec[114] & 3); ++t)
+                            i = (uint32_t)random((long)g_books[bi].count);
+                        if (f) f.close();
+                        sdUnlock();
+                    }
                     Serial.printf("[lib] random %lu\n", (unsigned long)i);
                     return openRecord(bi, i);
                 }
-                findPicks(bi);
-                const int per = pickRows(), pages = (g_pickCount + per - 1) / per;
-                if (pages > 1 && hit(kListPrev, x, y)) { if (g_listPage > 0) --g_listPage; return false; }
-                if (pages > 1 && hit(kListNext, x, y)) { if (g_listPage + 1 < pages) ++g_listPage; return false; }
-                const int r = (y - PICK_TOP) / LIST_ROW, i = g_listPage * per + r;
-                if (y >= PICK_TOP && r < per && i < g_pickCount)
-                    return openEntry(bi, g_picks[i]);
-                return false;
+                paginateMenu(bi);
+                if (g_menuPages > 1 && hit(kListPrev, x, y)) { if (g_listPage > 0) --g_listPage; return false; }
+                if (g_menuPages > 1 && hit(kListNext, x, y)) { if (g_listPage + 1 < g_menuPages) ++g_listPage; return false; }
+                const int i = menuHit(bi, x, y);
+                if (i < 0) return false;
+                if (g_menu[i].rec >= 0) return openRecord(bi, (uint32_t)g_menu[i].rec);
+                return openEntry(bi, g_menu[i].title);
             }
             for (int i = 0; i < letterCount(bi); ++i)
                 if (hit(letterRect(bi, i), x, y)) { setLetter(bi, i); g_view = V_LETTER; return false; }
@@ -1978,9 +2145,18 @@ bool findIn(int bi, const char* title, Result& out);
 bool findExact(const char* title, Result& out) { return findIn(g_book, title, out); }
 bool findIn(int bi, const char* title, Result& out) {
     if (g_bookCount <= 0 || bi < 0 || bi >= g_bookCount) return false;
-    char key[KEY + 1];
+    // As library/dobafold.py: the whole title folded, then cut to 55 bytes
+    // on a character boundary (a long title's key is its first 55 bytes).
+    char key[256];
     fold(title, key, sizeof key);
     if (!key[0]) return false;
+    size_t kn = strlen(key);
+    if (kn > (size_t)KEY - 1) {
+        kn = KEY - 1;
+        while (kn > 0 && ((uint8_t)key[kn] & 0xC0) == 0x80) --kn;
+        while (kn > 0 && key[kn - 1] == ' ') --kn;
+        key[kn] = 0;
+    }
     uint8_t want[KEY] = {};
     memcpy(want, key, strlen(key) < (size_t)KEY ? strlen(key) : KEY);
     const Book& b = g_books[bi];

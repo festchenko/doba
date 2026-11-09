@@ -33,7 +33,8 @@ def entries(arc):
     out = []
     for r in rows:
         for fp in r.get("fp") or []:
-            out.append((r.get("ti") or os.path.splitext(fp)[0], r.get("aut") or "", "files/" + fp))
+            out.append((r.get("ti") or os.path.splitext(fp)[0], r.get("aut") or "", "files/" + fp,
+                        " ".join((r.get("dsc") or "").split())))
     return out
 
 
@@ -52,8 +53,15 @@ def main():
         print(f"{zim}: not a nautilus collection")
         return 2
     os.makedirs(out, exist_ok=True)
+    from docs2doba import pretty_title
+    # A description several documents share is their group ("Emergency
+    # Preparedness : Quick Guides"); one of its own describes the document.
+    shared = {}
+    for _, _, _, dsc in rows:
+        shared[dsc] = shared.get(dsc, 0) + 1
     n = 0
-    for title, author, path in rows:
+    manifest = []
+    for title, author, path, dsc in rows:
         ext = os.path.splitext(path)[1].lower()
         if ext not in DOCS:
             continue
@@ -62,7 +70,8 @@ def main():
         except KeyError:
             print(f"  missing {path}")
             continue
-        name = safe(f"{title} ({author})" if author and author.lower() != "various" else title)
+        title = pretty_title(title)
+        name = safe(title)
         dest = os.path.join(out, name + ext)
         k = 2
         while os.path.exists(dest):
@@ -70,7 +79,16 @@ def main():
             k += 1
         with open(dest, "wb") as f:
             f.write(data)
+        group = dsc if dsc and shared[dsc] > 1 else ""
+        desc = "" if group else dsc
+        if author and author.lower() not in ("various", "unknown") and author.lower() not in desc.lower():
+            desc = f"{desc} · {author}" if desc else author
+        group = re.sub(r"_\w+$", "", group).strip()   # "Quick Guides & Checklists_checklist"
+        manifest.append((os.path.splitext(os.path.basename(dest))[0], title, group, desc, n))
         n += 1
+    with open(os.path.join(out, "_docs.tsv"), "w", encoding="utf-8") as f:
+        for row in manifest:
+            f.write("\t".join(str(x).replace("\t", " ") for x in row) + "\n")
     print(f"{n} documents -> {out}")
     return 0
 
