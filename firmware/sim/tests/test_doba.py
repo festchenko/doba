@@ -536,3 +536,46 @@ def test_sos_is_sent_only_by_a_5s_hold(doba):
         doba.wait_log(r"\[sos\] sent", since=since, timeout=1.5)
     doba.tap(270, 470, ms=5300)                           # held: sent
     doba.wait_log(r"\[sos\] sent #1", since=since, timeout=8)
+
+
+def write_pois(path, pois):
+    """A pois.dgp (maps/pois.py) from (lat, lon, kind, name)."""
+    import math
+    import struct
+    cells = {}
+    for p in pois:
+        cells.setdefault((math.floor(p[0] / 0.25), math.floor(p[1] / 0.25)), []).append(p)
+    order = sorted(cells)
+    with open(path, "wb") as f:
+        f.write(b"DGP1" + struct.pack("<II", len(pois), len(order)))
+        first = 0
+        for c in order:
+            f.write(struct.pack("<hhII", c[0], c[1], first, len(cells[c])))
+            first += len(cells[c])
+        for c in order:
+            for lat, lon, k, name in cells[c]:
+                f.write(struct.pack("<ffBB34s", lat, lon, k, 0, name.encode()))
+
+
+def test_nearby_lists_the_nearest_of_each_kind_and_a_tap_goes_there(doba):
+    """Position > Nearby places: kinds with the nearest; a kind lists its places;
+    a place becomes a point to go to."""
+    os.makedirs(os.path.join(doba.sd, "doba", "map"), exist_ok=True)
+    write_pois(os.path.join(doba.sd, "doba", "map", "pois.dgp"), [
+        (52.0500, 6.6300, 1, "Far hospital"), (52.0430, 6.6200, 1, "Near hospital"),
+        (52.0410, 6.6150, 4, ""), (52.0450, 6.6100, 5, "Spar")])
+    boot(doba)
+    doba.gps(52.0421, 6.6170)
+    time.sleep(2)
+    doba.console("screen points", 800)
+    time.sleep(0.8)
+    doba.tap(440, TOP + 436 - 24)                           # Nearby places ›
+    time.sleep(1.0)
+    doba.screenshot(os.path.join(doba.dir, "nearby.png"))
+    since = doba.log_seq()
+    doba.tap(200, TOP + 112 + 40)                           # Hospital, first kind
+    doba.wait_log(r"\[pois\] kind Hospital", since=since)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(200, TOP + 112 + 40)                           # the nearest one
+    doba.wait_log(r"\[pois\] point \d+ 'Near hospital'", since=since)

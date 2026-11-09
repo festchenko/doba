@@ -4,6 +4,7 @@
 #include "settings.h"
 #include "usb_storage.h"
 #include "doba_topo_bg.h"
+#include "doba_pois.h"
 #include "tz_auto.h"
 
 #include <Arduino.h>
@@ -1160,7 +1161,140 @@ void chevButton(const EpdRect& r, bool live, bool vertical, int d, uint8_t* fb) 
     }
 }
 
+// --- NEARBY: useful places round you (doba_pois) ---------------------------------
+int g_nearby = 0;       // 0 off, 1 the kinds, 2 the places of one kind
+int g_nearKind = 0, g_nearPage = 0;
+constexpr int NEAR_TOP = TOP + 112, NEAR_ROW = 84;
+constexpr int NEAR_MAX = 30;
+doba_pois::Poi g_near[NEAR_MAX];
+int g_nearCount = 0;
+doba_pois::Poi g_each[doba_pois::KINDS];
+int g_kindOrder[doba_pois::KINDS], g_kindCount = 0;   // the kinds found, nearest first
+
+void compass8(double deg, char* out, size_t n) {
+    static const char* const k[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+    snprintf(out, n, "%s", k[(int)((fmod(deg + 360.0, 360.0) + 22.5) / 45.0) % 8]);
+}
+void nearLine(const doba_pois::Poi& p, char* out, size_t n) {
+    char ds[16], az[16], c8[4];
+    doba_points::formatDistance(p.dist, ds, sizeof ds);
+    azText(p.bearing, az, sizeof az);
+    compass8(p.bearing, c8, sizeof c8);
+    snprintf(out, n, "%s %s \xC2\xB7 az %s", ds, c8, az);
+}
+int nearPerPage() { return (H - 90 - NEAR_TOP) / NEAR_ROW; }
+
+void renderNearby(const RideState& s, uint8_t* fb) {
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    double lat, lon;
+    if (!here(s, lat, lon)) {
+        ui::text(ui::font(ui::F_H1), 24, TOP + 44, "Nearby", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_SMALL), 24, TOP + 120, "Needs a position: wait for a GPS fix.", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        return;
+    }
+    if (!doba_pois::available()) {
+        ui::text(ui::font(ui::F_H1), 24, TOP + 44, "Nearby", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_SMALL), 24, TOP + 120, "No list of places on this card.", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
+        ui::text(ui::font(ui::F_SMALL), 24, TOP + 150, "It is /doba/map/pois.dgp (maps/pois.py).", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        return;
+    }
+    const int per = nearPerPage();
+    char line[96];
+    if (g_nearby == 1) {
+        ui::text(ui::font(ui::F_H1), 24, TOP + 44, "Nearby", fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_SMALL), 24, TOP + 78, "Useful places within about 40 km, offline", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        doba_pois::nearestOfEach(lat, lon, g_each);
+        g_kindCount = 0;
+        for (int k = 1; k < doba_pois::KINDS; ++k) g_kindOrder[g_kindCount++] = k;   // the fixed order: most urgent first
+        const int pages = (g_kindCount + per - 1) / per;
+        if (g_nearPage >= pages) g_nearPage = pages - 1;
+        for (int r = 0; r < per && g_nearPage * per + r < g_kindCount; ++r) {
+            const int k = g_kindOrder[g_nearPage * per + r];
+            const int y = NEAR_TOP + r * NEAR_ROW;
+            const doba_pois::Poi& p = g_each[k];
+            const bool none = p.dist < 0;
+            ui::text(ui::font(ui::F_LABEL), 24, y + 36, doba_pois::kindName(k), fb, EPD_DRAW_ALIGN_LEFT, none ? ui::GREY : INK);
+            if (none) snprintf(line, sizeof line, "none within 40 km");
+            else {
+                char d[48];
+                nearLine(p, d, sizeof d);
+                snprintf(line, sizeof line, "%s%s%s", d, p.name[0] ? " \xC2\xB7 " : "", p.name);
+            }
+            fit(ui::font(ui::F_SMALL), line, W - 90);
+            ui::text(ui::font(ui::F_SMALL), 24, y + 66, line, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+            if (!none) ui::text(ui::font(ui::F_KEY), W - 26, y + NEAR_ROW / 2 + 12, "\xE2\x80\xBA", fb, EPD_DRAW_ALIGN_RIGHT, 0x80);
+            epd_fill_rect({24, y + NEAR_ROW - 1, W - 48, 1}, ui::HAIR, fb);
+        }
+        if (pages > 1) {
+            char pg[16];
+            snprintf(pg, sizeof pg, "%d of %d", g_nearPage + 1, pages);
+            ui::text(ui::font(ui::F_SMALL), 28, kUp.y + 34, pg, fb, EPD_DRAW_ALIGN_LEFT, 0x40);
+            chevButton(kUp, g_nearPage > 0, false, -1, fb);
+            chevButton(kDown, g_nearPage + 1 < pages, false, 1, fb);
+        }
+        return;
+    }
+    // one kind: the nearest, a tap makes it a point to go to
+    ui::text(ui::font(ui::F_H1), 24, TOP + 44, doba_pois::kindName(g_nearKind), fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(ui::font(ui::F_SMALL), 24, TOP + 78, doba_pois::kindHint(g_nearKind), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    g_nearCount = doba_pois::nearest(lat, lon, g_nearKind, g_near, NEAR_MAX);
+    const int pages = (g_nearCount + per - 1) / per;
+    if (g_nearPage >= pages) g_nearPage = pages ? pages - 1 : 0;
+    if (!g_nearCount)
+        ui::text(ui::font(ui::F_SMALL), 24, NEAR_TOP + 40, "None within about 40 km.", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
+    for (int r = 0; r < per && g_nearPage * per + r < g_nearCount; ++r) {
+        const doba_pois::Poi& p = g_near[g_nearPage * per + r];
+        const int y = NEAR_TOP + r * NEAR_ROW;
+        char nm[48];
+        snprintf(nm, sizeof nm, "%s", p.name[0] ? p.name : doba_pois::kindName(p.kind));
+        fit(ui::font(ui::F_LABEL), nm, W - 90);
+        ui::text(ui::font(ui::F_LABEL), 24, y + 36, nm, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        nearLine(p, line, sizeof line);
+        ui::text(ui::font(ui::F_SMALL), 24, y + 66, line, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        ui::text(ui::font(ui::F_KEY), W - 26, y + NEAR_ROW / 2 + 12, "\xE2\x80\xBA", fb, EPD_DRAW_ALIGN_RIGHT, 0x80);
+        epd_fill_rect({24, y + NEAR_ROW - 1, W - 48, 1}, ui::HAIR, fb);
+    }
+    char pg[32];
+    snprintf(pg, sizeof pg, pages > 1 ? "%d of %d \xC2\xB7 tap one to go there" : "Tap one to go there", g_nearPage + 1, pages);
+    ui::text(ui::font(ui::F_SMALL), 28, kUp.y + 34, pg, fb, EPD_DRAW_ALIGN_LEFT, 0x40);
+    if (pages > 1) {
+        chevButton(kUp, g_nearPage > 0, false, -1, fb);
+        chevButton(kDown, g_nearPage + 1 < pages, false, 1, fb);
+    }
+}
+
+Go tapNearby(int x, int y, const RideState& s) {
+    const int per = nearPerPage();
+    if (hit(kUp, x, y)) { if (g_nearPage > 0) --g_nearPage; return STAY; }
+    if (hit(kDown, x, y)) { ++g_nearPage; return STAY; }   // clamped when drawn
+    if (y < NEAR_TOP) return STAY;
+    const int r = (y - NEAR_TOP) / NEAR_ROW, i = g_nearPage * per + r;
+    if (r >= per) return STAY;
+    if (g_nearby == 1) {
+        if (i >= g_kindCount) return STAY;
+        const int k = g_kindOrder[i];
+        if (g_each[k].dist < 0) return STAY;
+        g_nearKind = k;
+        g_nearPage = 0;
+        g_nearby = 2;
+        Serial.printf("[pois] kind %s\n", doba_pois::kindName(k));
+        return STAY;
+    }
+    if (i >= g_nearCount) return STAY;
+    const doba_pois::Poi& p = g_near[i];
+    char nm[24];
+    snprintf(nm, sizeof nm, "%.23s", p.name[0] ? p.name : doba_pois::kindName(p.kind));
+    const int at = doba_points::add(nm, p.lat, p.lon);
+    if (at < 0) { g_pointsNote = "list full"; return STAY; }
+    Serial.printf("[pois] point %d '%s'\n", at, nm);
+    g_nearby = 0;
+    g_pointSel = at;
+    g_deleteArmed = false;
+    return TO_POINT;
+}
+
 void renderPoints(const RideState& s, uint8_t* fb) {
+    if (g_nearby) { renderNearby(s, fb); return; }
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     double lat, lon;
     const bool have = here(s, lat, lon);
@@ -1212,6 +1346,12 @@ void renderPoints(const RideState& s, uint8_t* fb) {
     const int n = doba_points::count();
     if (g_pointsScroll > n - 1) g_pointsScroll = n > 0 ? ((n - 1) / PROW_N) * PROW_N : 0;
     ui::text(ui::font(ui::F_TINY), 24, PROW_TOP - 14, "SAVED POINTS", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    // Nearby: hospitals, water, food... (maps/pois.py) — a link, top right of the list
+    {
+        const EpdFont* lf = ui::font(ui::F_LABEL);
+        const char* nb = "Nearby places \xE2\x80\xBA";
+        ui::text(lf, W - 24, PROW_TOP - 12, nb, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+    }
     if (n == 0) {
         ui::text(ui::font(ui::F_SMALL), 24, PROW_TOP + 34, "Mark here saves where you stand,", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
         ui::text(ui::font(ui::F_SMALL), 24, PROW_TOP + 62, "Enter coords takes a grid reference,", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
@@ -1257,6 +1397,8 @@ bool g_newFocusName = false;
 const char* g_newError = nullptr;
 
 Go tapPoints(int x, int y, const RideState& s) {
+    if (g_nearby) return tapNearby(x, y, s);
+    if (y >= PROW_TOP - 46 && y < PROW_TOP + 4 && x > W / 2) { g_nearby = 1; g_nearPage = 0; return STAY; }
     double lat, lon;
     if (hit(kMark, x, y)) {
         if (!here(s, lat, lon)) { g_pointsNote = "no fix yet"; return STAY; }
@@ -1764,7 +1906,7 @@ const char* title(Page p) {
         case LIBRARY: return doba_lib::libraryTitle();
         case ARTICLE: return "";
         case SETUP: case SETUP_NAME: return "Settings";
-        case POINTS: return "Position";
+        case POINTS: return g_nearby ? "" : "Position";
         case POINT: return "Point";
         case POINT_NEW: return "New point";
         case MAPOPTS: return "MAP";
@@ -1808,7 +1950,9 @@ Go back(Page p) {
             return TO_LIBRARY;
         case SETUP:   return TO_HOME;
         case SETUP_NAME: return TO_SETUP;
-        case POINTS:  return TO_HOME;
+        case POINTS:
+            if (g_nearby) { g_nearby = g_nearby == 2 ? 1 : 0; g_nearPage = 0; return STAY; }
+            return TO_HOME;
         case POINT:   return TO_POINTS;
         case POINT_NEW: return TO_POINTS;
         case MAPOPTS: return TO_MAP;
