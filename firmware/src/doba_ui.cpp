@@ -1127,7 +1127,7 @@ void renderPoints(const RideState& s, uint8_t* fb) {
         g_pointsNote = nullptr;
     }
     button(kMark, "MARK HERE", true, fb);
-    button(kAdd, "ADD GRID", false, fb);
+    button(kAdd, "ENTER COORDS", false, fb);
 
     const int n = doba_points::count();
     if (g_pointsScroll > n - 1) g_pointsScroll = n > 0 ? ((n - 1) / PROW_N) * PROW_N : 0;
@@ -1135,7 +1135,7 @@ void renderPoints(const RideState& s, uint8_t* fb) {
     {
         ui::text(ui::font(ui::F_KEY), W / 2, PROW_TOP + 100, "No points yet", fb, EPD_DRAW_ALIGN_CENTER, INK);
         ui::text(ui::font(ui::F_SMALL), W / 2, PROW_TOP + 150, "MARK HERE saves where you stand,", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(ui::font(ui::F_SMALL), W / 2, PROW_TOP + 182, "ADD GRID takes an MGRS reference,", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), W / 2, PROW_TOP + 182, "ENTER COORDS takes a grid reference,", fb, EPD_DRAW_ALIGN_CENTER, INK);
         ui::text(ui::font(ui::F_SMALL), W / 2, PROW_TOP + 214, "or hold a finger on the map.", fb, EPD_DRAW_ALIGN_CENTER, INK);
     }
     for (int k = 0; k < PROW_N && g_pointsScroll + k < n; ++k) {
