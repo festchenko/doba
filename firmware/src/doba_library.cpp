@@ -1144,6 +1144,9 @@ void findKids(int bi) {
         if (rec[L] == 0) {                      // the prefix itself
             key[L] = 1; kl = L + 1;
             keyLabel(lv.key, L, "", k.label, sizeof k.label);
+        } else if (!lv.group && rec[L] >= 0x80 && !cyrillicBook(bi)) {   // a Latin book's odd letters: one tab
+            kl = 0;
+            snprintf(k.label, sizeof k.label, "OTHER");
         } else if (!lv.group && rec[L] > ' ' && rec[L] < 'a') {   // signs and digits: one tab each kind
             const bool digit = rec[L] >= '0' && rec[L] <= '9';
             key[L] = digit ? ':' : rec[L] < '0' ? '0' : 'a';
@@ -1157,8 +1160,8 @@ void findKids(int bi) {
             key[kl - 1]++;                      // just past every key with it
         }
         k.from = pos;
-        k.to = lowerIn(f, key, kl, pos + 1, lv.to);
-        k.more = !lv.group && rec[L] > ' ' && rec[L] < 'a';   // a group: its records share only the prefix
+        k.to = kl ? lowerIn(f, key, kl, pos + 1, lv.to) : lv.to;
+        k.more = !lv.group && ((rec[L] > ' ' && rec[L] < 'a') || !kl);   // a group: its records share only the prefix
         if (!k.label[0]) snprintf(k.label, sizeof k.label, "?");
         pos = k.to;
         ++g_kidCount;
@@ -1849,7 +1852,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
                                 key[L + utf8Len(rec[L])] = 0;
                             }
                         }
-                        pushLevel(g_open, key, k.label, k.from, k.to, k.more && strcmp(k.label, "MORE"));
+                        pushLevel(g_open, key, k.label, k.from, k.to, k.more && strcmp(k.label, "MORE") != 0);
                         return false;
                     }
                 return false;
