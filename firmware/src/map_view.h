@@ -150,6 +150,9 @@ struct MapScreenData {
     // DOBA: the map was dragged off the position (a CENTRE button brings it back),
     // and whether the zoom buttons are at their ends (drawn grey there).
     bool panned = false, zoomInEnd = false, zoomOutEnd = false;
+    // DOBA: the header band over the topo map: where this is, and the scale.
+    char place[32] = "";
+    char placeSub[32] = "";
 
     // Position is coming from the connected phone (device GPS has no fix).
     bool phonePosition = false;

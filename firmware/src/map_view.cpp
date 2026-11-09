@@ -946,7 +946,7 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
     // lives (compass spans y 78..146; the banner runs to y 202), so the north
     // indicator was drawn underneath it and invisible while navigating. Drop it
     // clear of the banner instead of hiding it.
-    drawCompass(kMapCompass.cx, mapCompassCy(map.navBannerVisible),
+    drawCompass(kMapCompass.cx, mapCompassCy(map.navBannerVisible) + (map.topo ? 56 : 0),   // DOBA: below the header band
                 map.northDeg, map.trackUp, fb);
 
     // No map covers this position — tell the rider how to get one instead of
@@ -1013,6 +1013,34 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
     // Status bar drawn after the map (epdiy has no clipping)
     epd_fill_rect({0, 0, W, ui::STATUS_H - 3}, 0xFF, fb);
     ui::statusBarBack(s, fb, "MAP");   // DOBA: BACK to home like every page
+
+    // DOBA: a sheet-style header over the topo map: the place, how far from
+    // it, and the scale as on a paper map (1:N at this screen's pixel pitch).
+    if (map.topo) {
+        const int y0 = ui::STATUS_H, hb = 52;
+        epd_fill_rect({0, y0, W, hb}, ui::PAPER, fb);
+        epd_fill_rect({0, y0 + hb - 2, W, 2}, ui::INK, fb);
+        char scale[24];
+        const long ratio = lroundf(map.metersPerPixel / 0.000108f / 500.0f) * 500;   // 235 dpi panel
+        if (ratio >= 1000) snprintf(scale, sizeof scale, "1:%ld %03ld", ratio / 1000, ratio % 1000);
+        else snprintf(scale, sizeof scale, "1:%ld", ratio);
+        ui::text(ui::font(ui::F_SMALL), W - 12, y0 + 34, scale, fb, EPD_DRAW_ALIGN_RIGHT, ui::INK);
+        const int room = W - 24 - ui::textWidth(ui::font(ui::F_SMALL), scale) - 16;
+        if (map.place[0]) {
+            char up[40];
+            size_t k = 0;
+            for (const char* p = map.place; *p && k < sizeof up - 1; ++p)
+                up[k++] = (*p >= 'a' && *p <= 'z') ? *p - 32 : *p;
+            up[k] = 0;
+            const EpdFont* pf = ui::font(ui::F_LABEL);
+            if (ui::textWidth(pf, up) > room - 10) pf = ui::font(ui::F_SMALL);
+            ui::text(pf, 12, y0 + 30, up, fb, EPD_DRAW_ALIGN_LEFT, ui::INK);
+            if (map.placeSub[0])
+                ui::text(ui::font(ui::F_TINY), 12, y0 + 47, map.placeSub, fb, EPD_DRAW_ALIGN_LEFT, ui::INK);
+        } else {
+            ui::text(ui::font(ui::F_SMALL), 12, y0 + 34, "TOPO MAP", fb, EPD_DRAW_ALIGN_LEFT, ui::INK);
+        }
+    }
 
     // DOBA: on the topo map the footer is the position readout instead.
     if (map.topo) {

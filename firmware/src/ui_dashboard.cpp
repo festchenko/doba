@@ -1,4 +1,6 @@
 #include "ui_dashboard.h"
+#include "doba_places.h"
+#include "milgeo.h"
 
 #include <Arduino.h>
 #include <stdarg.h>
@@ -1214,7 +1216,7 @@ void handleTap(int x, int y) {
             }
             if (screen == SCREEN_MAP) {
                 int dx = x - kMapCompass.cx,
-                    dy = y - mapCompassCy(routes::navActive());
+                    dy = y - mapCompassCy(routes::navActive()) - (mapTopoActive ? 56 : 0);
                 if (dx * dx + dy * dy <= kMapCompass.r * kMapCompass.r) {
                     mapTrackUp = !mapTrackUp;
                     break;
@@ -1547,7 +1549,7 @@ void buildMapPeers(double lat, double lon, float rot, bool useMiles,
             // Slide in along the same line until it is clear of the chrome
             // drawn over the map edge (compass, zoom column, scale bar), so the
             // marker is neither buried nor mistaken for the compass needle.
-            const int compY = mapCompassCy(map.navBannerVisible);
+            const int compY = mapCompassCy(map.navBannerVisible) + (map.topo ? 56 : 0);
             auto underChrome = [&](float px, float py) {
                 const float cdx = px - kMapCompass.cx, cdy = py - compY;
                 const float cr = kMapCompass.r + 30;
@@ -1748,6 +1750,32 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
     // screen (it may leave it); everything is still drawn round it.
     map.zoomInEnd = map.topo ? mapMpp <= topo::nativeMpp(18, lat) * 1.01f : mapMpp <= 1.0f;
     map.zoomOutEnd = mapMpp * 2.0f > mapMaxMpp() * 1.01f;
+    // DOBA: the place under the view (the position, or the middle when dragged)
+    if (map.topo) {
+        const double vlat = lat + mapPanN / 111320.0;
+        const double vlon = lon + mapPanE / (111320.0 * cos(lat * M_PI / 180.0));
+        static double qLat = 999, qLon = 999;
+        static char qName[32] = "", qSub[32] = "";
+        double b0, moved;
+        milgeo::bearingDistance(qLat, qLon, vlat, vlon, b0, moved);
+        if (qLat > 90 || moved > 150) {
+            qLat = vlat;
+            qLon = vlon;
+            double d, b;
+            if (doba_places::nearest(vlat, vlon, qName, sizeof qName, d, b)) {
+                static const char* const kDir[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+                // the spot relative to the place: from the place, towards here
+                const char* dir = kDir[(int)lround(fmod(b + 180.0, 360.0) / 45.0) % 8];
+                if (d < 800) snprintf(qSub, sizeof qSub, mapPanned() ? "map centre" : "you are here");
+                else if (d < 10000) snprintf(qSub, sizeof qSub, "%.1f km %s of it", d / 1000.0, dir);
+                else snprintf(qSub, sizeof qSub, "%.0f km %s of it", d / 1000.0, dir);
+            } else {
+                qName[0] = qSub[0] = 0;
+            }
+        }
+        snprintf(map.place, sizeof map.place, "%s", qName);
+        snprintf(map.placeSub, sizeof map.placeSub, "%s", qSub);
+    }
     if (mapPanned()) {
         map.panned = true;
         rot = 0.0f;

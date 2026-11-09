@@ -1150,7 +1150,7 @@ void renderHome(uint8_t* fb) {
 }
 
 // SECTION: header, START HERE, the guides, search in the section.
-constexpr int SEC_HEAD = 120, ROW_H = 84, START_H = 112;
+constexpr int SEC_HEAD = 120, ROW_H = 112, START_H = 124;
 const EpdRect kSecPrev = {14, H - 88, 90, 76};
 const EpdRect kSecSearch = {114, H - 88, W - 228, 76};
 const EpdRect kSecNext = {W - 104, H - 88, 90, 76};
@@ -1183,18 +1183,65 @@ void renderSection(uint8_t* fb) {
     ui::text(ui::font(ui::F_SMALL), 124, TOP + 94, sub, fb, EPD_DRAW_ALIGN_LEFT, INK);
     epd_fill_rect({14, TOP + SEC_HEAD - 8, W - 28, 3}, INK, fb);
     int y = TOP + SEC_HEAD;
-    // START HERE cards
+    // Guides as a contents page: a number, the title in the book face, a line
+    // or two on what is inside. START HERE ones first, in a frame.
+#ifdef VFONT
+    const EpdFont* tf = vf_face_cap(&Literata_700, 15.f);
+    const EpdFont* df = vf_face_cap(&Literata_450, 12.f);
+#else
+    const EpdFont* tf = ui::font(ui::F_LABEL);
+    const EpdFont* df = ui::font(ui::F_TINY);
+#endif
+    const EpdFont* nf = ui::font(ui::F_TINY);
+    auto row = [&](const Entry& e, int num, int y, int h, bool start) {
+        const int x0 = start ? 28 : 20, right = W - 22;
+        char n[16];
+        snprintf(n, sizeof n, "%d.%d", g_sec + 1, num);
+        if (start) {
+            frame({14, y, W - 28, h}, 3, fb);
+            epd_fill_rect({14, y, 140, 26}, INK, fb);
+            ui::text(nf, 26, y + 19, "START HERE", fb, EPD_DRAW_ALIGN_LEFT, PAPER);
+        } else {
+            ui::text(nf, x0, y + 20, n, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        }
+        bookTag(e.book, right, y + 20, INK, fb);
+        char t[64];
+        snprintf(t, sizeof t, "%s", e.label);
+        while (ui::textWidth(tf, t) > right - x0 - 30 && strlen(t) > 4) {
+            size_t k = strlen(t) - 4;
+            while (k > 0 && ((uint8_t)t[k] & 0xC0) == 0x80) --k;
+            memcpy(t + k, "...", 4);
+        }
+        ui::text(tf, x0, y + 52, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        // the description, up to two lines, cut at a word
+        const char* d = e.desc;
+        int ly = y + 78;
+        for (int line = 0; line < 2 && *d; ++line) {
+            char buf[96];
+            int best = 0, i = 0;
+            while (d[i] && i < (int)sizeof buf - 1) {
+                buf[i] = d[i];
+                buf[i + 1] = 0;
+                if (ui::textWidth(df, buf) > right - x0 - 30) break;
+                if (d[i] == ' ' || !d[i + 1]) best = i + 1;
+                ++i;
+            }
+            if (!best) best = i;
+            memcpy(buf, d, best);
+            buf[best] = 0;
+            ui::text(df, x0, ly, buf, fb, EPD_DRAW_ALIGN_LEFT, INK);
+            d += best;
+            while (*d == ' ') ++d;
+            ly += 24;
+        }
+        ui::text(ui::font(ui::F_KEY), right, y + h / 2 + 22, ">", fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        if (!start) epd_fill_rect({14, y + h - 2, W - 28, 1}, INK, fb);
+    };
     for (int k = 0, seen = 0; k < x.n && seen < x.starts; ++k) {
         const Entry& e = g_entries[x.first + k];
         if (!e.start) continue;
         ++seen;
-        const EpdRect r = {14, y, W - 28, START_H};
-        frame(r, 4, fb);
-        epd_fill_rect({r.x, r.y, 150, 30}, INK, fb);
-        ui::text(ui::font(ui::F_TINY), r.x + 12, r.y + 21, "START HERE", fb, EPD_DRAW_ALIGN_LEFT, PAPER);
-        bookTag(e.book, r.x + r.width - 14, r.y + 22, INK, fb);
-        ui::text(ui::font(ui::F_KEY), r.x + 16, r.y + 68, e.label, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        ui::text(ui::font(ui::F_TINY), r.x + 16, r.y + 96, e.desc, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        row(e, k + 1, y, START_H, true);
         y += START_H + 10;
     }
     if (x.starts) y += 8;
@@ -1205,11 +1252,7 @@ void renderSection(uint8_t* fb) {
         const Entry& e = g_entries[x.first + k];
         if (e.start) continue;
         if (idx >= g_secPage * per && idx < (g_secPage + 1) * per) {
-            ui::text(ui::font(ui::F_LABEL), 20, y + 36, e.label, fb, EPD_DRAW_ALIGN_LEFT, INK);
-            ui::text(ui::font(ui::F_TINY), 20, y + 64, e.desc, fb, EPD_DRAW_ALIGN_LEFT, INK);
-            bookTag(e.book, W - 22, y + 36, INK, fb);
-            ui::text(ui::font(ui::F_KEY), W - 22, y + 70, ">", fb, EPD_DRAW_ALIGN_RIGHT, INK);
-            epd_fill_rect({14, y + ROW_H - 2, W - 28, 1}, INK, fb);
+            row(e, k + 1, y, ROW_H, false);
             y += ROW_H;
         }
         ++idx;
