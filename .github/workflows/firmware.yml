@@ -41,7 +41,7 @@ jobs:
             0x0 $B/bootloader.bin 0x8000 $B/partitions.bin \
             0xe000 $FW/tools/partitions/boot_app0.bin 0x10000 $B/firmware.bin
           cp $B/firmware.bin doba-app.bin
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: doba-firmware
           path: |
