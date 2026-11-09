@@ -924,18 +924,55 @@ void cover(int bi, const EpdRect& r, uint8_t* fb, bool label = true) {
     // the monogram in the book face: it has Cyrillic, and reads as a cover
 #ifdef VFONT
     const EpdFont* mf = vf_face_cap(&Literata_700, label ? 34.f : 30.f);
+    // a wide monogram ("УКР", "SOS") shrinks to stay off the spine
+    for (float sz = label ? 32.f : 28.f; sz >= 18.f && ui::textWidth(mf, mono) > r.width - 30; sz -= 2.f)
+        mf = vf_face_cap(&Literata_700, sz);
 #else
     const EpdFont* mf = ui::font(ui::F_TITLE);
 #endif
-    const int my = label ? r.y + r.height / 2 - 2 : r.y + r.height / 2 + 15;
-    ui::text(mf, r.x + 10 + (r.width - 10) / 2, my, mono, fb, EPD_DRAW_ALIGN_CENTER, INK);
-    if (!label) return;
+    // The name under the monogram, inside the cover (right of the spine):
+    // one line if it fits, else two at a space, smaller only if it must be.
+    const int cx = r.x + 18 + (r.width - 24) / 2, room = r.width - 30;
     const char* nm = shortName(bi);
+    char l1[48], l2[48] = "";
+    snprintf(l1, sizeof l1, "%s", nm);
     const EpdFont* nf = ui::font(ui::F_SMALL);
-    if (ui::textWidth(nf, nm) > r.width - 28) nf = ui::font(ui::F_TINY);
-    ui::text(nf, r.x + 10 + (r.width - 10) / 2, r.y + r.height - 34, nm, fb, EPD_DRAW_ALIGN_CENTER, INK);
-    countText(g_books[bi].shown ? g_books[bi].shown : g_books[bi].count, cnt, sizeof cnt);
-    ui::text(ui::font(ui::F_TINY), r.x + 10 + (r.width - 10) / 2, r.y + r.height - 12, cnt, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    if (label && ui::textWidth(nf, l1) > room) {
+        // the space that leaves the longer half shortest
+        int best = -1, bestW = 1 << 30;
+        for (int i = 1; nm[i]; ++i) {
+            if (nm[i] != ' ') continue;
+            char a[48], b[48];
+            snprintf(a, sizeof a, "%.*s", i, nm);
+            snprintf(b, sizeof b, "%s", nm + i + 1);
+            const int w = std::max(ui::textWidth(nf, a), ui::textWidth(nf, b));
+            if (w < bestW) { bestW = w; best = i; }
+        }
+        if (best > 0) {
+            snprintf(l1, sizeof l1, "%.*s", best, nm);
+            snprintf(l2, sizeof l2, "%s", nm + best + 1);
+        }
+        if (ui::textWidth(nf, l1) > room || ui::textWidth(nf, l2) > room) nf = ui::font(ui::F_TINY);
+        fitText(nf, l1, room);
+        fitText(nf, l2, room);
+    }
+    const bool two = l2[0] != 0;
+    const int my = !label ? r.y + r.height / 2 + 15 : r.y + r.height / 2 - 14;   // one height for the whole shelf
+    ui::text(mf, cx, my, mono, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    if (!label) return;
+    if (two) {
+        ui::text(nf, cx, r.y + r.height - 58, l1, fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(nf, cx, r.y + r.height - 34, l2, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    } else {
+        ui::text(nf, cx, r.y + r.height - 34, l1, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    }
+    const Book& b = g_books[bi];
+    countText(b.shown ? b.shown : b.count, cnt, sizeof cnt);
+    char line[40];
+    const char* unit = !b.unit[0] ? "" : !strcmp(b.unit, "documents") ? "docs" : b.unit;
+    snprintf(line, sizeof line, "%s %s", cnt, unit);
+    fitText(ui::font(ui::F_TINY), line, room);
+    ui::text(ui::font(ui::F_TINY), cx, r.y + r.height - 12, line, fb, EPD_DRAW_ALIGN_CENTER, INK);
 }
 
 void renderShelf(uint8_t* fb) {
