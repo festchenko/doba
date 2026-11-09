@@ -1005,6 +1005,49 @@ void listRow(int y, const char* title, uint8_t* fb) {
     epd_fill_rect({14, y + LIST_ROW - 2, W - 28, 1}, INK, fb);
 }
 
+// A book of millions (Wikipedia) opens on what the topics picked from it,
+// with A-Z and a random page a tap away; nobody pages through a million titles.
+bool bigBook(int bi) { return g_books[bi].count > 20000; }
+bool g_bookAZ = false;          // the A-Z grid of a big book is up
+const EpdRect kBigAZ = {12, BODY_Y - 4, (W - 32) / 2, 70};
+const EpdRect kBigRandom = {20 + (W - 32) / 2, BODY_Y - 4, (W - 32) / 2, 70};
+constexpr int PICK_TOP = BODY_Y + 104;
+int* g_picks = nullptr;
+int g_pickCount = 0, g_pickBook = -1;
+void findPicks(int bi) {
+    if (g_pickBook == bi) return;
+    g_pickBook = bi;
+    g_pickCount = 0;
+    if (!g_picks) g_picks = (int*)heap_caps_malloc(sizeof(int) * MAX_ENTRIES, MALLOC_CAP_SPIRAM);
+    if (!g_picks || !g_entries) return;
+    for (int i = 0; i < g_entryCount; ++i) {
+        if (g_entries[i].book != bi) continue;
+        bool seen = false;
+        for (int k = 0; k < g_pickCount && !seen; ++k) seen = !strcmp(g_entries[g_picks[k]].title, g_entries[i].title);
+        if (!seen) g_picks[g_pickCount++] = i;
+    }
+}
+int pickRows() { return (kListPrev.y - 8 - PICK_TOP) / LIST_ROW; }
+void renderBigBook(int bi, uint8_t* fb) {
+    frame(kBigAZ, 3, fb);
+    ui::text(ui::font(ui::F_LABEL), kBigAZ.x + kBigAZ.width / 2, kBigAZ.y + 46, "BROWSE A-Z", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    frame(kBigRandom, 3, fb);
+    ui::text(ui::font(ui::F_LABEL), kBigRandom.x + kBigRandom.width / 2, kBigRandom.y + 46, "RANDOM PAGE", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    findPicks(bi);
+    char h[48];
+    snprintf(h, sizeof h, "PICKED FOR SURVIVAL - %d", g_pickCount);
+    ui::text(ui::font(ui::F_TINY), 16, PICK_TOP - 12, h, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (!g_pickCount) {
+        ui::text(ui::font(ui::F_SMALL), W / 2, PICK_TOP + 60, "Search above, or browse A-Z.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        return;
+    }
+    const int per = pickRows(), pages = (g_pickCount + per - 1) / per;
+    if (g_listPage >= pages) g_listPage = pages - 1;
+    for (int r = 0; r < per && g_listPage * per + r < g_pickCount; ++r)
+        listRow(PICK_TOP + r * LIST_ROW, g_entries[g_picks[g_listPage * per + r]].title, fb);
+    pagerRow(g_listPage, pages, fb);
+}
+
 void renderBook(uint8_t* fb) {
     const int bi = g_open;
     renderBookHead(bi, fb);
@@ -1023,6 +1066,7 @@ void renderBook(uint8_t* fb) {
         pagerRow(g_listPage, pages, fb);
         return;
     }
+    if (bigBook(bi) && !g_bookAZ) { renderBigBook(bi, fb); return; }
     ui::text(ui::font(ui::F_TINY), 16, BODY_Y + 26, "BROWSE A-Z", fb, EPD_DRAW_ALIGN_LEFT, INK);
     for (int i = 0; i < letterCount(bi); ++i) {
         const EpdRect r = letterRect(bi, i);
@@ -1032,53 +1076,201 @@ void renderBook(uint8_t* fb) {
     }
 }
 
-// A-Z: the index from a letter on, a page at a time (the index is sorted).
-char g_letterKey[16];
-char g_letterName[8];
-uint32_t g_letterFrom = 0, g_letterTo = 0;   // records [from, to) start with it
-void setLetter(int bi, int i) {
-    const char* L = letterAt(bi, i);
-    snprintf(g_letterName, sizeof g_letterName, "%s", L);
+// A-Z: the index is sorted, so any prefix is one run of records. A letter
+// of Wikipedia holds a million titles: a run too long to page through splits
+// into its next letters ("A" -> "Aa", "Ab"...), the way a dictionary's thumb
+// tabs do, until it is short enough to list.
+constexpr int MAX_KIDS = 36, LIST_MAX = 64, MAX_DEPTH = 12;
+struct Kid { char label[28]; uint32_t from, to; bool more; };
+struct Level { char key[KEY + 1]; char label[28]; uint32_t from, to; bool group; };
+Kid g_kids[MAX_KIDS];
+int g_kidCount = 0;
+Level g_levels[MAX_DEPTH];
+int g_depth = 0;                 // g_levels[g_depth - 1] is on screen
+uint32_t g_letterFrom = 0, g_letterTo = 0;
+
+uint32_t lowerIn(File& f, const char* key, size_t klen, uint32_t lo, uint32_t hi) {
+    uint8_t want[KEY] = {}, rec[REC];
+    memcpy(want, key, std::min(klen, (size_t)KEY));
+    while (lo < hi) {
+        const uint32_t mid = lo + (hi - lo) / 2;
+        if (!readRec(f, mid, rec)) break;
+        if (memcmp(rec, want, KEY) < 0) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+}
+int utf8Len(uint8_t c) { return c < 0x80 ? 1 : c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1; }
+// A tab's label from its (folded, lower-case) key: "ab" -> "Ab", "a " -> "A_".
+void keyLabel(const char* key, size_t len, const char* tail, char* out, size_t cap) {
+    char k[KEY + 1];
+    len = std::min(len, (size_t)KEY);
+    memcpy(k, key, len);
+    k[len] = 0;
+    const char* p = k;
+    uint32_t cp = decodeUtf8(p);
+    if (cp >= 'a' && cp <= 'z') cp -= 32;
+    else if (cp >= 0x430 && cp <= 0x44F) cp -= 0x20;
+    else if (cp >= 0x450 && cp <= 0x45F) cp -= 0x50;
+    else if (cp == 0x491) cp = 0x490;
+    char first[8];
+    first[encodeUtf8(cp, first)] = 0;
+    snprintf(out, cap, "%s%s%s", len ? first : "", p, tail);
+    for (char* c = out; *c; ++c) if (*c == ' ') *c = '_';
+}
+void findKids(int bi) {
+    g_kidCount = 0;
+    const Level& lv = g_levels[g_depth - 1];
+    if (lv.to - lv.from <= (uint32_t)LIST_MAX) return;
+    const size_t L = strlen(lv.key);
+    if (L + 4 >= (size_t)KEY) return;
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
     sdLock();
     File f = SD.open(path, FILE_READ);
-    auto lower = [&](const char* key) {
-        uint8_t want[KEY] = {}, rec[REC];
-        memcpy(want, key, strnlen(key, KEY));
-        uint32_t lo = 0, hi = g_books[bi].count;
-        while (f && lo < hi) {
-            const uint32_t mid = lo + (hi - lo) / 2;
-            if (!readRec(f, mid, rec)) break;
-            if (memcmp(rec, want, KEY) < 0) lo = mid + 1; else hi = mid;
+    uint8_t rec[REC];
+    uint32_t pos = lv.from;
+    while (f && pos < lv.to && g_kidCount < MAX_KIDS) {
+        if (!readRec(f, pos, rec)) break;
+        Kid& k = g_kids[g_kidCount];
+        if (g_kidCount == MAX_KIDS - 1) {          // the rest, together
+            k.from = pos; k.to = lv.to; k.more = true;
+            snprintf(k.label, sizeof k.label, "MORE");
+            ++g_kidCount;
+            break;
         }
-        return lo;
-    };
-    if (!strcmp(L, "0-9")) {
-        g_letterFrom = 0;
-        g_letterTo = lower("a");   // digits and signs sort before letters
-        if (cyrillicBook(bi)) g_letterTo = lower("a");
-    } else {
-        fold(L, g_letterKey, sizeof g_letterKey);
-        g_letterFrom = lower(g_letterKey);
-        // the next key after this letter: bump its last byte
-        char next[16];
-        snprintf(next, sizeof next, "%s", g_letterKey);
-        next[strlen(next) - 1]++;
-        g_letterTo = lower(next);
+        char key[KEY + 1] = {};
+        memcpy(key, lv.key, L);
+        size_t kl;
+        if (rec[L] == 0) {                      // the prefix itself
+            key[L] = 1; kl = L + 1;
+            keyLabel(lv.key, L, "", k.label, sizeof k.label);
+        } else if (!lv.group && rec[L] > ' ' && rec[L] < 'a') {   // signs and digits: one tab each kind
+            const bool digit = rec[L] >= '0' && rec[L] <= '9';
+            key[L] = digit ? ':' : rec[L] < '0' ? '0' : 'a';
+            kl = L + 1;
+            keyLabel(lv.key, L, digit ? "0-9" : "#", k.label, sizeof k.label);
+        } else {
+            const int n = utf8Len(rec[L]);
+            memcpy(key + L, rec + L, n);
+            kl = L + n;
+            keyLabel(key, kl, "", k.label, sizeof k.label);
+            key[kl - 1]++;                      // just past every key with it
+        }
+        k.from = pos;
+        k.to = lowerIn(f, key, kl, pos + 1, lv.to);
+        k.more = !lv.group && rec[L] > ' ' && rec[L] < 'a';   // a group: its records share only the prefix
+        if (!k.label[0]) snprintf(k.label, sizeof k.label, "?");
+        pos = k.to;
+        ++g_kidCount;
     }
     if (f) f.close();
     sdUnlock();
-    Serial.printf("[lib] letter %s: %lu entries\n", L, (unsigned long)(g_letterTo - g_letterFrom));
+}
+// Show the run [from, to) of records starting with `key` (folded).
+void pushLevel(int bi, const char* key, const char* label, uint32_t from, uint32_t to, bool group = false) {
+    if (g_depth >= MAX_DEPTH) g_depth = MAX_DEPTH - 1;
+    Level& lv = g_levels[g_depth++];
+    snprintf(lv.key, sizeof lv.key, "%s", key);
+    snprintf(lv.label, sizeof lv.label, "%s", label);
+    lv.from = from;
+    lv.to = to;
+    lv.group = group;
+    findKids(bi);
+    // one way on only: take it
+    while (g_kidCount == 1 && !g_kids[0].more && g_depth < MAX_DEPTH && g_kids[0].to - g_kids[0].from == to - from) {
+        char k2[KEY + 1];
+        snprintf(k2, sizeof k2, "%s", lv.key);
+        // the kid's key: the first record's key up to one more character
+        char path[96];
+        snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
+        uint8_t rec[REC] = {};
+        sdLock();
+        File f = SD.open(path, FILE_READ);
+        const bool ok = f && readRec(f, g_kids[0].from, rec);
+        if (f) f.close();
+        sdUnlock();
+        const size_t L = strlen(k2);
+        if (!ok || rec[L] == 0 || L + 4 >= (size_t)KEY) break;
+        memcpy(k2 + L, rec + L, utf8Len(rec[L]));
+        k2[L + utf8Len(rec[L])] = 0;
+        snprintf(lv.key, sizeof lv.key, "%s", k2);
+        snprintf(lv.label, sizeof lv.label, "%s", g_kids[0].label);
+        findKids(bi);
+    }
+    g_letterFrom = lv.from;
+    g_letterTo = lv.to;
+    g_listPage = 0;
+    Serial.printf("[lib] index '%s': %lu entries, %d tabs\n", lv.label, (unsigned long)(lv.to - lv.from), g_kidCount);
+}
+bool popLevel(int bi) {
+    if (g_depth <= 1) { g_depth = 0; return false; }
+    --g_depth;
+    findKids(bi);
+    g_letterFrom = g_levels[g_depth - 1].from;
+    g_letterTo = g_levels[g_depth - 1].to;
+    g_listPage = 0;
+    return true;
+}
+void setLetter(int bi, int i) {
+    const char* L = letterAt(bi, i);
+    char path[96];
+    snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
+    sdLock();
+    File f = SD.open(path, FILE_READ);
+    const uint32_t count = g_books[bi].count;
+    uint32_t from = 0, to = 0;
+    char key[16] = "";
+    if (f && !strcmp(L, "0-9")) {
+        to = lowerIn(f, "a", 1, 0, count);   // digits and signs sort before letters
+    } else if (f) {
+        fold(L, key, sizeof key);
+        from = lowerIn(f, key, strlen(key), 0, count);
+        char next[16];
+        snprintf(next, sizeof next, "%s", key);
+        next[strlen(next) - 1]++;
+        to = lowerIn(f, next, strlen(next), from, count);
+    }
+    if (f) f.close();
+    sdUnlock();
+    g_depth = 0;
+    pushLevel(bi, key, L, from, to);
+}
+const int KID_COLS = 4, KID_GAP = 8;
+EpdRect kidRect(int i) {
+    const int cw = (W - 24 - (KID_COLS - 1) * KID_GAP) / KID_COLS, ch = 66;
+    return {12 + (i % KID_COLS) * (cw + KID_GAP), BODY_Y - 22 + (i / KID_COLS) * (ch + KID_GAP), cw, ch};
 }
 void renderLetter(uint8_t* fb) {
     const int bi = g_open;
     renderBookHead(bi, fb);
-    char h[48];
-    snprintf(h, sizeof h, "%s   ·   %lu", g_letterName, (unsigned long)(g_letterTo - g_letterFrom));
-    ui::text(ui::font(ui::F_TITLE), 20, kBookSearch.y + 50, h, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    const int per = listRows() + 1;
+    const Level& lv = g_levels[g_depth > 0 ? g_depth - 1 : 0];
     const uint32_t n = g_letterTo - g_letterFrom;
+    char cnt[16], h[64];
+    countText(n, cnt, sizeof cnt);
+    snprintf(h, sizeof h, "%s", lv.label);
+    ui::text(ui::font(ui::F_TITLE), 20, kBookSearch.y + 50, h, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    snprintf(h, sizeof h, "%s title%s%s", cnt, n == 1 ? "" : "s", g_kidCount ? " - pick the next letters" : "");
+    ui::text(ui::font(ui::F_TINY), W - 16, kBookSearch.y + 48, h, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+    if (g_kidCount) {
+        for (int i = 0; i < g_kidCount; ++i) {
+            const EpdRect r = kidRect(i);
+            const Kid& k = g_kids[i];
+            frame(r, 2, fb);
+            char t[32];
+            snprintf(t, sizeof t, "%s", k.label);
+            const EpdFont* f = ui::font(ui::F_LABEL);
+            while (ui::textWidth(f, t) > r.width - 10 && strlen(t) > 1) {
+                size_t m = strlen(t) - 1;
+                while (m > 0 && ((uint8_t)t[m] & 0xC0) == 0x80) --m;
+                t[m] = 0;
+            }
+            ui::text(f, r.x + r.width / 2, r.y + 34, t, fb, EPD_DRAW_ALIGN_CENTER, INK);
+            countText(k.to - k.from, cnt, sizeof cnt);
+            ui::text(ui::font(ui::F_TINY), r.x + r.width / 2, r.y + 58, cnt, fb, EPD_DRAW_ALIGN_CENTER, INK);
+        }
+        return;
+    }
+    const int per = listRows() + 1;
     const int pages = n ? (int)((n + per - 1) / per) : 1;
     if (g_listPage >= pages) g_listPage = pages - 1;
     char path[96];
@@ -1600,7 +1792,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
             if (hit(kAllSearch, x, y)) { g_scope = -1; g_scopeBook = -1; g_searchFrom = V_SHELF; g_view = V_SEARCH; k.clear(); return false; }
             const int b = shelfHit(x, y);
             if (b == -2) { g_shelfPage = (g_shelfPage + 1) % shelfPages(); return false; }
-            if (b >= 0) { g_open = b; g_listPage = 0; g_view = V_BOOK; Serial.printf("[lib] book %s\n", g_books[b].dir); }
+            if (b >= 0) { g_open = b; g_listPage = 0; g_bookAZ = false; g_view = V_BOOK; Serial.printf("[lib] book %s\n", g_books[b].dir); }
             return false;
         }
         case V_BOOK: {
@@ -1615,11 +1807,53 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
                 if (y >= BODY_Y + 40 && r < per && i < g_docCount) return openRecord(bi, g_docs[i].rec);
                 return false;
             }
+            if (bigBook(bi) && !g_bookAZ) {
+                if (hit(kBigAZ, x, y)) { g_bookAZ = true; return false; }
+                if (hit(kBigRandom, x, y)) {
+                    const uint32_t i = (uint32_t)random((long)g_books[bi].count);
+                    Serial.printf("[lib] random %lu\n", (unsigned long)i);
+                    return openRecord(bi, i);
+                }
+                findPicks(bi);
+                const int per = pickRows(), pages = (g_pickCount + per - 1) / per;
+                if (pages > 1 && hit(kListPrev, x, y)) { if (g_listPage > 0) --g_listPage; return false; }
+                if (pages > 1 && hit(kListNext, x, y)) { if (g_listPage + 1 < pages) ++g_listPage; return false; }
+                const int r = (y - PICK_TOP) / LIST_ROW, i = g_listPage * per + r;
+                if (y >= PICK_TOP && r < per && i < g_pickCount)
+                    return openEntry(bi, g_entries[g_picks[i]].title);
+                return false;
+            }
             for (int i = 0; i < letterCount(bi); ++i)
-                if (hit(letterRect(bi, i), x, y)) { setLetter(bi, i); g_listPage = 0; g_view = V_LETTER; return false; }
+                if (hit(letterRect(bi, i), x, y)) { setLetter(bi, i); g_view = V_LETTER; return false; }
             return false;
         }
         case V_LETTER: {
+            if (g_kidCount) {
+                for (int i = 0; i < g_kidCount; ++i)
+                    if (hit(kidRect(i), x, y)) {
+                        const Kid k = g_kids[i];
+                        char key[KEY + 1];
+                        snprintf(key, sizeof key, "%s", g_levels[g_depth - 1].key);
+                        if (!k.more) {   // the tab's key: its first record, one character on
+                            char path[96];
+                            snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[g_open].dir);
+                            uint8_t rec[REC] = {};
+                            sdLock();
+                            File f = SD.open(path, FILE_READ);
+                            const bool ok = f && readRec(f, k.from, rec);
+                            if (f) f.close();
+                            sdUnlock();
+                            const size_t L = strlen(key);
+                            if (ok && rec[L] && L + 4 < (size_t)KEY) {
+                                memcpy(key + L, rec + L, utf8Len(rec[L]));
+                                key[L + utf8Len(rec[L])] = 0;
+                            }
+                        }
+                        pushLevel(g_open, key, k.label, k.from, k.to, k.more && strcmp(k.label, "MORE"));
+                        return false;
+                    }
+                return false;
+            }
             const int per = listRows() + 1;
             const uint32_t n = g_letterTo - g_letterFrom;
             const int pages = n ? (int)((n + per - 1) / per) : 1;
@@ -1684,8 +1918,12 @@ bool libraryBack() {
         case V_SHELF: return false;
         case V_HOME: return false;
         case V_SECTION: g_view = V_HOME; return true;
-        case V_BOOK: g_view = V_SHELF; return true;
-        case V_LETTER: g_view = V_BOOK; g_listPage = 0; return true;
+        case V_BOOK:
+            if (g_bookAZ) { g_bookAZ = false; g_listPage = 0; return true; }
+            g_view = V_SHELF; return true;
+        case V_LETTER:
+            if (popLevel(g_open)) return true;
+            g_view = V_BOOK; g_listPage = 0; return true;
         case V_SEARCH: g_view = g_searchFrom; return true;
     }
     return false;

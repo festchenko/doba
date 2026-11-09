@@ -396,3 +396,75 @@ def test_the_library_opens_on_its_books_and_a_book_opens_its_documents(doba, boo
     since = doba.log_seq()
     doba.tap(200, TOP + 216 + 40 + 30)                      # its first document
     doba.wait_log(r"\[lib\] open '", since=since)
+
+
+def big_book(book, out, n=60000):
+    """The test book, its index padded with made-up titles to Wikipedia's shape:
+    far too many to page through."""
+    import random
+    import struct
+    sys.path.insert(0, LIB)
+    from dobafold import fold
+    rec, hdr = struct.Struct("<56s56sHHIII"), struct.Struct("<8sIII12s")
+    shutil.copytree(book, out)
+    raw = open(os.path.join(book, "index.dti"), "rb").read()
+    h = hdr.unpack(raw[:32])
+    recs = [rec.unpack(raw[32 + i * 128:160 + i * 128]) for i in range(h[1])]
+    rows = {r[1].rstrip(b"\0").decode(): r for r in recs}
+    for t in ["A*", "A+", "A-", "A1", "A2 road", "A 1", "/a/", "Ab!"]:
+        rows.setdefault(t, recs[0][:1] + (t.encode(),) + recs[0][2:])
+    rnd = random.Random(1)
+    syl = ["ab", "al", "an", "ar", "ba", "ca", "da", "el", "ga", "ka", "ma", "na", "pa", "ra", "sa", "ta"]
+    while len(rows) < n:
+        t = "".join(rnd.choice(syl) for _ in range(rnd.randint(2, 4))).capitalize()
+        rows.setdefault(t, recs[0][:1] + (t.encode(),) + recs[0][2:])
+    out_rows = sorted((fold(t)[:55], t.encode()[:55]) + r[2:] for t, r in rows.items())
+    with open(os.path.join(out, "index.dti"), "wb") as f:
+        f.write(hdr.pack(h[0], len(out_rows), h[2], h[3], h[4]))
+        for r in out_rows:
+            f.write(rec.pack(*r))
+
+
+def test_a_big_book_opens_on_its_picks_and_a_z_splits_until_it_lists(doba, book):
+    """Wikipedia: picks first; A-Z narrows "A" -> "Ab"... until a short list."""
+    lib = os.path.join(doba.sd, "doba", "lib")
+    big_book(book, os.path.join(lib, "field"))
+    src = os.path.join(doba.sd, "t.src")
+    with open(src, "w") as f:
+        f.write("section water | WATER | water | field\n"
+                "  * Make water safe | boil, filter | field:Water purification\n"
+                "  - Knots | tie | field:Knots\n")
+    subprocess.run([sys.executable, os.path.join(LIB, "sections.py"), lib, "--src", src],
+                   check=True, capture_output=True, text=True)
+    boot(doba)
+    doba.console("screen library", 800)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(100, TOP + 76 + 80)                            # the cover
+    doba.wait_log(r"\[lib\] book field", since=since)
+    time.sleep(0.8)
+    doba.screenshot(os.path.join(doba.dir, "big.png"))
+    since = doba.log_seq()
+    doba.tap(200, TOP + 216 + 104 + 30)                     # the first pick
+    doba.wait_log(r"\[lib\] open '(Knots|Water purification)'", since=since)
+    time.sleep(0.6)
+    doba.tap(50, 30)                                        # BACK to the book
+    time.sleep(0.8)
+    doba.tap(130, TOP + 216 + 30)                           # BROWSE A-Z
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(50, TOP + 216 + 40 + 40)                       # A
+    doba.wait_log(r"\[lib\] index 'A': \d+ entries, \d+ tabs", since=since)
+    time.sleep(0.8)
+    doba.screenshot(os.path.join(doba.dir, "tabs.png"))
+    for _ in range(4):                                      # first tab until it lists
+        since = doba.log_seq()
+        doba.tap(70, TOP + 216 - 22 + 30)
+        line = doba.wait_log(r"\[lib\] index '[^']+': \d+ entries, (\d+) tabs", since=since)
+        time.sleep(0.6)
+        if " 0 tabs" in str(line):
+            break
+    doba.screenshot(os.path.join(doba.dir, "list.png"))
+    since = doba.log_seq()
+    doba.tap(200, TOP + 216 - 30 + 30)                      # the first title
+    doba.wait_log(r"\[lib\] open '", since=since)
