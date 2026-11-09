@@ -25,13 +25,14 @@ int g_state = 0;   // 0 not tried, 1 loaded, -1 none
 const char* const kNames[KINDS] = {
     "", "Hospital", "Doctor", "Pharmacy", "Water", "Food shop", "Farm", "Shelter", "Bunker",
     "Fuel", "Police", "Fire station", "Hunting & arms", "Hardware", "Outdoor shop", "Campsite",
-    "Assembly point"};
+    "Assembly point", "Underground parking"};
 const char* const kHints[KINDS] = {
     "", "Emergency care, surgery", "Clinics and GPs", "Medicines, bandages",
     "Wells, springs, taps", "Supermarkets, bakers, butchers", "Farm shops and farmyards",
     "Huts and shelters", "Bunkers and shelters underground", "Petrol and diesel", "Police stations",
     "Fire stations", "Gun and hunting shops", "Tools, timber, building", "Camping and outdoor gear",
-    "Camp sites", "Where people gather in an emergency"};
+    "Camp sites", "Where people gather in an emergency",
+    "Car parks below ground: cover overhead"};
 
 bool load() {
     if (g_state) return g_state > 0;

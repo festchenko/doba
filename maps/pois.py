@@ -28,7 +28,7 @@ KINDS = {
     1: "Hospital", 2: "Doctor", 3: "Pharmacy", 4: "Water", 5: "Food shop", 6: "Farm",
     7: "Shelter", 8: "Bunker", 9: "Fuel", 10: "Police", 11: "Fire station",
     12: "Hunting & arms", 13: "Hardware", 14: "Outdoor shop", 15: "Campsite",
-    16: "Assembly point",
+    16: "Assembly point", 17: "Underground parking",
 }
 NEED_NAME = {6}   # a farmyard without a name is just a yard
 
@@ -57,6 +57,10 @@ def kind_of(t):
         return 7
     if t.get("military") == "bunker" or t.get("building") == "bunker" or t.get("bunker_type"):
         return 8
+    # Underground car parks: concrete overhead, often deep, open to the public.
+    # The park itself and its drive-in entrances (where the way in is).
+    if a in ("parking", "parking_entrance") and t.get("parking") == "underground":
+        return 17
     if a == "fuel":
         return 9
     if a == "police":

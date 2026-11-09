@@ -152,7 +152,7 @@ void contourInterval(double lat, float mpp, bool flat, float& every, float& inde
 
 const char* poiCode(int kind) {
     static const char* const k[doba_pois::KINDS] = {
-        "", "H", "Dr", "Rx", "W", "F", "Fm", "Sh", "B", "P", "Po", "Fi", "A", "T", "O", "C", "As"};
+        "", "H", "Dr", "Rx", "W", "F", "Fm", "Sh", "B", "P", "Po", "Fi", "A", "T", "O", "C", "As", "UP"};
     return kind > 0 && kind < doba_pois::KINDS ? k[kind] : "?";
 }
 

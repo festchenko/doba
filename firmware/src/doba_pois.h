@@ -6,7 +6,7 @@
 
 namespace doba_pois {
 
-constexpr int KINDS = 17;   // 1..16; 0 is unused
+constexpr int KINDS = 18;   // 1..17; 0 is unused
 const char* kindName(int kind);   // "Hospital"
 const char* kindHint(int kind);   // what it is good for, one short line
 

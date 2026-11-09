@@ -1332,7 +1332,10 @@ void renderNearby(const RideState& s, uint8_t* fb) {
         ui::text(ui::font(ui::F_SMALL), 24, TOP + 78, "Useful places within about 40 km, offline", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
         doba_pois::nearestOfEach(lat, lon, g_each);
         g_kindCount = 0;
-        for (int k = 1; k < doba_pois::KINDS; ++k) g_kindOrder[g_kindCount++] = k;   // the fixed order: most urgent first
+        // the fixed order, most urgent first; underground parking with the shelters
+        static const uint8_t kOrder[] = {1, 2, 3, 4, 5, 6, 7, 8, 17, 9, 10, 11, 12, 13, 14, 15, 16};
+        static_assert(sizeof kOrder == doba_pois::KINDS - 1, "every kind once");
+        for (uint8_t k : kOrder) g_kindOrder[g_kindCount++] = k;
         const int pages = (g_kindCount + per - 1) / per;
         if (g_nearPage >= pages) g_nearPage = pages - 1;
         for (int r = 0; r < per && g_nearPage * per + r < g_kindCount; ++r) {
