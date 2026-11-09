@@ -286,58 +286,61 @@ void drawTarget(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     }
 }
 
+// DOBA: the strip under the map, in the calm style: the grid reference big,
+// lat/lon in grey under it, then three small facts each with its caption.
 void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     const int W = SCREEN_W, H = 960, top = ui::MAP_STRIP_TOP;
     epd_fill_rect({0, top, W, H - top}, 0xFF, fb);
-    epd_fill_rect({0, top, W, 3}, 0x00, fb);
+    epd_fill_rect({0, top, W, 1}, ui::HAIR, fb);
 
     const bool fix = s.gpsFix;
     const double lat = fix || s.everHadFix ? s.latitude : map.centerLat;
     const double lon = fix || s.everHadFix ? s.longitude : map.centerLon;
     const uint8_t ink = fix ? 0x00 : 0x77;   // stale position reads grey
-    const int x0 = 14;
+    const int x0 = 24;
 
     char m[32];
     milgeo::mgrs(lat, lon, m, sizeof m);
-    ui::text(&Mono_L, x0, top + 46, m[0] ? m : "MGRS --", fb, EPD_DRAW_ALIGN_LEFT, ink);
+    ui::text(ui::monoFont(19), x0, top + 38, m[0] ? m : "MGRS --", fb, EPD_DRAW_ALIGN_LEFT, ink);
 
     char ll[64];
     const doba_points::Point* tp = doba_points::at(doba_points::target());
     if (tp && (fix || s.everHadFix)) {
-        // DOBA: guiding to a waypoint — its azimuth and distance replace lat/lon.
+        // guiding to a waypoint: its azimuth and distance replace lat/lon
         double b, d;
         milgeo::bearingDistance(lat, lon, tp->lat, tp->lon, b, d);
         char mil[8], ds[16];
         milgeo::mils((float)b, milsSystem(), mil, sizeof mil);
         doba_points::formatDistance(d, ds, sizeof ds);
-        snprintf(ll, sizeof ll, "> %.10s  AZ %s  %s", tp->name, mil, ds);
-        epd_fill_rect({0, top + 58, W, 36}, 0x00, fb);
-        ui::text(&Mono_M, x0, top + 84, ll, fb, EPD_DRAW_ALIGN_LEFT, 0xFF);
+        snprintf(ll, sizeof ll, "\xE2\x80\xBA %.12s  \xC2\xB7  az %s  \xC2\xB7  %s", tp->name, mil, ds);
+        ui::fillRound({x0 - 8, top + 48, W - 2 * x0 + 16, 30}, 6, 0x00, fb);
+        ui::text(ui::font(ui::F_SMALL), x0, top + 70, ll, fb, EPD_DRAW_ALIGN_LEFT, 0xFF);
     } else {
-        snprintf(ll, sizeof ll, "%c%08.5f  %c%09.5f", lat >= 0 ? 'N' : 'S', fabs(lat),
-                 lon >= 0 ? 'E' : 'W', fabs(lon));
-        ui::text(&Mono_M, x0, top + 84, ll, fb, EPD_DRAW_ALIGN_LEFT, ink);
+        snprintf(ll, sizeof ll, "%.5f\xC2\xB0 %c   %.5f\xC2\xB0 %c", fabs(lat), lat >= 0 ? 'N' : 'S',
+                 fabs(lon), lon >= 0 ? 'E' : 'W');
+        ui::text(ui::font(ui::F_SMALL), x0, top + 68, ll, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     }
 
-    char az[24];
-    // Course over ground means nothing standing still: show it from walking pace.
-    if (fix && s.gpsSpeedKmh >= 2.0f) {
-        char mil[8];
-        milgeo::mils(s.courseDeg, milsSystem(), mil, sizeof mil);   // course over ground
-        snprintf(az, sizeof az, "CRS %s", mil);
-    } else {
-        snprintf(az, sizeof az, "CRS still");   // course needs movement (2 km/h+)
-    }
-    char row[64];
-    // DOBA: ground height from the DEM when the card has it, else GPS.
+    // three facts, each under its caption
+    char v1[24], v2[24], v3[24];
+    const char* c1 = "Height";
     const float alt = s.baroValid ? s.baroAltM : s.mapElevationValid ? s.mapElevationM : s.altitudeM;
     float dep;
-    if (fix && doba_dem::depth(s.latitude, s.longitude, dep))   // DOBA: on water
-        snprintf(row, sizeof row, "DPT %4dm  %s  SAT %d", (int)lroundf(dep), az, s.satellites);
-    else if (fix) snprintf(row, sizeof row, "ALT %4dm  %s  SAT %d", (int)lroundf(alt), az, s.satellites);
-    else     snprintf(row, sizeof row, "NO FIX  SAT %d", s.satellites);
-    ui::text(&Mono_M, x0, top + 122, row, fb, EPD_DRAW_ALIGN_LEFT, 0x00);
-    (void)map;
+    if (fix && doba_dem::depth(s.latitude, s.longitude, dep)) { c1 = "Depth"; snprintf(v1, sizeof v1, "%d m", (int)lroundf(dep)); }
+    else if (fix) snprintf(v1, sizeof v1, "%d m", (int)lroundf(alt));
+    else snprintf(v1, sizeof v1, "--");
+    // course over ground means nothing standing still: shown from walking pace
+    if (fix && s.gpsSpeedKmh >= 2.0f) milgeo::mils(s.courseDeg, milsSystem(), v2, sizeof v2);
+    else snprintf(v2, sizeof v2, fix ? "standing" : "--");
+    if (fix) snprintf(v3, sizeof v3, "%d", s.satellites);
+    else snprintf(v3, sizeof v3, "no fix \xC2\xB7 %d", s.satellites);
+    const char* caps[3] = {c1, "Course", "Satellites"};
+    const char* vals[3] = {v1, v2, v3};
+    const int cols[3] = {x0, x0 + 170, x0 + 330};
+    for (int i = 0; i < 3; ++i) {
+        ui::text(ui::font(ui::F_TINY), cols[i], top + 104, caps[i], fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        ui::text(ui::font(ui::F_LABEL), cols[i], top + 134, vals[i], fb, EPD_DRAW_ALIGN_LEFT, i == 2 && !fix ? 0x77 : 0x00);
+    }
 }
 
 }  // namespace milspec

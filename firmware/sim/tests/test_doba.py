@@ -311,10 +311,10 @@ def test_a_picture_in_a_zim_article_reaches_the_screen_from_its_pack(doba, book)
     doba.wait_log(r"\[lib\] picture [0-9a-f]{10} 480x320", since=since)
 
 
-def test_stealth_from_the_home_bar_goes_silent_and_needs_two_taps_to_end(doba):
+def test_stealth_from_the_home_bar_goes_silent_and_needs_a_5s_hold_to_end(doba):
     """One tap on HOME's stealth bar: no transmit, no BT advertising, no light.
-    SILENT also puts the LoRa radio to sleep; ending stealth takes two taps
-    and brings the radio back as it was."""
+    SILENT also puts the LoRa radio to sleep; ending stealth takes a finger held
+    5 s and brings the radio back as it was."""
     boot(doba)
     since = doba.log_seq()
     doba.console("stealth", 800)
@@ -329,11 +329,11 @@ def test_stealth_from_the_home_bar_goes_silent_and_needs_two_taps_to_end(doba):
     since = doba.log_seq()
     doba.console("screen home", 800)
     time.sleep(0.6)
-    doba.tap(270, 960 - 10 - 41)                          # one tap only asks
+    doba.tap(270, 960 - 10 - 41)                          # a tap only says to hold
     time.sleep(1.0)
     doba.console("stealth", 800)
     doba.wait_log(r"\[stealth\] state silent", since=since)
-    doba.tap(270, 960 - 10 - 41)                          # the second ends it
+    doba.tap(270, 960 - 10 - 41, ms=5300)                 # held 5 s: that ends it
     doba.wait_log(r"\[stealth\] off", since=since)
     time.sleep(1.0)                                       # the mesh task applies it
     since = doba.log_seq()
@@ -523,3 +523,16 @@ def test_recent_lists_what_was_read_and_opens_it_again(doba, book):
     since = doba.log_seq()
     doba.tap(200, TOP + 196 + 40)                           # the first row
     doba.wait_log(r"\[lib\] open 'Knots'", since=since)
+
+
+def test_sos_is_sent_only_by_a_5s_hold(doba):
+    """A tap on the SOS button only says how; a finger held 5 s sends it."""
+    boot(doba)
+    doba.console("screen sos", 800)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(270, 470)                                    # a tap: nothing goes out
+    with pytest.raises(Exception):
+        doba.wait_log(r"\[sos\] sent", since=since, timeout=1.5)
+    doba.tap(270, 470, ms=5300)                           # held: sent
+    doba.wait_log(r"\[sos\] sent #1", since=since, timeout=8)

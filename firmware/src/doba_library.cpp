@@ -1900,17 +1900,17 @@ void footer(const char* left, const char* mid, const char* midSub, const char* r
         }
     };
     char l[16], r[16];
-    auto word = [](const char* w, char* out) {   // "PREV" -> "Prev"
+    auto titled = [](const char* w, char* out) {   // "PREV" -> "Prev"
         snprintf(out, 16, "%s", w);
         for (char* c = out + 1; *c; ++c) if (*c >= 'A' && *c <= 'Z') *c += 32;
     };
     if (left) {
-        word(left, l);
+        titled(left, l);
         chev(32, fy + 38, -1);
         ui::text(k, 46, fy + 46, l, fb, EPD_DRAW_ALIGN_LEFT, INK);
     }
     if (right) {
-        word(right, r);
+        titled(right, r);
         const bool close = !strcmp(right, "CLOSE");
         if (!close) chev(W - 32, fy + 38, 1);
         ui::text(k, close ? W - 28 : W - 46, fy + 46, r, fb, EPD_DRAW_ALIGN_RIGHT, INK);

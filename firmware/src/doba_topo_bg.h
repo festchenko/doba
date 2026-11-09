@@ -16,9 +16,12 @@ namespace topo_bg {
 constexpr uint8_t kLine  = 0xBB;
 constexpr uint8_t kIndex = 0xAA;   // index contours: same tone, 2 px wide
 constexpr int     kHalo  = 3;      // px kept clear round drawn content
+constexpr uint8_t kLineDark = 0x44;   // the same lines on black (the SOS tile)
 
 // Contour the area `r` of the screen. `variant` picks another landscape
 // (screens get different ones so they don't look stamped).
 void draw(const EpdRect& r, uint8_t* fb, int variant = 0);
+// The same on a black area: dark grey lines, kept clear of white content.
+void drawInverted(const EpdRect& r, uint8_t* fb, int variant = 0);
 
 }  // namespace topo_bg

@@ -112,6 +112,7 @@ bool build(int variant) {
 }
 
 // Nothing but white within kHalo px (a square; cheap and looks the same).
+bool g_inverted = false;   // drawing on black: the paper is black, the content white
 bool clear(int x, int y, const uint8_t* fb, const EpdRect& r) {
     for (int dy = -kHalo; dy <= kHalo; ++dy) {
         const int yy = y + dy;
@@ -119,7 +120,8 @@ bool clear(int x, int y, const uint8_t* fb, const EpdRect& r) {
         for (int dx = -kHalo; dx <= kHalo; ++dx) {
             const int xx = x + dx;
             if (xx < r.x || xx >= r.x + r.width) continue;
-            if (doba_get_pixel(xx, yy, fb) < 0xF0) return false;
+            const uint8_t p = doba_get_pixel(xx, yy, fb);
+            if (g_inverted ? p > 0x0F : p < 0xF0) return false;
         }
     }
     return true;
@@ -151,9 +153,15 @@ void draw(const EpdRect& r0, uint8_t* fb, int variant) {
     for (int k = 0; k < n; ++k)
         if (put[k >> 3] >> (k & 7) & 1) {
             const int x = r.x + k % r.width, y = r.y + k / r.width;
-            epd_draw_pixel(x, y, getBit(g_index, x, y) ? kIndex : kLine, fb);
+            epd_draw_pixel(x, y, g_inverted ? kLineDark : getBit(g_index, x, y) ? kIndex : kLine, fb);
         }
     free(put);
+}
+
+void drawInverted(const EpdRect& r, uint8_t* fb, int variant) {
+    g_inverted = true;
+    draw(r, fb, variant);
+    g_inverted = false;
 }
 
 }  // namespace topo_bg

@@ -49,6 +49,8 @@ const char* title(Page p);
 
 void render(Page p, const RideState& s, uint8_t* fb);
 Go tap(Page p, int x, int y, const RideState& s);
+// How long the finger was down for the tap about to be handled (ms).
+void setPressMs(uint32_t ms);
 Go back(Page p);
 
 }  // namespace doba_ui

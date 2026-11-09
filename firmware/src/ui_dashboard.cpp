@@ -3988,6 +3988,7 @@ void task(void*) {
                     if (millis() - lastTapMs > 350) {
                         lastTapMs = millis();
                         noteActivity();
+                        doba_ui::setPressMs(millis() - touchDownAt);
                         if (powerOverlay) handlePowerTap(lastX, lastY);
                         else if (millis() - touchDownAt >= 800 && mapLongPress(lastX, lastY)) {}   // DOBA
                         else handleTap(lastX, lastY);

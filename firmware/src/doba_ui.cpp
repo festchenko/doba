@@ -104,7 +104,9 @@ constexpr int STEALTH_H = 72;
 constexpr int TILE_TOP = TOP + 6;
 constexpr int TILE_H = (H - 24 - STEALTH_H - TILE_GAP - TILE_TOP - 3 * TILE_GAP) / 4;
 const EpdRect kStealthBar = {MARGIN, H - 24 - STEALTH_H, W - 2 * MARGIN, STEALTH_H};
-uint32_t g_stealthOffAsk = 0;   // first tap on a lit stealth bar: ask again
+uint32_t g_stealthOffAsk = 0;   // a short tap on a lit stealth bar: say to hold
+uint32_t g_pressMs = 0;         // how long the finger was down for this tap
+constexpr uint32_t kHoldMs = 4500;   // "hold 5 s": going loud again, and sending SOS (touch is read a beat late)
 
 EpdRect tileRect(int col, int row) {
     return {MARGIN + col * (TILE_W + TILE_GAP), TILE_TOP + row * (TILE_H + TILE_GAP), TILE_W, TILE_H};
@@ -185,6 +187,7 @@ void renderHome(const RideState& s, uint8_t* fb) {
     // the contour lines inside the light tiles only: one map, seen through them
     for (const Tile& t : kTiles)
         if (t.go != TO_SOS) topo_bg::draw({t.r.x + 3, t.r.y + 3, t.r.width - 6, t.r.height - 6}, fb, 0);
+        else if (!sosActive()) topo_bg::drawInverted({t.r.x + 6, t.r.y + 6, t.r.width - 12, t.r.height - 12}, fb, 0);
     renderStealthBar(fb);
 }
 
@@ -197,20 +200,28 @@ void renderStealthBar(uint8_t* fb) {
     if (on) ui::fillRound(r, 8, INK, fb); else ui::frameRound(r, 8, 2, fb);
     const uint8_t fg = on ? PAPER : INK;
     ui::text(ui::font(ui::F_KEY), r.x + 20, r.y + 34, on ? "Stealth on" : "Stealth", fb, EPD_DRAW_ALIGN_LEFT, fg);
-    const char* sub = asking ? "Tap again to go loud" :
-                      on ? (stealth::listen() ? "Silent, still listening" : "Radio, Bluetooth and light off")
+    const char* sub = asking ? "Hold for 5 seconds to go loud" :
+                      on ? (stealth::listen() ? "Silent, still listening \xC2\xB7 hold 5 s to end" : "Radio and light off \xC2\xB7 hold 5 s to end")
                          : "Radio and light off, screen dim";
     ui::text(ui::font(ui::F_SMALL), r.x + 20, r.y + r.height - 14, sub, fb, EPD_DRAW_ALIGN_LEFT, on ? PAPER : ui::GREY);
     // the switch, its knob where the state is
-    const EpdRect sw = {r.x + r.width - 82, r.y + r.height / 2 - 17, 60, 34};
-    ui::frameRound(sw, 17, 2, fb, fg, on ? INK : PAPER);
-    epd_fill_circle(on ? sw.x + sw.width - 17 : sw.x + 17, sw.y + 17, 11, fg, fb);
+    // a switch: off = outlined track, dark knob left; on = filled track, white knob right
+    const EpdRect sw = {r.x + r.width - 88, r.y + r.height / 2 - 18, 64, 36};
+    if (on) {
+        ui::frameRound(sw, 18, 2, fb, PAPER, INK);   // white rim on the black bar
+        epd_fill_circle(sw.x + sw.width - 18, sw.y + 18, 12, PAPER, fb);
+    } else {
+        ui::frameRound(sw, 18, 2, fb, INK, PAPER);
+        epd_fill_circle(sw.x + 18, sw.y + 18, 12, INK, fb);
+    }
 }
 
 Go tapHome(int x, int y) {
     if (hit(kStealthBar, x, y)) {
+        // On with a tap; off only with a finger held 5 s, so a brush of the
+        // screen (or a pocket) cannot give you away.
         if (!stealth::active()) { stealth::set(true); g_stealthOffAsk = 0; }
-        else if (g_stealthOffAsk && millis() - g_stealthOffAsk < 5000) { stealth::set(false); g_stealthOffAsk = 0; }
+        else if (g_pressMs >= kHoldMs) { stealth::set(false); g_stealthOffAsk = 0; }
         else g_stealthOffAsk = millis();
         return STAY;
     }
@@ -549,11 +560,12 @@ constexpr int BAR_Y = H - 80, BAR_H = 56;
 const EpdRect kRadioOn = {24, TOP + 260, W - 48, 64};
 const EpdRect kPrev = {W - 24 - 56 - 12 - 56, H - 78, 56, 52};
 const EpdRect kNext = {W - 24 - 56, H - 78, 56, 52};
-const EpdRect kQuick = {130, BAR_Y, 120, BAR_H};
-const EpdRect kWrite = {258, BAR_Y, 150, BAR_H};
-const EpdRect kOlder = {12, BAR_Y, 110, BAR_H};
-const EpdRect kNewer = {416, BAR_Y, 112, BAR_H};
-const EpdRect kOnMap = {W - 132, TOP + 8, 120, 56};
+// a chat's bar: older ^, Quick, Write (the one black), newer v
+const EpdRect kOlder = {24, BAR_Y, 56, BAR_H};
+const EpdRect kQuick = {92, BAR_Y, 170, BAR_H};
+const EpdRect kWrite = {274, BAR_Y, 174, BAR_H};
+const EpdRect kNewer = {W - 24 - 56, BAR_Y, 56, BAR_H};
+const EpdRect kOnMap = {W - 24 - 124, TOP + 14, 124, 48};
 // In a chat: ^ older, QUICK, WRITE, v newer.
 
 bool isDm(const mesh_service::Message& m) {
@@ -789,16 +801,17 @@ void renderChat(uint8_t* fb) {
         snprintf(sub, sizeof sub, g_chatCh == 0 ? "everyone in range can read this" : "only those with the key");
     }
     // A person with a known position: ON MAP marks them and points the way.
-    if (onMap) button(kOnMap, "ON MAP", false, fb);
-    fit(body, t, onMap ? kOnMap.x - 24 : W - 28);
-    fit(tiny, sub, onMap ? kOnMap.x - 24 : W - 28);
-    ui::text(body, 14, TOP + 34, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    ui::text(tiny, 14, TOP + 58, sub, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    epd_fill_rect({0, TOP + 70, W, 2}, INK, fb);
+    if (onMap) button(kOnMap, "On map", false, fb);
+    fit(ui::font(ui::F_TITLE), t, onMap ? kOnMap.x - 40 : W - 48);
+    fit(small, sub, onMap ? kOnMap.x - 40 : W - 48);
+    ui::text(ui::font(ui::F_TITLE), 24, TOP + 38, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (sub[0] >= 'a' && sub[0] <= 'z') sub[0] -= 32;
+    ui::text(small, 24, TOP + 68, sub, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    epd_fill_rect({24, TOP + 84, W - 48, 1}, ui::HAIR, fb);
 
     // Bubbles, newest at the bottom: theirs on the left in a frame with the
     // sender's name, yours on the right, filled, with the delivery state.
-    const int areaTop = TOP + 78, areaBottom = BAR_Y - 8;
+    const int areaTop = TOP + 94, areaBottom = BAR_Y - 14;
     const int total = mesh_service::messageCount();
     int mine = 0;
     for (int i = 0; i < total; ++i) { mesh_service::Message m; if (mesh_service::messageAt(i, m) && inChat(m, g_chatCh, g_chatDm)) ++mine; }
@@ -829,10 +842,10 @@ void renderChat(uint8_t* fb) {
         const int bh = 30 + nl * lineH + 8;
         if (y - bh - 10 < areaTop) break;
         y -= bh + 10;
-        const int x = m.outgoing ? W - 14 - bw : 14;
+        const int x = m.outgoing ? W - 24 - bw : 24;
         const uint8_t fg = m.outgoing ? PAPER : INK;
-        if (m.outgoing) epd_fill_rect({x, y, bw, bh}, INK, fb); else frame({x, y, bw, bh}, 2, fb);
-        ui::text(tiny, x + 14, y + 22, meta, fb, EPD_DRAW_ALIGN_LEFT, fg);
+        if (m.outgoing) ui::fillRound({x, y, bw, bh}, 12, INK, fb); else ui::fillRound({x, y, bw, bh}, 12, 0xE6, fb);
+        ui::text(tiny, x + 14, y + 22, meta, fb, EPD_DRAW_ALIGN_LEFT, m.outgoing ? 0xC0 : ui::GREY);
         // delivery ticks, drawn: one on the air, two acknowledged
         for (int k = 0; k < ticks; ++k) {
             const int tx = x + 14 + ui::textWidth(tiny, meta) + 10 + k * 12, ty = y + 16;
@@ -846,15 +859,15 @@ void renderChat(uint8_t* fb) {
         ++shown;
     }
     if (mine == 0) {
-        ui::text(small, W / 2, 400, "no messages yet", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(tiny, W / 2, 436, "QUICK sends a ready phrase, WRITE types one", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_LABEL), W / 2, 420, "No messages yet", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(small, W / 2, 456, "Quick sends a ready phrase, Write types one", fb, EPD_DRAW_ALIGN_CENTER, ui::GREY);
     }
     seenMs(g_chatCh, g_chatDm) = millis();
     mesh_service::markAllRead();
-    button(kOlder, "OLDER", false, fb);
-    button(kQuick, "QUICK", false, fb);
-    button(kWrite, "WRITE", true, fb);
-    button(kNewer, "NEWER", false, fb);
+    chevButton(kOlder, true, true, -1, fb);
+    button(kQuick, "Quick", false, fb);
+    button(kWrite, "Write", true, fb);
+    chevButton(kNewer, g_chatScroll > 0, true, 1, fb);
     (void)shown;
 }
 
@@ -864,23 +877,28 @@ const char* const kQuickText[] = {
     "Stay there", "Coming back", "Low battery",
 };
 constexpr int N_QUICK = sizeof(kQuickText) / sizeof(kQuickText[0]);
-constexpr int Q_TOP = TOP + 90, Q_H = 76, Q_GAP = 10;
+constexpr int Q_TOP = TOP + 124, Q_H = 68, Q_GAP = 12;
 EpdRect quickRect(int i) {
-    const int cw = (W - 24 - Q_GAP) / 2;
-    return {12 + (i % 2) * (cw + Q_GAP), Q_TOP + (i / 2) * (Q_H + Q_GAP), cw, Q_H};
+    const int cw = (W - 48 - Q_GAP) / 2;
+    return {24 + (i % 2) * (cw + Q_GAP), Q_TOP + (i / 2) * (Q_H + Q_GAP), cw, Q_H};
 }
-const EpdRect kSendPos = {12, Q_TOP + (N_QUICK / 2) * (Q_H + Q_GAP), W - 24, Q_H};
+const EpdRect kSendPos = {24, Q_TOP + (N_QUICK / 2) * (Q_H + Q_GAP) + 10, W - 48, Q_H};
 
 void renderQuick(uint8_t* fb) {
     char t[48], h[80];
     chatTitle(g_chatCh, g_chatDm, t, sizeof t);
-    snprintf(h, sizeof h, "SEND TO %s", t);
-    fit(ui::font(ui::F_LABEL), h, W - 28);
-    ui::text(ui::font(ui::F_LABEL), 14, TOP + 40, h, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    epd_fill_rect({0, TOP + 60, W, 2}, INK, fb);
-    for (int i = 0; i < N_QUICK; ++i) button(quickRect(i), kQuickText[i], false, fb);
-    button(kSendPos, g_myPos ? "MY POSITION (MGRS)" : "MY POSITION: no fix", true, fb);
-    ui::text(ui::font(ui::F_TINY), W / 2, H - 30, "one tap sends · BACK to the chat", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    ui::text(ui::font(ui::F_SMALL), 24, TOP + 36, "Send a ready phrase", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    snprintf(h, sizeof h, "To %s", t);
+    fit(ui::font(ui::F_H1), h, W - 48);
+    ui::text(ui::font(ui::F_H1), 24, TOP + 84, h, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    // the phrases as soft grey keys: one tap sends
+    for (int i = 0; i < N_QUICK; ++i) {
+        const EpdRect r = quickRect(i);
+        ui::fillRound(r, 10, 0xE6, fb);
+        ui::text(ui::font(ui::F_LABEL), r.x + r.width / 2, r.y + r.height / 2 + 9, kQuickText[i], fb, EPD_DRAW_ALIGN_CENTER, INK);
+    }
+    button(kSendPos, g_myPos ? "Send my position (MGRS)" : "My position: no fix yet", true, fb);
+    ui::text(ui::font(ui::F_SMALL), 24, H - 34, "One tap sends it. Back returns to the chat.", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
 
 void sendToChat(const char* text) {
@@ -902,7 +920,7 @@ void renderComms(const RideState& s, uint8_t* fb) {
             ui::text(small, 24, TOP + 78, "Stealth: nothing in, nothing out", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
             ui::text(small, 24, TOP + 150, stealth::listen() ? "To listen, turn the radio on in Settings."
                                                              : "Stealth: listen (in Settings) receives.", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
-            ui::text(small, 24, TOP + 182, "End stealth on Home, with two taps.", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
+            ui::text(small, 24, TOP + 182, "End stealth on Home: hold the switch 5 s.", fb, EPD_DRAW_ALIGN_LEFT, 0x30);
             return;
         }
         ui::text(small, 24, TOP + 78, "The radio is off", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
@@ -1483,8 +1501,8 @@ void sosSend(const RideState& s) {
 }
 
 void sosSubtitle(char* out, size_t n) {
-    if (g_sosOn) snprintf(out, n, "ACTIVE · sent %d", g_sosSent);
-    else snprintf(out, n, "distress call");
+    if (g_sosOn) snprintf(out, n, "Active \xC2\xB7 sent %d", g_sosSent);
+    else snprintf(out, n, "Hold 5 s to send");
 }
 
 void renderSos(const RideState& s, uint8_t* fb) {
@@ -1498,7 +1516,7 @@ void renderSos(const RideState& s, uint8_t* fb) {
         const bool armed = g_sosArmed && millis() - g_sosArmedAt < 6000;
         ui::fillRound(kSosBtn, 10, INK, fb);
         ui::text(ui::font(ui::F_BIG), W / 2, kSosBtn.y + 120, "SOS", fb, EPD_DRAW_ALIGN_CENTER, PAPER);
-        ui::text(ui::font(ui::F_SMALL), W / 2, kSosBtn.y + 180, armed ? "Tap again to send" : "Tap, then tap again", fb,
+        ui::text(ui::font(ui::F_SMALL), W / 2, kSosBtn.y + 180, armed ? "Hold it for 5 seconds to send" : "Hold for 5 seconds to send", fb,
                  EPD_DRAW_ALIGN_CENTER, PAPER);
         ui::text(ui::font(ui::F_TINY), W / 2, kSosBtn.y + kSosBtn.height + 50,
                  stealth::active() ? "STEALTH IS ON: sending ends it and reveals you" :
@@ -1524,13 +1542,14 @@ void renderSos(const RideState& s, uint8_t* fb) {
 Go tapSos(int x, int y, const RideState& s) {
     if (!g_sosOn) {
         if (!hit(kSosBtn, x, y)) { g_sosArmed = false; return STAY; }
-        if (g_sosArmed && millis() - g_sosArmedAt < 6000) {
+        // Sent only with a finger held 5 s: never by a brush or a pocket.
+        if (g_pressMs >= kHoldMs) {
             g_sosArmed = false;
             g_sosOn = true;
             g_sosSent = 0;
             sosSend(s);
         } else {
-            g_sosArmed = true;
+            g_sosArmed = true;   // a short tap: say how
             g_sosArmedAt = millis();
         }
         return STAY;
@@ -1755,6 +1774,8 @@ const char* title(Page p) {
     }
     return nullptr;
 }
+
+void setPressMs(uint32_t ms) { g_pressMs = ms; }
 
 Go tap(Page p, int x, int y, const RideState& s) {
     switch (p) {

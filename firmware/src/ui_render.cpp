@@ -4065,15 +4065,20 @@ void ui_render_grey_test(uint8_t* fb) {
 
 
 void ui::fillRound(const EpdRect& r, int rad, uint8_t color, uint8_t* fb) {
+    if (r.width <= 0 || r.height <= 0) return;
     rad = std::max(0, std::min(rad, std::min(r.width, r.height) / 2));
     if (!rad) { epd_fill_rect(r, color, fb); return; }
-    epd_fill_rect({r.x + rad, r.y, r.width - 2 * rad, r.height}, color, fb);
-    epd_fill_rect({r.x, r.y + rad, rad, r.height - 2 * rad}, color, fb);
-    epd_fill_rect({r.x + r.width - rad, r.y + rad, rad, r.height - 2 * rad}, color, fb);
-    epd_fill_circle(r.x + rad, r.y + rad, rad, color, fb);
-    epd_fill_circle(r.x + r.width - rad - 1, r.y + rad, rad, color, fb);
-    epd_fill_circle(r.x + rad, r.y + r.height - rad - 1, rad, color, fb);
-    epd_fill_circle(r.x + r.width - rad - 1, r.y + r.height - rad - 1, rad, color, fb);
+    // Row by row: the inset of each row from the corner circle, measured at
+    // the pixel's centre, so a pill reads as one smooth curve.
+    for (int i = 0; i < r.height; ++i) {
+        const int d = std::min(i, r.height - 1 - i);   // rows from the nearer edge
+        int inset = 0;
+        if (d < rad) {
+            const float dy = rad - d - 0.5f;
+            inset = (int)lroundf(rad - sqrtf(std::max(0.f, (float)rad * rad - dy * dy)));
+        }
+        epd_fill_rect({r.x + inset, r.y + i, r.width - 2 * inset, 1}, color, fb);
+    }
 }
 void ui::frameRound(const EpdRect& r, int rad, int t, uint8_t* fb, uint8_t color, uint8_t inside) {
     fillRound(r, rad, color, fb);
