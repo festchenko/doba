@@ -644,12 +644,17 @@ void drawScaleBar(float metersPerPixel, bool miles, uint8_t* fb) {
         int meters = targets[0];
         for (int t : targets) if (t / metersPerPixel <= 160) meters = t;
         barM = meters;
-        if (meters >= 1000) snprintf(buf, sizeof(buf), "%d KM", meters / 1000);
-        else snprintf(buf, sizeof(buf), "%d M", meters);
+        if (meters >= 1000) snprintf(buf, sizeof(buf), "%d km", meters / 1000);
+        else snprintf(buf, sizeof(buf), "%d m", meters);
     }
     int px = (int)(barM / metersPerPixel);
+    // DOBA: on a white chip, so the map under it cannot eat it
+    const int tw = ui::textWidth(ui::font(ui::F_SMALL), buf);
+    ui::fillRound({x - 8, y - 34, std::max(px, tw) + 16, 46}, 6, 0xFF, fb);
     epd_fill_rect({x, y, px, 4}, 0x00, fb);
-    ui::text(&Arial_B, x, y - 10, buf, fb);
+    epd_fill_rect({x, y - 6, 2, 10}, 0x00, fb);
+    epd_fill_rect({x + px - 2, y - 6, 2, 10}, 0x00, fb);
+    ui::text(ui::font(ui::F_SMALL), x, y - 10, buf, fb, EPD_DRAW_ALIGN_LEFT, 0x00);
 }
 
 void drawCompass(int cx, int cy, float northDeg, bool trackUp, uint8_t* fb) {
@@ -690,12 +695,10 @@ void ui_map_draw_zoom_button(bool zoomIn, bool pressed, uint8_t* fb) {
                  kMapZoom.size, kMapZoom.size};
     const uint8_t face = pressed ? 0x00 : 0xFF;   // pressed = filled ink
     const uint8_t mark = pressed ? 0xFF : 0x00;
-    epd_fill_rect(r, face, fb);
-    epd_draw_rect(r, 0x00, fb);
-    epd_draw_rect({r.x + 1, r.y + 1, r.width - 2, r.height - 2}, 0x00, fb);
+    ui::frameRound(r, 10, 2, fb, 0x00, face);   // DOBA: rounded, like every button
     int cx = r.x + r.width / 2, cy = r.y + r.height / 2;
-    epd_fill_rect({cx - 14, cy - 2, 28, 5}, mark, fb);
-    if (zoomIn) epd_fill_rect({cx - 2, cy - 14, 5, 28}, mark, fb);
+    epd_fill_rect({cx - 13, cy - 2, 26, 4}, mark, fb);
+    if (zoomIn) epd_fill_rect({cx - 2, cy - 13, 4, 26}, mark, fb);
 }
 
 // MAP LAYERS button: same box as the zoom buttons, stacked above them, with a
@@ -1012,36 +1015,40 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
 
     // Status bar drawn after the map (epdiy has no clipping)
     epd_fill_rect({0, 0, W, ui::STATUS_H - 3}, 0xFF, fb);
-    ui::statusBarBack(s, fb, "MAP");   // DOBA: BACK to home like every page
+    ui::statusBarBack(s, fb, "Map");   // DOBA: BACK to home like every page
 
     // DOBA: a sheet-style header over the topo map: the place, how far from
     // it, and the scale as on a paper map (1:N at this screen's pixel pitch).
     if (map.topo) {
         const int y0 = ui::STATUS_H, hb = 52;
         epd_fill_rect({0, y0, W, hb}, ui::PAPER, fb);
-        epd_fill_rect({0, y0 + hb - 2, W, 2}, ui::INK, fb);
+        epd_fill_rect({0, y0 + hb - 1, W, 1}, ui::HAIR, fb);
         char scale[24];
         const long ratio = lroundf(map.metersPerPixel / 0.000108f / 500.0f) * 500;   // 235 dpi panel
         if (ratio >= 1000) snprintf(scale, sizeof scale, "1:%ld %03ld", ratio / 1000, ratio % 1000);
         else snprintf(scale, sizeof scale, "1:%ld", ratio);
-        ui::text(ui::font(ui::F_SMALL), W - 12, y0 + 34, scale, fb, EPD_DRAW_ALIGN_RIGHT, ui::INK);
+        ui::text(ui::font(ui::F_SMALL), W - 24, y0 + 22, scale, fb, EPD_DRAW_ALIGN_RIGHT, ui::INK);
+        ui::text(ui::font(ui::F_TINY), W - 24, y0 + 44, map.metersPerPixel < 20.0f ? "grid 1 km" : map.metersPerPixel < 200.0f ? "grid 10 km" : "grid 100 km",
+                 fb, EPD_DRAW_ALIGN_RIGHT, ui::GREY);
         const int room = W - 24 - ui::textWidth(ui::font(ui::F_SMALL), scale) - 16;
         if (map.place[0]) {
             char up[40];
-            size_t k = 0;
-            for (const char* p = map.place; *p && k < sizeof up - 1; ++p)
-                up[k++] = (*p >= 'a' && *p <= 'z') ? *p - 32 : *p;
-            up[k] = 0;
+            snprintf(up, sizeof up, "%s", map.place);
             const EpdFont* pf = ui::font(ui::F_LABEL);
             if (ui::textWidth(pf, up) > room - 10) pf = ui::font(ui::F_SMALL);
-            ui::text(pf, 12, y0 + 30, up, fb, EPD_DRAW_ALIGN_LEFT, ui::INK);
-            if (map.placeSub[0])
-                ui::text(ui::font(ui::F_TINY), 12, y0 + 47, map.placeSub, fb, EPD_DRAW_ALIGN_LEFT, ui::INK);
+            ui::text(pf, 24, y0 + 24, up, fb, EPD_DRAW_ALIGN_LEFT, ui::INK);
+            if (map.placeSub[0]) {
+                char sub[40];
+                snprintf(sub, sizeof sub, "%s", map.placeSub);
+                if (sub[0] >= 'a' && sub[0] <= 'z') sub[0] -= 32;
+                ui::text(ui::font(ui::F_TINY), 24, y0 + 44, sub, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+            }
         } else {
-            ui::text(ui::font(ui::F_SMALL), 12, y0 + 34, "TOPO MAP", fb, EPD_DRAW_ALIGN_LEFT, ui::INK);
+            ui::text(ui::font(ui::F_SMALL), 24, y0 + 34, "Topo map", fb, EPD_DRAW_ALIGN_LEFT, ui::INK);
         }
     }
 
+    if (map.topo && map.panned) milspec::drawCross(fb);
     // DOBA: on the topo map the footer is the position readout instead.
     if (map.topo) {
         milspec::drawStrip(map, s, fb);

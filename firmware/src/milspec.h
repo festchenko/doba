@@ -13,6 +13,11 @@ struct RideState;
 
 namespace milspec {
 
+// DOBA: where the cross sits on a dragged map (the view's middle, ui_dashboard).
+constexpr int kCrossY = 430;
+// A cross at the view's middle while the map is dragged off your position.
+void drawCross(uint8_t* fb);
+
 // Grid lines and their edge labels, over the base layer, under the chrome.
 void drawGrid(const MapScreenData& map, uint8_t* fb);
 

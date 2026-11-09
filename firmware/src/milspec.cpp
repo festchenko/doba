@@ -59,12 +59,12 @@ View viewFor(const MapScreenData& map) {
 }
 
 void labelBox(int cx, int cy, const char* s, uint8_t* fb) {
-    const int w = ui::textWidth(&Mono_S, s) + 8;
-    const int h = Mono_S.ascender + 6;
+    const EpdFont* f = ui::monoFont(12);
+    const int w = ui::textWidth(f, s) + 12;
+    const int h = 24;
     const EpdRect r = {cx - w / 2, cy - h / 2, w, h};
-    epd_fill_rect(r, 0xFF, fb);
-    epd_draw_rect(r, 0x00, fb);
-    ui::text(&Mono_S, cx, cy + Mono_S.ascender / 2 - 1, s, fb, EPD_DRAW_ALIGN_CENTER, 0x00);
+    ui::frameRound(r, 5, 1, fb, 0x00, 0xFF);
+    ui::text(f, cx, cy + 6, s, fb, EPD_DRAW_ALIGN_CENTER, 0x00);
 }
 
 }  // namespace
@@ -180,7 +180,7 @@ void drawGrid(const MapScreenData& map, uint8_t* fb) {
                     // Label where the line crosses the map's top edge (eastings)
                     // or left edge (northings), like the margin of a map sheet.
                     if (!labelled && nl < 64) {
-                        const double edge = pass == 0 ? top + 14 : 18;
+                        const double edge = pass == 0 ? top + (map.topo ? 52 : 0) + 16 : 18;
                         const double p0 = pass == 0 ? py : px, p1 = pass == 0 ? y : x;
                         if ((p0 - edge) * (p1 - edge) <= 0 && p0 != p1) {
                             const double t = (edge - p0) / (p1 - p0);
@@ -190,7 +190,7 @@ void drawGrid(const MapScreenData& map, uint8_t* fb) {
                             const long km = (long)llround(g / 1000.0) % 100;
                             snprintf(L.t, sizeof L.t, "%02ld", km);
                             const bool clear = pass == 0
-                                ? (L.x > 16 && L.x < 430)                 // compass, zoom keys
+                                ? (L.x > 34 && L.x < 440)                 // northing labels, compass
                                 : (L.y > top + 30 && L.y < bottom - 60);  // scale bar
                             if (clear) ++nl;
                             labelled = true;
@@ -286,6 +286,20 @@ void drawTarget(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     }
 }
 
+void drawCross(uint8_t* fb) {
+    const int cx = SCREEN_W / 2, cy = kCrossY;
+    for (int t = -1; t <= 1; ++t) {   // white under black, readable on any map
+        epd_fill_rect({cx - 22, cy - 3 + t, 16, 7}, 0xFF, fb);
+        epd_fill_rect({cx + 7, cy - 3 + t, 16, 7}, 0xFF, fb);
+        epd_fill_rect({cx - 3 + t, cy - 22, 7, 16}, 0xFF, fb);
+        epd_fill_rect({cx - 3 + t, cy + 7, 7, 16}, 0xFF, fb);
+    }
+    epd_fill_rect({cx - 20, cy - 1, 14, 3}, 0x00, fb);
+    epd_fill_rect({cx + 7, cy - 1, 14, 3}, 0x00, fb);
+    epd_fill_rect({cx - 1, cy - 20, 3, 14}, 0x00, fb);
+    epd_fill_rect({cx - 1, cy + 7, 3, 14}, 0x00, fb);
+}
+
 // DOBA: the strip under the map, in the calm style: the grid reference big,
 // lat/lon in grey under it, then three small facts each with its caption.
 void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
@@ -294,9 +308,13 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     epd_fill_rect({0, top, W, 1}, ui::HAIR, fb);
 
     const bool fix = s.gpsFix;
-    const double lat = fix || s.everHadFix ? s.latitude : map.centerLat;
-    const double lon = fix || s.everHadFix ? s.longitude : map.centerLon;
-    const uint8_t ink = fix ? 0x00 : 0x77;   // stale position reads grey
+    // Dragged: the readout is for the cross in the middle of the map, so any
+    // point on the sheet can be read off; else it is where you stand.
+    double clat = map.centerLat, clon = map.centerLon;
+    const bool cross = map.panned && screenToLatLon(SCREEN_W / 2, kCrossY, clat, clon);
+    const double lat = cross ? clat : fix || s.everHadFix ? s.latitude : map.centerLat;
+    const double lon = cross ? clon : fix || s.everHadFix ? s.longitude : map.centerLon;
+    const uint8_t ink = fix || cross ? 0x00 : 0x77;   // stale position reads grey
     const int x0 = 24;
 
     char m[32];
@@ -316,8 +334,23 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
         ui::fillRound({x0 - 8, top + 48, W - 2 * x0 + 16, 30}, 6, 0x00, fb);
         ui::text(ui::font(ui::F_SMALL), x0, top + 70, ll, fb, EPD_DRAW_ALIGN_LEFT, 0xFF);
     } else {
-        snprintf(ll, sizeof ll, "%.5f\xC2\xB0 %c   %.5f\xC2\xB0 %c", fabs(lat), lat >= 0 ? 'N' : 'S',
-                 fabs(lon), lon >= 0 ? 'E' : 'W');
+        // the short form, as said on the radio (100 m), then lat/lon
+        char sh[24] = "";
+        {
+            char t[32];
+            snprintf(t, sizeof t, "%s", m);
+            char* tok[4] = {};
+            int k = 0;
+            for (char* p = strtok(t, " "); p && k < 4; p = strtok(nullptr, " ")) tok[k++] = p;
+            if (k == 4) snprintf(sh, sizeof sh, "%s %.3s %.3s", tok[1], tok[2], tok[3]);
+        }
+        snprintf(ll, sizeof ll, "%s%s%.5f\xC2\xB0 %c  %.5f\xC2\xB0 %c", cross ? "Cross \xC2\xB7 " : "",
+                 sh[0] ? "" : "", fabs(lat), lat >= 0 ? 'N' : 'S', fabs(lon), lon >= 0 ? 'E' : 'W');
+        if (sh[0]) {
+            char say[40];
+            snprintf(say, sizeof say, "Say %s", sh);
+            ui::text(ui::font(ui::F_SMALL), W - x0, top + 68, say, fb, EPD_DRAW_ALIGN_RIGHT, 0x30);
+        }
         ui::text(ui::font(ui::F_SMALL), x0, top + 68, ll, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     }
 
@@ -335,6 +368,19 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     if (fix) snprintf(v3, sizeof v3, "%d", s.satellites);
     else snprintf(v3, sizeof v3, "no fix \xC2\xB7 %d", s.satellites);
     const char* caps[3] = {c1, "Course", "Satellites"};
+    if (cross) {   // the cross: how far and which way from you
+        caps[0] = "From you";
+        caps[1] = "Azimuth";
+        if (fix || s.everHadFix) {
+            double b, d;
+            milgeo::bearingDistance(s.latitude, s.longitude, lat, lon, b, d);
+            doba_points::formatDistance(d, v1, sizeof v1);
+            milgeo::mils((float)b, milsSystem(), v2, sizeof v2);
+        } else {
+            snprintf(v1, sizeof v1, "--");
+            snprintf(v2, sizeof v2, "--");
+        }
+    }
     const char* vals[3] = {v1, v2, v3};
     const int cols[3] = {x0, x0 + 170, x0 + 330};
     for (int i = 0; i < 3; ++i) {
