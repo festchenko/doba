@@ -52,7 +52,7 @@ section fire | FIRE | fire | gov,manuals,mine,wiki_en
   - Ferrocerium           | the fire steel                        | wiki_en:Ferrocerium
   - Bow drill             | fire by friction                      | wiki_en:Bow drill ; wiki_en:Fire drill
   - Fire piston           | fire from compressed air              | wiki_en:Fire piston
-  - Dakota fire hole      | small, hidden, wind-proof             | wiki_en:Dakota fire hole
+  - Dakota fire hole      | small, hidden, wind-proof             | wiki_en:Dakota fire hole ; wiki_en:Fire pit
   - Charcoal              | making and using it                   | wiki_en:Charcoal
   - Carbon monoxide       | the silent danger indoors             | gov:Carbon Monoxide* ; med_en:Carbon monoxide poisoning ; wiki_en:Carbon monoxide poisoning
 
@@ -60,7 +60,7 @@ section shelter | SHELTER | shelter | gov,disaster,manuals,mine,wiki_en
   * Survival manual       | the army field manual                 | gov:ATP 3-50.21* ; gov:FM 21-76* ; manuals:Survival*
   - Bivouac shelter       | quick shelter for one night           | wiki_en:Bivouac shelter
   - Lean-to               | the simplest frame                    | wiki_en:Lean-to
-  - Debris hut            | warm with no gear                     | wiki_en:Debris hut
+  - Debris hut            | warm with no gear                     | wiki_en:Debris hut ; wiki_en:Survival shelter
   - Snow cave             | shelter in deep snow                  | wiki_en:Snow cave ; wiki_en:Quinzhee
   - Tarp tent             | pitching a sheet                      | wiki_en:Tarp tent
   - Space blanket         | uses of the foil sheet                | wiki_en:Space blanket
@@ -69,7 +69,7 @@ section shelter | SHELTER | shelter | gov,disaster,manuals,mine,wiki_en
   - Emergency kit         | what to keep ready                    | gov:Build a Kit* ; wiki_en:Bug-out bag ; wiki_en:Survival kit
 
 section food | FOOD | food | food,gov,manuals,mine,wiki_en
-  * Edibility test        | when you don't know a plant           | wiki_en:Universal Edibility Test ; wiki_en:Edible plants*
+  * Edibility test        | when you don't know a plant           | wiki_en:Universal Edibility Test ; wiki_en:Foraging
   - Foraging              | what to look for                      | wiki_en:Foraging
   - Wild edible plants    | common and safe                       | wiki_en:List of edible plants* ; wiki_en:Wild edible plants*
   - Poisonous plants      | what never to eat                     | wiki_en:List of poisonous plants
@@ -189,7 +189,7 @@ section comms | COMMS | comms | gov,manuals,mine,wiki_en
   - Morse code            | the alphabet in dots and dashes       | wiki_en:Morse code
   - SOS                   | ... --- ...                           | wiki_en:SOS
   - Signal mirror         | flash across kilometres               | wiki_en:Signal mirror ; wiki_en:Heliograph
-  - Ground-to-air signals | letters cut into the ground           | wiki_en:Ground-to-air emergency code ; wiki_en:Ground to air emergency code
+  - Ground-to-air signals | letters cut into the ground           | wiki_en:Ground-to-air emergency code ; wiki_en:Ground Air Emergency Code
   - Signal fire           | three fires in a triangle             | wiki_en:Signal fire
   - NATO alphabet         | Alfa, Bravo, Charlie                  | wiki_en:NATO phonetic alphabet
   - Meshtastic            | the radio Doba speaks                 | wiki_en:Meshtastic
