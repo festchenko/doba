@@ -2325,6 +2325,13 @@ bool findIn(int bi, const char* title, Result& out) {
         }
         if (lo < b.count && f.seek(HDR + (uint64_t)lo * REC) && f.read(rec, REC) == REC &&
             memcmp(rec, want, KEY) == 0) {
+            // Several pages under one key (a Gutenberg book and its cover page,
+            // "Title" and "title?"): the first one not hidden as junk.
+            uint8_t next[REC];
+            for (uint32_t k = lo + 1; (rec[114] & 2) && k < b.count && k < lo + 8; ++k) {
+                if (f.read(next, REC) != REC || memcmp(next, want, KEY) != 0) break;
+                if (!(next[114] & 2)) memcpy(rec, next, REC);
+            }
             memcpy(out.title, rec + KEY, KEY);
             out.title[KEY] = 0;
             out.chunk = (uint16_t)(rec[112] | rec[113] << 8);

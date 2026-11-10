@@ -29,7 +29,7 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from dobafold import key  # noqa: E402
+from dobafold import fold, key  # noqa: E402
 
 REC, HDR = 128, 32
 
@@ -87,6 +87,28 @@ class Index:
         with open(os.path.join(self.book, "a%04d.dta" % ch), "rb") as d:
             d.seek(off)
             return zlib.decompress(d.read(ln)).decode("utf-8", "replace")
+
+
+VERSIONS = ("Версії роботи", "Versions of ", "Версии ")
+LINK_RE = re.compile("\x01([^\x01\x02\x03]*)\x02([^\x01\x02\x03]*)\x03")
+
+
+def best_version(ix, title):
+    """A Wikisource "versions of this work" page lists editions and holds no
+    text: the menu goes to the edition with the most text instead."""
+    t = ix.text(title)
+    if not t or not any(v in t[:300] for v in VERSIONS):
+        return title
+    best, size = title, 0
+    for m in list(LINK_RE.finditer(t))[:40]:
+        tgt = m.group(2)
+        if not tgt or tgt.startswith("#") or ":" in tgt.split("/")[0][:12]:
+            continue
+        x = ix.text(tgt)
+        n = len(x) + 400 * x.count("\x01")      # an edition's contents page counts its chapters
+        if n > size:
+            best, size = tgt, n
+    return best
 
 
 def tag_questions(ix, tag, n):
@@ -177,9 +199,14 @@ def build(lib, book):
                     row(have, sub)
             else:
                 names, _, sub = line.partition("::")
-                hit = next((ix.find(x.strip()) for x in names.split("|") if ix.find(x.strip())), None)
-                if hit and len(hit.encode()) >= 54:           # cut in the index: keep the name as written
-                    hit = next(x.strip() for x in names.split("|") if ix.find(x.strip()))
+                name = next((x.strip() for x in names.split("|") if ix.find(x.strip())), None)
+                hit = None
+                if name:
+                    have = ix.find(name)
+                    # the index's spelling when it is the same title; else (a
+                    # long title shortened for lists) the name as written
+                    hit = have if fold(have, 10 ** 6) == fold(name, 10 ** 6) else name
+                    hit = best_version(ix, hit)
                 if hit:
                     row(hit, sub.strip())
                 else:
