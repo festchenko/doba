@@ -1564,9 +1564,9 @@ Go tapPoints(int x, int y, const RideState& s) {
 
 // --- POINT: one waypoint -----------------------------------------------------------
 
-const EpdRect kGoto = {12, H - 196, 516, 92};
-const EpdRect kDel = {12, H - 92, 250, 80};
-const EpdRect kToMap = {278, H - 92, 250, 80};
+const EpdRect kGoto = {24, H - 180, W - 48, 72};
+const EpdRect kDel = {24, H - 94, (W - 48 - 14) / 2, 64};
+const EpdRect kToMap = {24 + (W - 48 - 14) / 2 + 14, H - 94, (W - 48 - 14) / 2, 64};
 
 void arrow(int cx, int cy, int r, float deg, uint8_t c, uint8_t* fb) {
     const float a = deg * (float)M_PI / 180.0f;
@@ -1582,16 +1582,22 @@ void renderPoint(const RideState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     const doba_points::Point* p = doba_points::at(g_pointSel);
     if (!p) return;
-    ui::text(ui::font(ui::F_TITLE), 14, TOP + 60, p->name, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    {
+        char nm[64];
+        snprintf(nm, sizeof nm, "%s", p->name);
+        fit(ui::font(ui::F_H1), nm, W - 48);
+        ui::text(ui::font(ui::F_H1), 24, TOP + 52, nm, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    }
     char pm[32];
     milgeo::mgrs(p->lat, p->lon, pm, sizeof pm);
-    ui::text(ui::font(ui::F_BODY_H), 14, TOP + 108, pm, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    char ll[48];
-    snprintf(ll, sizeof ll, "%c%.5f  %c%.5f", p->lat >= 0 ? 'N' : 'S', fabs(p->lat), p->lon >= 0 ? 'E' : 'W', fabs(p->lon));
-    ui::text(ui::font(ui::F_SMALL), 14, TOP + 144, ll, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(ui::monoFont(22), 24, TOP + 94, pm, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    char ll[64];
+    snprintf(ll, sizeof ll, "%.5f\xC2\xB0 %c, %.5f\xC2\xB0 %c", fabs(p->lat), p->lat >= 0 ? 'N' : 'S', fabs(p->lon), p->lon >= 0 ? 'E' : 'W');
+    ui::text(ui::font(ui::F_SMALL), 24, TOP + 124, ll, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    epd_fill_rect({24, TOP + 144, W - 48, 1}, ui::HAIR, fb);
 
     double lat, lon;
-    const int dialY = TOP + 340, dialR = 150, dialX = 175;
+    const int dialY = TOP + 340, dialR = 140, dialX = 24 + 140;
     if (here(s, lat, lon)) {
         double b, d;
         doba_points::fromHere(g_pointSel, lat, lon, b, d);
@@ -1615,44 +1621,45 @@ void renderPoint(const RideState& s, uint8_t* fb) {
         azText(b, az, sizeof az);
         snprintf(deg, sizeof deg, "%03d\xC2\xB0", (int)lround(b) % 360);
         doba_points::formatDistance(d, ds, sizeof ds);
-        const int tx = 346;
-        ui::text(ui::font(ui::F_TINY), tx, dialY - 92, "AZIMUTH", fb, EPD_DRAW_ALIGN_LEFT, INK);
-        ui::text(ui::font(ui::F_TITLE), tx, dialY - 46, az, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        ui::text(ui::font(ui::F_SMALL), tx, dialY - 12, deg, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        const int tx = 336;
+        ui::text(ui::font(ui::F_SMALL), tx, dialY - 104, "Azimuth", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        ui::text(ui::valueFont(30), tx, dialY - 60, az, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_SMALL), tx, dialY - 30, deg, fb, EPD_DRAW_ALIGN_LEFT, INK);
         {   // what to set on the compass here: true less the declination
             float mb = (float)b - milgeo::declination(lat, lon);
             if (mb < 0) mb += 360.0f;
             char cm[8], ct[32];
             milgeo::mils(mb, milspec::milsSystem(), cm, sizeof cm);
             snprintf(ct, sizeof ct, "compass %s", cm);
-            ui::text(ui::font(ui::F_TINY), tx, dialY + 14, ct, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+            ui::text(ui::font(ui::F_SMALL), tx, dialY - 6, ct, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
         }
-        ui::text(ui::font(ui::F_TINY), tx, dialY + 42, "DISTANCE", fb, EPD_DRAW_ALIGN_LEFT, INK);
-        ui::text(ui::font(ui::F_TITLE), tx, dialY + 88, ds, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_SMALL), tx, dialY + 44, "Distance", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        ui::text(ui::valueFont(28), tx, dialY + 86, ds, fb, EPD_DRAW_ALIGN_LEFT, INK);
         // Height of the point (DEM) and the climb to it.
         float pz;
         bool wet = false;
         if (doba_dem::ground(p->lat, p->lon, pz, wet) && wet) {
             char hz[48];
-            snprintf(hz, sizeof hz, "DEPTH %dm", (int)lroundf(pz));
+            snprintf(hz, sizeof hz, "Depth %d m", (int)lroundf(pz));
             ui::text(ui::font(ui::F_SMALL), tx, dialY + 126, hz, fb, EPD_DRAW_ALIGN_LEFT, INK);
         } else if (doba_dem::height(p->lat, p->lon, pz)) {
             char hz[48];
             const int dz = (int)lroundf(pz - groundAlt(s));
-            snprintf(hz, sizeof hz, "HEIGHT %dm", (int)lroundf(pz));
+            snprintf(hz, sizeof hz, "Height %d m", (int)lroundf(pz));
             ui::text(ui::font(ui::F_SMALL), tx, dialY + 126, hz, fb, EPD_DRAW_ALIGN_LEFT, INK);
-            snprintf(hz, sizeof hz, dz >= 0 ? "climb %+dm" : "drop %dm", dz);
-            ui::text(ui::font(ui::F_SMALL), tx, dialY + 156, hz, fb, EPD_DRAW_ALIGN_LEFT, INK);
+            snprintf(hz, sizeof hz, dz >= 0 ? "climb %+d m" : "drop %d m", dz);
+            ui::text(ui::font(ui::F_SMALL), tx, dialY + 154, hz, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
         }
         if (!s.gpsFix)
-            ui::text(ui::font(ui::F_TINY), W / 2, dialY + dialR + 40, "from the last fix", fb, EPD_DRAW_ALIGN_CENTER, INK);
+            ui::text(ui::font(ui::F_SMALL), 24, dialY + dialR + 40, "From the last GPS fix", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     } else {
-        ui::text(ui::font(ui::F_SMALL), W / 2, dialY, "no fix: azimuth when GPS has one", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), 24, dialY, "No GPS fix yet: the way to it shows when there is one.", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     }
     const bool tgt = doba_points::target() == g_pointSel;
-    button(kGoto, tgt ? "STOP GUIDING" : "GO TO  (show on map)", !tgt, fb);
-    button(kDel, g_deleteArmed ? "SURE? TAP" : "DELETE", g_deleteArmed, fb);
-    button(kToMap, "MAP", false, fb);
+    button(kGoto, tgt ? "Stop guiding" : "Go here", !tgt, fb);
+    button(kDel, g_deleteArmed ? "Tap again to delete" : "Delete", g_deleteArmed, fb);
+    button(kToMap, "Show on map", false, fb);
+    if (!tgt) ui::text(ui::font(ui::F_SMALL), 24, kGoto.y - 16, "Go here: the map points you to it", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
 
 Go tapPoint(int x, int y) {
@@ -1689,32 +1696,34 @@ bool parseGrid(const char* t, double& la, double& lo) {
     return gridDigits(t) - zone >= 4 && milgeo::parseMgrs(t, la, lo);
 }
 
-const EpdRect kGridBox = {10, TOP + 46, W - 20, 84};
-const EpdRect kNameBox = {10, TOP + 176, W - 20, 84};
+const EpdRect kGridBox = {24, TOP + 64, W - 48, 76};
+const EpdRect kNameBox = {24, TOP + 200, W - 48, 76};
 
 void renderPointNew(const RideState& s, uint8_t* fb) {
     (void)s;
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     kbd::Keyboard& k = g_newFocusName ? g_newName : g_newGrid;
     k.top = H - k.height();
-    k.enterLabel = "SAVE";
-    auto field = [&](const EpdRect& r, const char* cap, const char* txt, bool focus, const char* empty) {
-        ui::text(ui::font(ui::F_TINY), r.x + 4, r.y - 12, cap, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        frame(r, focus ? 4 : 1, fb);
+    k.enterLabel = "Save";
+    auto field = [&](const EpdRect& r, const char* cap, const char* hint, const char* txt, bool focus, const char* empty) {
+        ui::text(ui::font(ui::F_SMALL), r.x, r.y - 14, cap, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        if (hint) ui::text(ui::font(ui::F_SMALL), r.x + r.width, r.y - 14, hint, fb, EPD_DRAW_ALIGN_RIGHT, ui::GREY);
+        ui::frameRound(r, 10, focus ? 3 : 1, fb);
         char shown[300];
+        const bool ph = !txt[0] && !focus;
         snprintf(shown, sizeof shown, focus ? "%s_" : "%s", txt[0] ? txt : (focus ? "" : empty));
-        ui::text(ui::font(ui::F_KEY), r.x + 16, r.y + 54, shown, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_KEY), r.x + 18, r.y + 50, shown, fb, EPD_DRAW_ALIGN_LEFT, ph ? ui::GREY : INK);
     };
-    field(kGridBox, "GRID (MGRS)  e.g. 32U LC 12345 67890", g_newGrid.text, !g_newFocusName, "");
-    field(kNameBox, "NAME (optional)", g_newName.text, g_newFocusName, "PT..");
+    field(kGridBox, "Grid (MGRS)", "e.g. 32U LC 12345 67890", g_newGrid.text, !g_newFocusName, "");
+    field(kNameBox, "Name", "optional", g_newName.text, g_newFocusName, "numbered if left empty");
     double la, lo;
     const char* line = g_newError;
     char ok[64];
     if (!line && g_newGrid.text[0] && parseGrid(g_newGrid.text, la, lo)) {
-        snprintf(ok, sizeof ok, "= %c%.5f %c%.5f", la >= 0 ? 'N' : 'S', fabs(la), lo >= 0 ? 'E' : 'W', fabs(lo));
+        snprintf(ok, sizeof ok, "= %.5f\xC2\xB0 %c, %.5f\xC2\xB0 %c", fabs(la), la >= 0 ? 'N' : 'S', fabs(lo), lo >= 0 ? 'E' : 'W');
         line = ok;
     }
-    if (line) ui::text(ui::font(ui::F_SMALL), 14, kNameBox.y + kNameBox.height + 44, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (line) ui::text(ui::font(ui::F_SMALL), 24, kNameBox.y + kNameBox.height + 40, line, fb, EPD_DRAW_ALIGN_LEFT, g_newError ? INK : ui::GREY);
     k.render(fb);
 }
 
@@ -1728,9 +1737,9 @@ Go tapPointNew(int x, int y) {
     g_newError = nullptr;
     if (a == kbd::ENTER) {
         double la, lo;
-        if (!parseGrid(g_newGrid.text, la, lo)) { g_newError = "need zone, square and 4-10 digits"; g_newFocusName = false; return STAY; }
+        if (!parseGrid(g_newGrid.text, la, lo)) { g_newError = "Needs zone, square and 4 to 10 digits"; g_newFocusName = false; return STAY; }
         const int i = doba_points::add(g_newName.text, la, lo);
-        if (i < 0) { g_newError = "list full (64)"; return STAY; }
+        if (i < 0) { g_newError = "The list is full (64 points)"; return STAY; }
         g_pointsScroll = (i / PROW_N) * PROW_N;
         g_pointsNote = "added";
         return TO_POINTS;
