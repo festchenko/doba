@@ -134,11 +134,10 @@ def sections_rows(lib, book):
         m = re.match(r"\s+[*-]\s+(.+?)\s*\|\s*(.*?)\s*\|\s*(.+)$", line)
         if not m or not group:
             continue
-        for ref in m.group(3).split(";"):
-            b, _, t = ref.strip().partition(":")
-            if b == book and not t.endswith("*"):
-                rows.append((group, t.strip(), m.group(2)))
-                break
+        alts = [t.strip() for b, _, t in (r.strip().partition(":") for r in m.group(3).split(";"))
+                if b == book and not t.endswith("*")]
+        if alts:
+            rows.append((group, alts, m.group(2)))
     return rows
 
 
@@ -188,10 +187,10 @@ def build(lib, book):
                     missing.append(line)
             elif line.startswith("@sections"):
                 group = None
-                for g, t, sub in sections_rows(lib, book):
-                    have = ix.find(t)
+                for g, alts, sub in sections_rows(lib, book):
+                    have = next((ix.find(t) for t in alts if ix.find(t)), None)
                     if not have:
-                        missing.append(t)
+                        missing.append(" | ".join(alts))
                         continue
                     if g != group:
                         out.append("# " + g)
