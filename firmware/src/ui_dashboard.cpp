@@ -3483,6 +3483,11 @@ static void runConsoleLine(char* line) {
         ble_sensors::setScanAlways(on);
         if (on) ble_sensors::noteActivity();
         Serial.printf("[cmd] sensor scan %s — 'sensors' lists what it hears\n", on ? "ON" : "off");
+    } else if (!strcasecmp(cmd, "libopen") && arg) {   // DOBA: libopen <title>, the rest of the line
+        char t[160];
+        const char* rest = strtok(nullptr, "");
+        snprintf(t, sizeof t, "%s%s%s", arg, rest ? " " : "", rest ? rest : "");
+        if (doba_lib::openTitle(t)) screen = SCREEN_LIBRARY;
     } else if (!strcasecmp(cmd, "screen")) {
         if (!arg) { Serial.println("[cmd] screen <map|dash|menu|settings|gps|layers>"); return; }
         if      (!strcasecmp(arg, "map"))      screen = SCREEN_MAP;
@@ -3545,7 +3550,7 @@ static void runConsoleLine(char* line) {
 // firmware (a second reader would race it for bytes). Commands drive the UI for
 // profiling and the flash/GPS iteration loop; see printConsoleHelp().
 void pollSerialCommands() {
-    static char buf[48];
+    static char buf[160];   // DOBA: room for a long article title (libopen)
     static uint8_t n = 0;
     while (Serial.available() > 0) {
         if (agnssRxRemaining > 0) {           // raw AGNSS byte-stream mode

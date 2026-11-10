@@ -24,8 +24,8 @@ import zipfile
 import zlib
 
 import dobapic
-from dobafold import KEY_BYTES, fold
-from zim2doba import HDR, LINK_A, LINK_B, LINK_C, REC, to_text, utf8_cut
+from dobafold import KEY_BYTES, display, fold, key
+from zim2doba import HDR, LINK_A, LINK_B, LINK_C, REC, to_text
 
 MAX_ARTICLE = 1_400_000          # bytes of text; the device holds 1.5 MB inflated
 KINDS = set("THSPBI")
@@ -709,24 +709,24 @@ def write_book(out, name, source, articles, aliases=()):
         for title, text in articles:
             z = zlib.compress(text.encode("utf-8"), 9)
             f.write(z)
-            key = fold(title)
-            if key:
-                records.append((key, utf8_cut(title, KEY_BYTES), 0, 0, pos, len(z)))
+            k = key(title)
+            if k:
+                records.append((k, display(title), 0, 0, pos, len(z)))
             where[title] = (pos, len(z))
             pos += len(z)
     have = {r[0] for r in records}
     for title, others in aliases:
         w = where.get(title)
         for o in others:
-            k = fold(o)
+            k = key(o)
             if w and k and k not in have:
-                records.append((k, utf8_cut(o, KEY_BYTES), 0, 1, w[0], w[1]))
+                records.append((k, display(o), 0, 1, w[0], w[1]))
                 have.add(k)
     records.sort(key=lambda r: (r[0].ljust(KEY_BYTES, b"\0"), r[1]))
     with open(os.path.join(out, "index.dti"), "wb") as f:
         f.write(HDR.pack(b"DOBAIX1\0", len(records), REC.size, 1, b"\0" * 12))
-        for key, t, ch, flags, off, ln in records:
-            f.write(REC.pack(key, t, ch, flags, off, ln, 0))
+        for k, t, ch, flags, off, ln in records:
+            f.write(REC.pack(k, t, ch, flags, off, ln, 0))
     with open(os.path.join(out, "info.txt"), "w", encoding="utf-8") as f:
         f.write(f"name={name}\nlang=\narticles={len(records)}\nredirects=0\nsource={source}\n")
     return len(records), pos

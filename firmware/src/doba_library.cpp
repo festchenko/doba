@@ -2276,27 +2276,45 @@ bool findIn(int bi, const char* title, Result& out);
 bool findExact(const char* title, Result& out) { return findIn(g_book, title, out); }
 bool findIn(int bi, const char* title, Result& out) {
     if (g_bookCount <= 0 || bi < 0 || bi >= g_bookCount) return false;
-    // As library/dobafold.py: the whole title folded, then cut to 55 bytes
-    // on a character boundary (a long title's key is its first 55 bytes).
+    // As library/dobafold.py key(): the whole title folded (up to 240 bytes);
+    // up to 55 bytes that is the key. A longer one is its first 46 bytes,
+    // \x01 and 8 letters of an FNV-1a hash of the whole fold, so long titles
+    // that start alike (Wikisource chapters) stay apart. Books converted
+    // before that cut long keys at 55 bytes: that is tried second.
     char key[256];
     fold(title, key, sizeof key);
     if (!key[0]) return false;
-    size_t kn = strlen(key);
-    if (kn > (size_t)KEY - 1) {
-        kn = KEY - 1;
-        while (kn > 0 && ((uint8_t)key[kn] & 0xC0) == 0x80) --kn;
-        while (kn > 0 && key[kn - 1] == ' ') --kn;
-        key[kn] = 0;
+    auto cutAt = [&](size_t n) {
+        while (n > 0 && ((uint8_t)key[n] & 0xC0) == 0x80) --n;
+        while (n > 0 && key[n - 1] == ' ') --n;
+        return n;
+    };
+    size_t full = strlen(key);
+    if (full > 240) { full = cutAt(240); key[full] = 0; }
+    uint8_t want[KEY] = {}, old[KEY] = {};
+    bool twoKeys = false;
+    if (full <= (size_t)KEY - 1) {
+        memcpy(want, key, full);
+    } else {
+        uint64_t h = 0xCBF29CE484222325ull;
+        for (size_t i = 0; i < full; ++i) h = (h ^ (uint8_t)key[i]) * 0x100000001B3ull;
+        static const char kB32[] = "abcdefghijklmnopqrstuvwxyz234567";
+        const size_t c = cutAt(46);
+        memcpy(want, key, c);
+        want[c] = 0x01;
+        for (int i = 0; i < 8; ++i) want[c + 1 + i] = (uint8_t)kB32[(h >> (5 * i)) & 31];
+        const size_t o = cutAt(KEY - 1);
+        memcpy(old, key, o);
+        twoKeys = true;
     }
-    uint8_t want[KEY] = {};
-    memcpy(want, key, strlen(key) < (size_t)KEY ? strlen(key) : KEY);
     const Book& b = g_books[bi];
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, b.dir);
     bool found = false;
     sdLock();
     File f = SD.open(path, FILE_READ);
-    if (f) {
+    for (int pass = 0; f && !found && pass < (twoKeys ? 2 : 1); ++pass) {
+        if (pass == 1) memcpy(want, old, KEY);
         uint8_t rec[REC];
         uint32_t lo = 0, hi = b.count;
         while (lo < hi) {
@@ -2315,8 +2333,8 @@ bool findIn(int bi, const char* title, Result& out) {
             out.book = (int8_t)bi;
             found = true;
         }
-        f.close();
     }
+    if (f) f.close();
     sdUnlock();
     return found;
 }
@@ -2370,6 +2388,16 @@ void follow(int link) {
 }
 
 }  // namespace
+
+bool openTitle(const char* title) {
+    count();
+    for (int bi = 0; bi < g_bookCount; ++bi) {
+        Result r;
+        if (findIn(bi, title, r)) { g_book = bi; return openArticle(r); }
+    }
+    Serial.printf("[lib] no '%s'\n", title);
+    return false;
+}
 
 // Bigger or smaller text, staying on the same words.
 void cycleSize() {

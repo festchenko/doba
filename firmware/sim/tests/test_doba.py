@@ -3,6 +3,7 @@
 The sim boots to HOME here (DOBA_START=home) and the radio band is Doba's own
 default (EU_868), unlike the inherited OTP suites (conftest.py)."""
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -579,3 +580,17 @@ def test_nearby_lists_the_nearest_of_each_kind_and_a_tap_goes_there(doba):
     since = doba.log_seq()
     doba.tap(200, TOP + 112 + 40)                           # the nearest one
     doba.wait_log(r"\[pois\] point \d+ 'Near hospital'", since=since)
+
+
+def test_long_cyrillic_chapter_titles_stay_apart_and_links_reach_each(doba, book):
+    """Wikisource chapters fold to the same first 55 bytes: the key keeps a
+    hash of the whole title (dobafold.key), so each chapter is found, and the
+    list shows the short end of the path ("Захар Беркут / II")."""
+    shutil.copytree(book, os.path.join(doba.sd, "doba", "lib", "field"))
+    boot(doba)
+    for t, want in [("Твори (Франко, 1956–1962)/13/Захар Беркут/II", "Захар Беркут / II"),
+                    ("Твори (Франко, 1956–1962)/13/Захар Беркут/I", "Захар Беркут / I"),
+                    ("Твори (Франко, 1956–1962)/13/Захар Беркут", "Захар Беркут")]:
+        since = doba.log_seq()
+        doba.console("libopen " + t, 800)
+        doba.wait_log(r"\[lib\] open '%s' " % re.escape(want), since=since)

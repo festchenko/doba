@@ -29,7 +29,7 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from dobafold import fold  # noqa: E402
+from dobafold import key  # noqa: E402
 
 REC, HDR = 128, 32
 
@@ -49,7 +49,7 @@ class Index:
 
     def find(self, title):
         """The title as the book has it (same fold), or None."""
-        want = fold(title)[:55].ljust(56, b"\0")
+        want = key(title).ljust(56, b"\0")
         lo, hi = 0, self.n
         while lo < hi:
             mid = (lo + hi) // 2
@@ -70,7 +70,7 @@ class Index:
         return best
 
     def text(self, title):
-        want = fold(title)[:55].ljust(56, b"\0")
+        want = key(title).ljust(56, b"\0")
         lo, hi = 0, self.n
         while lo < hi:
             mid = (lo + hi) // 2

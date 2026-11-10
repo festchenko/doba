@@ -8,13 +8,13 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from dobafold import fold  # noqa: E402
+from dobafold import key  # noqa: E402
 
 REC, HDR = 128, 32
 
 
 def lookup(f, count, title):
-    want = fold(title)[:55].ljust(56, b"\0")
+    want = key(title).ljust(56, b"\0")
     lo, hi = 0, count
     while lo < hi:
         mid = (lo + hi) // 2
@@ -29,7 +29,7 @@ def lookup(f, count, title):
         if r[:56] != want:
             return None
         t = r[56:112].rstrip(b"\0").decode("utf-8", "replace")
-        if fold(t)[:55].ljust(56, b"\0") == want:
+        if key(t).ljust(56, b"\0") == want:
             return t
         lo += 1
     return None

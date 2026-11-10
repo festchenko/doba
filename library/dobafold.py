@@ -63,6 +63,59 @@ def fold(s, limit=KEY_BYTES - 1):
     return b
 
 
+# A key is at most 55 bytes. A longer folded title (a Wikisource chapter,
+# "Твори (Франко, 1956–1962)/13/Захар Беркут/III", or any title past ~27
+# Cyrillic letters) keeps its first 46 bytes, then \x01 and 8 letters of a
+# hash of the whole fold (up to 240 bytes), so two long titles that start
+# alike stay two keys. The device does the same (doba_library.cpp findIn).
+KEY_MAX = KEY_BYTES - 1
+LONG_CUT, LONG_FOLD = 46, 240
+_B32 = "abcdefghijklmnopqrstuvwxyz234567"
+
+
+def _cut(b, n):
+    return b[:n].decode("utf-8", "ignore").encode("utf-8").rstrip(b" ")
+
+
+def fnv1a64(b):
+    h = 0xCBF29CE484222325
+    for c in b:
+        h = ((h ^ c) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def key(s):
+    full = _cut(fold(s, 10 ** 6), LONG_FOLD)
+    if len(full) <= KEY_MAX:
+        return full
+    h = fnv1a64(full)
+    tag = "".join(_B32[(h >> (5 * i)) & 31] for i in range(8)).encode()
+    return _cut(full, LONG_CUT) + b"\x01" + tag
+
+
+def display(title, n=KEY_BYTES):
+    """The title as lists show it, in n bytes: a path keeps its last parts
+    ("Захар Беркут / III", volume numbers dropped); anything else is cut
+    with an ellipsis."""
+    t = " ".join(title.split())
+    if len(t.encode("utf-8")) <= n:
+        return t.encode("utf-8")
+    parts = [p.strip() for p in t.split("/") if p.strip()]
+    if len(parts) > 1:
+        out = parts[-1]
+        for p in reversed(parts[:-1]):
+            if p.isdigit():
+                continue
+            cand = p + " / " + out
+            if len(cand.encode("utf-8")) > n:
+                break
+            out = cand
+        if len(out.encode("utf-8")) <= n:
+            return out.encode("utf-8")
+        t = out
+    return _cut(t.encode("utf-8"), n - 3) + "\u2026".encode("utf-8")
+
+
 def emit_c(path):
     items = sorted(TABLE.items())
     with open(path, "w") as f:

@@ -61,6 +61,15 @@ severe bleeding from a limb.</p><h2>Use</h2><p>Apply 5–7 cm above the wound.</
 Для розжига нужна растопка: береста, сухие ветки.</p><h2>Виды</h2>
 <ul><li>Шалаш</li><li>Звёздный</li><li>Нодья — горит всю ночь.</li></ul>
 <h2>Примечания</h2><p>НЕ ДОЛЖНО ПОЯВИТЬСЯ</p></body></html>"""),
+    # Wikisource-style chapters: long Cyrillic paths that share their first 55
+    # bytes once folded; each must stay its own page, and links reach the right one.
+    ("Твори_(Франко,_1956–1962)/13/Захар_Беркут", "Твори (Франко, 1956–1962)/13/Захар Беркут",
+     """<html><body><p>Повість Івана Франка про громаду Тухольщини. Розділи: <a href="./Захар_Беркут/I">перший</a>,
+<a href="./Захар_Беркут/II">другий</a>.</p></body></html>"""),
+    ("Твори_(Франко,_1956–1962)/13/Захар_Беркут/I", "Твори (Франко, 1956–1962)/13/Захар Беркут/I",
+     """<html><body><p>Розділ перший. Тухольщина в горах, громада вирішує, як зустріти ворога і що робити далі.</p></body></html>"""),
+    ("Твори_(Франко,_1956–1962)/13/Захар_Беркут/II", "Твори (Франко, 1956–1962)/13/Захар Беркут/II",
+     """<html><body><p>Розділ другий. Монголи йдуть через гори, і Захар Беркут збирає людей на раду біля скелі.</p></body></html>"""),
     ("Knots", "Knots", """<html class="vector-feature-toc-pinned-clientpref-0"><body class="skin-vector mediawiki"><p>A knot is a method of fastening cordage; the bowline makes a fixed loop
 that will not slip under load and is easy to untie afterwards.</p>
 <figure><img src="_assets_/bowline.png" width="300" height="200"><figcaption>The bowline, tied.</figcaption></figure>

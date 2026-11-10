@@ -27,7 +27,7 @@ except ImportError:          # docs2doba imports the HTML cleaner without libzim
     Archive = None
 
 import dobapic
-from dobafold import KEY_BYTES, fold
+from dobafold import KEY_BYTES, display, fold, key
 
 REC = struct.Struct("<56s56sHHIII")      # 128 bytes
 HDR = struct.Struct("<8sIII12s")         # 32 bytes
@@ -482,7 +482,7 @@ def main():
                     open_chunk()
                 chunk_f.write(z)
                 where[path] = (chunk, chunk_pos, len(z))
-                records.append((fold(title), utf8_cut(title, KEY_BYTES), chunk, 0, chunk_pos, len(z)))
+                records.append((key(title), display(title), chunk, 0, chunk_pos, len(z)))
                 chunk_pos += len(z)
                 arts += 1
             if done % 20000 == 0:
@@ -497,15 +497,15 @@ def main():
     for title, target in redirects:
         w = where.get(target)
         if w:
-            records.append((fold(title), utf8_cut(title, KEY_BYTES), w[0], 1, w[1], w[2]))
+            records.append((key(title), display(title), w[0], 1, w[1], w[2]))
             linked += 1
     records = [r for r in records if r[0]]
     records.sort(key=lambda r: (r[0].ljust(KEY_BYTES, b"\0"), r[3], r[1]))
 
     with open(os.path.join(a.out, "index.dti"), "wb") as f:
         f.write(HDR.pack(b"DOBAIX1\0", len(records), REC.size, chunk + 1, b"\0" * 12))
-        for key, title, ch, flags, off, ln in records:
-            f.write(REC.pack(key, title, ch, flags, off, ln, 0))
+        for k, title, ch, flags, off, ln in records:
+            f.write(REC.pack(k, title, ch, flags, off, ln, 0))
     source = a.source
     if not source:
         meta = {}
