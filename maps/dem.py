@@ -25,15 +25,27 @@ class Dem:
         self.root = root
         self.cache = {}
 
+    # Open files kept at most: a z8 metatile over Ukraine touches hundreds of
+    # 1-degree tiles, and keeping every one open ran out of file handles
+    # ("Too many open files", macOS allows 256 by default).
+    MAX_OPEN = 48
+
     def _open(self, lat_i, lon_i):
         key = (lat_i, lon_i)
-        if key not in self.cache:
-            name = tile_name(lat_i, lon_i)
-            path = os.path.join(self.root, name + ".tif")
-            if not os.path.exists(path):
-                path = os.path.join(self.root, name, name + ".tif")
-            self.cache[key] = rasterio.open(path) if os.path.exists(path) else None
-        return self.cache[key]
+        if key in self.cache:
+            ds = self.cache.pop(key)   # most recent last
+            self.cache[key] = ds
+            return ds
+        name = tile_name(lat_i, lon_i)
+        path = os.path.join(self.root, name + ".tif")
+        if not os.path.exists(path):
+            path = os.path.join(self.root, name, name + ".tif")
+        ds = rasterio.open(path) if os.path.exists(path) else None
+        self.cache[key] = ds
+        while sum(1 for v in self.cache.values() if v is not None) > self.MAX_OPEN:
+            old = next(k for k, v in self.cache.items() if v is not None)
+            self.cache.pop(old).close()
+        return ds
 
     def available(self):
         return os.path.isdir(self.root) and any(
