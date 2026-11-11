@@ -96,7 +96,7 @@ done
 
 # --- sea depths (EMODnet Bathymetry DTM 2024, European seas) --------------------
 echo "== downloading sea depths (EMODnet)"
-python3 bathy.py --bbox "$BBOX" --out "$BUILD/bathy" || echo "!! some depth cells failed; rerun to retry"
+python3 bathy.py --bbox="$BBOX" --out "$BUILD/bathy" || echo "!! some depth cells failed; rerun to retry"
 
 echo
 echo "== ready. Next:"
