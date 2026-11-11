@@ -1,4 +1,5 @@
 // DOBA: offline library reader — see doba_library.h.
+#include "doba_i18n.h"
 #include "doba_library.h"
 #include "doba_icons.h"
 
@@ -52,7 +53,7 @@ char g_lastQuery[256] = "\x01";   // forces the first search
 char* g_text = nullptr;          // inflated UTF-8, NUL-terminated
 size_t g_textLen = 0;
 char g_title[KEY + 1] = {};
-struct Line { uint32_t off; uint16_t len; uint8_t kind; };   // a wrapped line
+struct Line { uint32_t off; uint16_t len; uint8_t kind; uint8_t hyph; };   // a wrapped line; hyph: ends in a hyphen
 Line* g_lines = nullptr;
 int g_lineCount = 0, g_lineCap = 0;
 int g_page = 0;
@@ -291,7 +292,7 @@ int textSize() {
 }
 // cap height of a kind, as a multiple of the body's
 float capOf(uint8_t kind) {
-    return kind == 'T' ? 1.42f : kind == 'H' ? 1.22f : kind == 'S' ? 1.06f : kind == 'F' ? 0.84f : 1.f;
+    return kind == 'T' ? 1.42f : kind == 'H' ? 1.22f : kind == 'S' ? 1.06f : kind == 'F' ? 0.84f : kind == 'C' ? 0.86f : 1.f;
 }
 const EpdFont* fontFor(uint8_t kind) {
 #ifdef VFONT
@@ -307,7 +308,7 @@ constexpr int MARGIN = 30, BULLET_IN = 26;
 int capPx(uint8_t kind) { return (int)(kCap[textSize()] * capOf(kind) + 0.5f); }
 // Leading: 2.2 caps for running text (about 1.5 em), tighter for headings.
 int lineHeight(uint8_t kind) {
-    const float k = kind == 'T' || kind == 'H' ? 1.95f : kind == 'S' ? 2.05f : kind == 'F' ? 2.15f : 2.25f;
+    const float k = kind == 'T' || kind == 'H' ? 1.95f : kind == 'S' ? 2.05f : kind == 'F' || kind == 'C' ? 2.1f : 2.25f;
     return (int)(kCap[textSize()] * capOf(kind) * k + 0.5f);
 }
 // Baseline's height above the bottom of the line box: room for descenders,
@@ -338,7 +339,7 @@ int widthOf(const EpdFont* f, const char* s, size_t n) {
     return ui::textWidth(f, tmp);
 }
 
-void addLine(uint32_t off, uint16_t len, uint8_t kind) {
+void addLine(uint32_t off, uint16_t len, uint8_t kind, uint8_t hyph = 0) {
     if (g_lineCount == g_lineCap) {
         const int cap = g_lineCap ? g_lineCap * 2 : 2048;
         Line* n = (Line*)heap_caps_realloc(g_lines, cap * sizeof(Line), MALLOC_CAP_SPIRAM);
@@ -346,7 +347,7 @@ void addLine(uint32_t off, uint16_t len, uint8_t kind) {
         g_lines = n;
         g_lineCap = cap;
     }
-    g_lines[g_lineCount++] = {off, len, kind};
+    g_lines[g_lineCount++] = {off, len, kind, hyph};
 }
 
 bool firstLineOf(const Line& l) { return l.off > 0 && (uint8_t)g_text[l.off - 1] == l.kind; }
@@ -464,6 +465,56 @@ void drawImage(const char* name, int y, int maxH, uint8_t* fb) {
 }
 
 void buildToc();
+// Ukrainian (and Russian) word breaks for a ragged column whose long words
+// would leave half-empty lines: between syllables, two letters at least on
+// each side, never before ь or an apostrophe, never splitting й from its
+// vowel. Latin words are left whole (English needs a dictionary to break well).
+uint32_t lowerCyr(uint32_t c) { return c >= 0x410 && c <= 0x42F ? c + 0x20 : c >= 0x400 && c <= 0x40F ? c + 0x50 : c; }
+bool cyrVowel(uint32_t c) {
+    c = lowerCyr(c);
+    switch (c) {
+        case 0x430: case 0x435: case 0x438: case 0x43E: case 0x443: case 0x44B: case 0x44D: case 0x44E: case 0x44F:
+            return true;
+    }
+    return c == 0x454 || c == 0x456 || c == 0x457 || c == 0x451;
+}
+bool cyrLetter(uint32_t c) { return (c >= 0x400 && c <= 0x45F) || c == 0x490 || c == 0x491; }
+// The byte offset (from w) of the last break whose first part plus "-" fits
+// in room px; 0 if none.
+size_t hyphenAt(const EpdFont* f, const char* w, size_t n, int room) {
+    uint32_t cp[48];
+    size_t at[49];
+    int k = 0;
+    const char* p = w;
+    while ((size_t)(p - w) < n && k < 48) {
+        at[k] = (size_t)(p - w);
+        cp[k++] = decodeUtf8(p);
+    }
+    at[k] = n;
+    // letters only, at least six of them (trailing punctuation is fine)
+    int len = k;
+    while (len > 0 && !cyrLetter(cp[len - 1])) --len;
+    if (len < 6) return 0;
+    for (int i = 0; i < len; ++i) if (!cyrLetter(cp[i]) && cp[i] != '\'' && cp[i] != 0x2019 && cp[i] != '-') return 0;
+    const int dash = widthOf(f, "-", 1);
+    size_t best = 0;
+    for (int i = 2; i <= len - 2; ++i) {
+        const uint32_t a = lowerCyr(cp[i - 1]), b = lowerCyr(cp[i]);
+        if (b == 0x44C || b == '\'' || cp[i] == 0x2019 || a == '-' || b == '-') continue;   // ь, apostrophe
+        if (b == 0x439 && cyrVowel(cp[i - 1])) continue;                                          // vowel + й
+        bool vBefore = false, vAfter = false;
+        for (int j = 0; j < i; ++j) vBefore |= cyrVowel(cp[j]);
+        for (int j = i; j < len; ++j) vAfter |= cyrVowel(cp[j]);
+        if (!vBefore || !vAfter) continue;
+        const bool av = cyrVowel(cp[i - 1]), bv = cyrVowel(cp[i]);
+        const bool nextV = i + 1 < len && cyrVowel(cp[i + 1]);
+        const bool ok = (av && !bv && nextV) || (!av && !bv) || (av && bv);   // V-CV, C-C, V-V
+        if (!ok) continue;
+        if (widthOf(f, w, at[i]) + dash <= room) best = at[i];
+    }
+    return best;
+}
+
 void layout() {
     g_lineCount = 0;
     const int maxW = W - 2 * MARGIN;
@@ -471,13 +522,15 @@ void layout() {
     while (i < g_textLen) {
         size_t e = i;
         while (e < g_textLen && g_text[e] != '\n') ++e;
-        const uint8_t kind = (uint8_t)g_text[i];
+        uint8_t kind = (uint8_t)g_text[i];
         const size_t start = i + 1;
         if (kind == 'I') {   // a picture: one line, its own height
             if (e > start) addLine((uint32_t)start, (uint16_t)(e - start), 'I');
             i = e + 1;
             continue;
         }
+        // A short paragraph right under a picture is its caption: smaller, grey.
+        if (kind == 'P' && e - start < 260 && g_lineCount > 0 && g_lines[g_lineCount - 1].kind == 'I') kind = 'C';
         const EpdFont* f = fontFor(kind);
         const int bulletW = kind == 'B' ? BULLET_IN : 0;
         const int spaceW = widthOf(f, "a a", 3) - widthOf(f, "aa", 2);
@@ -507,6 +560,17 @@ void layout() {
             }
             const int add = (p == ls ? 0 : spaceW) + ww;
             if (p != ls && lw + add > maxW - bulletW) {
+                // A long Cyrillic word that would leave a short line: break it.
+                const int room = maxW - bulletW - lw - spaceW;
+                const size_t hy = room > (maxW / 6) && (kind == 'P' || kind == 'B' || kind == 'C')
+                                      ? hyphenAt(f, g_text + p, we - p, room) : 0;
+                if (hy) {
+                    addLine((uint32_t)ls, (uint16_t)(p + hy - ls), kind, 1);
+                    ls = p + hy;
+                    lw = widthOf(f, g_text + ls, we - ls);
+                    p = we < e ? we + 1 : we;
+                    continue;
+                }
                 addLine((uint32_t)ls, (uint16_t)(p - 1 - ls), kind);
                 ls = p;
                 lw = ww;
@@ -516,7 +580,7 @@ void layout() {
             p = we < e ? we + 1 : we;
         }
         if (e > start) addLine((uint32_t)ls, (uint16_t)(e - ls), kind);
-        if (kind == 'P' || kind == 'B') addLine(0, 0, 'G');   // paragraph gap
+        if (kind == 'P' || kind == 'B' || kind == 'C') addLine(0, 0, 'G');   // paragraph gap
         i = e + 1;
     }
     // Pages: as many lines as fit between the header and the footer.
@@ -601,7 +665,7 @@ bool openArticle(const Result& r) {
     extractLinks();
     // Every article names where it came from (info.txt source=, else the book).
     const char* src = b.source[0] ? b.source : b.name;
-    const int add = snprintf(g_text + g_textLen, MAX_TEXT + 1 - g_textLen, "\nFSource: %s", src);
+    const int add = snprintf(g_text + g_textLen, MAX_TEXT + 1 - g_textLen, TR("\nFSource: %s"), src);
     if (add > 0 && g_textLen + add <= MAX_TEXT) g_textLen += add;
     g_text[g_textLen] = 0;
     snprintf(g_title, sizeof g_title, "%s", r.title);
@@ -840,7 +904,7 @@ int lookOf(int bi) {
     for (int i = 0; i < N_LOOKS; ++i) if (!strcmp(kLooks[i].dir, g_books[bi].dir)) return i;
     return -1;
 }
-const char* shortName(int bi) { const int l = lookOf(bi); return l >= 0 ? kLooks[l].name : g_books[bi].name; }
+const char* shortName(int bi) { const int l = lookOf(bi); return l >= 0 ? TR(kLooks[l].name) : g_books[bi].name; }
 void monogram(int bi, char* out, size_t n) {
     const int l = lookOf(bi);
     if (l >= 0) { snprintf(out, n, "%s", kLooks[l].mono); return; }
@@ -880,9 +944,16 @@ void fitText(const EpdFont* f, char* t, int w) {
     }
 }
 void countText(uint32_t c, char* out, size_t n) {
-    if (c >= 1000000) snprintf(out, n, "%.1fM", c / 1e6);
-    else if (c >= 10000) snprintf(out, n, "%luk", (unsigned long)(c / 1000));
+    if (c >= 1000000) snprintf(out, n, TR("%.1fM"), c / 1e6);
+    else if (c >= 10000) snprintf(out, n, TR("%luk"), (unsigned long)(c / 1000));
     else snprintf(out, n, "%lu", (unsigned long)c);
+}
+
+// The book's unit ("articles") for a count, in the language: Ukrainian has
+// three forms, and after "тис."/"млн" always the many one.
+const char* unitWord(uint32_t c, const char* unit) {
+    if (!unit || !unit[0]) unit = "articles";
+    return TRN(c >= 10000 ? 5 : c, unit, unit);
 }
 
 // The library's head (the design canvas): a big "Library", the tabs as words
@@ -901,7 +972,7 @@ int shelfPages() { return (g_bookCount + COLS * ROWS - 1) / (COLS * ROWS); }
 const char* const kTabNames[3] = {"Books", "Topics", "Recent"};
 int tabX(int t) {
     int x = 28;
-    for (int i = 0; i < t; ++i) x += ui::textWidth(ui::font(ui::F_LABEL), kTabNames[i]) + 32;
+    for (int i = 0; i < t; ++i) x += ui::textWidth(ui::font(ui::F_LABEL), TR(kTabNames[i])) + 32;
     return x;
 }
 int tabAt(int x) {
@@ -909,10 +980,10 @@ int tabAt(int x) {
     return 0;
 }
 void libHead(int which, uint8_t* fb) {
-    ui::text(ui::font(ui::F_H1), 24, TOP + 44, "Library", fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(ui::font(ui::F_H1), 24, TOP + 44, TR("Library"), fb, EPD_DRAW_ALIGN_LEFT, INK);
     for (int t = 0; t < 3; ++t) {
-        const int x = tabX(t), w = ui::textWidth(ui::font(ui::F_LABEL), kTabNames[t]);
-        ui::text(ui::font(ui::F_LABEL), x, TOP + 96, kTabNames[t], fb, EPD_DRAW_ALIGN_LEFT, t == which ? INK : ui::GREY);
+        const int x = tabX(t), w = ui::textWidth(ui::font(ui::F_LABEL), TR(kTabNames[t]));
+        ui::text(ui::font(ui::F_LABEL), x, TOP + 96, TR(kTabNames[t]), fb, EPD_DRAW_ALIGN_LEFT, t == which ? INK : ui::GREY);
         if (t == which) epd_fill_rect({x, TOP + 106, w, 3}, INK, fb);
     }
 }
@@ -953,7 +1024,7 @@ void cover(int bi, const EpdRect& r, uint8_t* fb, bool label = true) {
     const Book& b = g_books[bi];
     countText(b.shown ? b.shown : b.count, cnt, sizeof cnt);
     char line[40];
-    snprintf(line, sizeof line, "%s %s", cnt, b.unit[0] ? b.unit : "articles");
+    snprintf(line, sizeof line, "%s %s", cnt, unitWord(b.shown ? b.shown : b.count, b.unit));
     fitText(ui::font(ui::F_TINY), line, r.width);
     ui::text(ui::font(ui::F_TINY), r.x, r.y + r.height + 52, line, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
@@ -962,7 +1033,7 @@ void pagerRow(int page, int pages, uint8_t* fb);
 void renderShelf(uint8_t* fb) {
     libHead(0, fb);
     char lbl[48];
-    snprintf(lbl, sizeof lbl, "Search %d books", g_bookCount);
+    snprintf(lbl, sizeof lbl, TRN(g_bookCount, "Search %d book", "Search %d books"), g_bookCount);
     searchBar(kAllSearch, lbl, fb);
     sortShelf();
     const int pages = shelfPages(), per = COLS * ROWS;
@@ -1101,7 +1172,7 @@ void renderBookHead(int bi, uint8_t* fb) {
     char cnt[16], sub[160];
     const Book& b = g_books[bi];
     countText(b.shown ? b.shown : b.count, cnt, sizeof cnt);
-    snprintf(sub, sizeof sub, "%s %s%s%s", cnt, b.unit[0] ? b.unit : "articles", b.about[0] ? " · " : "", b.about);
+    snprintf(sub, sizeof sub, "%s %s%s%s", cnt, unitWord(b.shown ? b.shown : b.count, b.unit), b.about[0] ? " · " : "", b.about);
     fitText(ui::font(ui::F_SMALL), sub, W - 48);
     ui::text(ui::font(ui::F_SMALL), 24, TOP + 80, sub, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
@@ -1111,7 +1182,7 @@ int listRows() { return (kListPrev.y - 8 - BODY_Y) / LIST_ROW; }
 void pagerRow(int page, int pages, uint8_t* fb) {
     if (pages <= 1) return;
     char p[24];
-    snprintf(p, sizeof p, "%d of %d", page + 1, pages);
+    snprintf(p, sizeof p, TR("%d of %d"), page + 1, pages);
     ui::text(ui::font(ui::F_SMALL), 28, kListPrev.y + 34, p, fb, EPD_DRAW_ALIGN_LEFT, 0x40);
     auto btn = [&](const EpdRect& r, bool live, bool left) {
         const uint8_t c = live ? INK : 0xA0;
@@ -1261,8 +1332,7 @@ void renderMenu(int bi, uint8_t* fb) {
         const MenuItem& m = g_menu[i];
         char t[170];
         if (m.header) {
-            snprintf(t, sizeof t, "%s", m.title);
-            for (char* c = t; *c; ++c) if (*c >= 'a' && *c <= 'z') *c -= 32;
+            ui::upper(TR(m.title), t, sizeof t);
             fitText(ui::font(ui::F_TINY), t, W - 48);
             ui::text(ui::font(ui::F_TINY), 24, y + 38, t, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
         } else {
@@ -1311,7 +1381,7 @@ void renderBigBar(uint8_t* fb) {
     const char* az = "Browse A\xE2\x80\x93Z";
     ui::text(f, kBigAZ.x, kBigAZ.y + 30, az, fb, EPD_DRAW_ALIGN_LEFT, INK);
     epd_fill_rect({kBigAZ.x, kBigAZ.y + 37, ui::textWidth(f, az), 2}, INK, fb);
-    ui::text(f, kBigRandom.x, kBigRandom.y + 30, "Random page", fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(f, kBigRandom.x, kBigRandom.y + 30, TR("Random page"), fb, EPD_DRAW_ALIGN_LEFT, INK);
     epd_fill_rect({kBigRandom.x, kBigRandom.y + 37, ui::textWidth(f, "Random page"), 2}, INK, fb);
 }
 
@@ -1319,16 +1389,16 @@ void renderBook(uint8_t* fb) {
     const int bi = g_open;
     renderBookHead(bi, fb);
     char lbl[64];
-    snprintf(lbl, sizeof lbl, "Search %s", shortName(bi));
+    snprintf(lbl, sizeof lbl, TR("Search %s"), shortName(bi));
     searchBar(kBookSearch, lbl, fb);
     findMenu(bi);
     if (!g_bookAZ && (g_menuCount || bigBook(bi))) {
         if (bigBook(bi)) renderBigBar(fb);
         if (g_menuCount) renderMenu(bi, fb);
-        else ui::text(ui::font(ui::F_SMALL), W / 2, BODY_Y + 140, "Search above, or browse A-Z.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        else ui::text(ui::font(ui::F_SMALL), W / 2, BODY_Y + 140, TR("Search above, or browse A-Z."), fb, EPD_DRAW_ALIGN_CENTER, INK);
         return;
     }
-    ui::text(ui::font(ui::F_TINY), 24, BODY_Y - 14, "BROWSE A\xE2\x80\x93Z", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    ui::text(ui::font(ui::F_TINY), 24, BODY_Y - 14, TR("BROWSE A\xE2\x80\x93Z"), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     for (int i = 0; i < letterCount(bi); ++i) {
         const EpdRect r = letterRect(bi, i);
         frame(r, 2, fb);
@@ -1401,7 +1471,7 @@ void findKids(int bi) {
         Kid& k = g_kids[g_kidCount];
         if (g_kidCount == MAX_KIDS - 1) {          // the rest, together
             k.from = pos; k.to = lv.to; k.more = true;
-            snprintf(k.label, sizeof k.label, "MORE");
+            snprintf(k.label, sizeof k.label, TR("MORE"));
             ++g_kidCount;
             break;
         }
@@ -1413,7 +1483,7 @@ void findKids(int bi) {
             keyLabel(lv.key, L, "", k.label, sizeof k.label);
         } else if (!lv.group && oddLetter(bi, rec[L])) {   // letters of another alphabet: one tab
             if (cyrillicBook(bi) && rec[L] < 0xD0) { key[L] = (char)0xD0; kl = L + 1; } else kl = 0;
-            snprintf(k.label, sizeof k.label, "OTHER");
+            snprintf(k.label, sizeof k.label, TR("OTHER"));
         } else if (!lv.group && rec[L] > ' ' && rec[L] < 'a') {   // signs and digits: one tab each kind
             const bool digit = rec[L] >= '0' && rec[L] <= '9';
             key[L] = digit ? ':' : rec[L] < '0' ? '0' : 'a';
@@ -1519,7 +1589,7 @@ void renderLetter(uint8_t* fb) {
     countText(n, cnt, sizeof cnt);
     snprintf(h, sizeof h, "%s", lv.label);
     ui::text(ui::font(ui::F_TITLE), 20, kBookSearch.y + 50, h, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    snprintf(h, sizeof h, "%s title%s%s", cnt, n == 1 ? "" : "s", g_kidCount ? " - pick the next letters" : "");
+    snprintf(h, sizeof h, TRN(n, "%s title%s", "%s titles%s"), cnt, g_kidCount ? TR(" - pick the next letters") : "");
     ui::text(ui::font(ui::F_TINY), W - 16, kBookSearch.y + 48, h, fb, EPD_DRAW_ALIGN_RIGHT, INK);
     if (g_kidCount) {
         for (int i = 0; i < g_kidCount; ++i) {
@@ -1558,7 +1628,7 @@ void renderLetter(uint8_t* fb) {
     }
     if (f) f.close();
     sdUnlock();
-    if (!n) ui::text(ui::font(ui::F_SMALL), W / 2, BODY_Y + 120, "nothing under this letter", fb, EPD_DRAW_ALIGN_CENTER, INK);
+    if (!n) ui::text(ui::font(ui::F_SMALL), W / 2, BODY_Y + 120, TR("nothing under this letter"), fb, EPD_DRAW_ALIGN_CENTER, INK);
     pagerRow(g_listPage, pages, fb);
 }
 bool openRecord(int bi, uint32_t i) {
@@ -1583,8 +1653,8 @@ void renderRecent(uint8_t* fb) {
     tabs(2, fb);
     loadRecent();
     if (!g_recentCount) {
-        ui::text(ui::font(ui::F_LABEL), W / 2, TOP + 300, "Nothing read yet", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 344, "Pages you open show up here.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_LABEL), W / 2, TOP + 300, TR("Nothing read yet"), fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 344, TR("Pages you open show up here."), fb, EPD_DRAW_ALIGN_CENTER, INK);
         return;
     }
     const int per = recentRows(), pages = (g_recentCount + per - 1) / per;
@@ -1607,11 +1677,11 @@ void renderRecent(uint8_t* fb) {
 void renderHome(uint8_t* fb) {
     tabs(1, fb);
     char lbl[48];
-    snprintf(lbl, sizeof lbl, "Search all %d books", g_bookCount);
+    snprintf(lbl, sizeof lbl, TRN(g_bookCount, "Search the %d book", "Search all %d books"), g_bookCount);
     searchBar(kAllSearch, lbl, fb);
     // EMERGENCY: straight to the page that matters.
     if (g_emergCount) {
-        ui::text(ui::font(ui::F_TINY), 24, EM_Y + 18, "EMERGENCY", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        ui::text(ui::font(ui::F_TINY), 24, EM_Y + 18, TR("EMERGENCY"), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
         for (int i = 0; i < g_emergCount; ++i) {
             const EpdRect r = emergRect(i);
             ui::fillRound(r, 8, INK, fb);
@@ -1628,8 +1698,8 @@ void renderHome(uint8_t* fb) {
         const int isz = r.height > 150 ? 70 : r.height > 125 ? 58 : 50;
         doba_icons::draw(g_secs[i].icon, r.x + r.width / 2, r.y + r.height / 2 - 16, isz, INK, PAPER, fb);
         const EpdFont* f = ui::font(ui::F_SMALL);
-        if (ui::textWidth(f, g_secs[i].name) > r.width - 12) f = ui::font(ui::F_TINY);
-        ui::text(f, r.x + r.width / 2, r.y + r.height - 16, g_secs[i].name, fb, EPD_DRAW_ALIGN_CENTER, INK);
+        if (ui::textWidth(f, TR(g_secs[i].name)) > r.width - 12) f = ui::font(ui::F_TINY);
+        ui::text(f, r.x + r.width / 2, r.y + r.height - 16, TR(g_secs[i].name), fb, EPD_DRAW_ALIGN_CENTER, INK);
         if (g_secs[i].n) {
             char c[8];
             snprintf(c, sizeof c, "%d", g_secs[i].n);
@@ -1663,12 +1733,17 @@ void bookTag(int bi, int xr, int y, uint8_t fg, uint8_t* fb) {
 void renderSection(uint8_t* fb) {
     const Section& x = g_secs[g_sec];
     doba_icons::draw(x.icon, 64, TOP + 60, 84, INK, PAPER, fb);
-    ui::text(ui::font(ui::F_TITLE), 124, TOP + 58, x.name, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(ui::font(ui::F_TITLE), 124, TOP + 58, TR(x.name), fb, EPD_DRAW_ALIGN_LEFT, INK);
     char sub[64];
     int nb = 0;
     for (int i = 0; i < g_bookCount; ++i) if (x.books & (1u << i)) ++nb;
-    if (x.n) snprintf(sub, sizeof sub, "%d guides · %d book%s", x.n, nb, nb == 1 ? "" : "s");
-    else snprintf(sub, sizeof sub, "%d book%s · search inside", nb, nb == 1 ? "" : "s");
+    if (x.n) {
+        char a[48], bk[48];
+        snprintf(a, sizeof a, TRN(x.n, "%d guide", "%d guides"), x.n);
+        snprintf(bk, sizeof bk, TRN(nb, "%d book", "%d books"), nb);
+        snprintf(sub, sizeof sub, "%s \xC2\xB7 %s", a, bk);
+    }
+    else snprintf(sub, sizeof sub, TRN(nb, "%d book · search inside", "%d books · search inside"), nb);
     ui::text(ui::font(ui::F_SMALL), 124, TOP + 94, sub, fb, EPD_DRAW_ALIGN_LEFT, INK);
     epd_fill_rect({14, TOP + SEC_HEAD - 8, W - 28, 3}, INK, fb);
     int y = TOP + SEC_HEAD;
@@ -1689,7 +1764,7 @@ void renderSection(uint8_t* fb) {
         if (start) {
             frame({14, y, W - 28, h}, 3, fb);
             epd_fill_rect({14, y, 140, 26}, INK, fb);
-            ui::text(nf, 26, y + 19, "START HERE", fb, EPD_DRAW_ALIGN_LEFT, PAPER);
+            ui::text(nf, 26, y + 19, TR("START HERE"), fb, EPD_DRAW_ALIGN_LEFT, PAPER);
         } else {
             ui::text(nf, x0, y + 20, n, fb, EPD_DRAW_ALIGN_LEFT, INK);
         }
@@ -1747,14 +1822,14 @@ void renderSection(uint8_t* fb) {
         ++idx;
     }
     if (!x.n) {
-        ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 300, "No guides picked for this yet.", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 334, "Search its books below.", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 300, TR("No guides picked for this yet."), fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), W / 2, TOP + 334, TR("Search its books below."), fb, EPD_DRAW_ALIGN_CENTER, INK);
     }
     // footer: pages and search
     const int pages = secPages(x);
     frame(kSecSearch, 3, fb);
     doba_icons::draw(doba_icons::I_SEARCH, kSecSearch.x + 36, kSecSearch.y + 38, 34, INK, PAPER, fb);
-    ui::text(ui::font(ui::F_SMALL), kSecSearch.x + 64, kSecSearch.y + 46, "SEARCH HERE", fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(ui::font(ui::F_SMALL), kSecSearch.x + 64, kSecSearch.y + 46, TR("SEARCH HERE"), fb, EPD_DRAW_ALIGN_LEFT, INK);
     if (pages > 1) {
         frame(kSecPrev, 2, fb);
         frame(kSecNext, 2, fb);
@@ -1777,9 +1852,9 @@ void renderSearchView(kbd::Keyboard& k, uint8_t* fb) {
     k.top = H - k.height();
     k.enterLabel = "OPEN";
     char line[96];
-    if (g_scopeBook >= 0) snprintf(line, sizeof line, "In %s  \xC2\xB7  search all books instead", shortName(g_scopeBook));
-    else if (g_scope < 0) snprintf(line, sizeof line, "In all %d books", g_bookCount);
-    else snprintf(line, sizeof line, "In %s  \xC2\xB7  search all books instead", g_secs[g_scope].name);
+    if (g_scopeBook >= 0) snprintf(line, sizeof line, TR("In %s  \xC2\xB7  search all books instead"), shortName(g_scopeBook));
+    else if (g_scope < 0) snprintf(line, sizeof line, TRN(g_bookCount, "In the %d book", "In all %d books"), g_bookCount);
+    else snprintf(line, sizeof line, TR("In %s  \xC2\xB7  search all books instead"), TR(g_secs[g_scope].name));
     fitText(ui::font(ui::F_SMALL), line, kScope.width - 8);
     ui::text(ui::font(ui::F_SMALL), kScope.x + 4, kScope.y + 34, line, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     ui::frameRound(kQuery, 8, 2, fb);
@@ -1788,7 +1863,7 @@ void renderSearchView(kbd::Keyboard& k, uint8_t* fb) {
     if (k.text[0])
         ui::text(ui::font(ui::F_KEY), kQuery.x + 18, kQuery.y + 44, q, fb, EPD_DRAW_ALIGN_LEFT, INK);
     else
-        ui::text(ui::font(ui::F_SMALL), kQuery.x + 18, kQuery.y + 40, "Type the start of a title", fb,
+        ui::text(ui::font(ui::F_SMALL), kQuery.x + 18, kQuery.y + 40, TR("Type the start of a title"), fb,
                  EPD_DRAW_ALIGN_LEFT, ui::GREY);
     char key[KEY + 1];
     fold(k.text, key, sizeof key);
@@ -1810,10 +1885,10 @@ void renderSearchView(kbd::Keyboard& k, uint8_t* fb) {
         epd_fill_rect({24, y + RES_H - 1, W - 48, 1}, ui::HAIR, fb);
     }
     if (key[0] && g_resultCount == 0)
-        ui::text(ui::font(ui::F_SMALL), 24, RES_TOP + 50, "Nothing starts with that", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        ui::text(ui::font(ui::F_SMALL), 24, RES_TOP + 50, TR("Nothing starts with that"), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     if (!key[0]) {
-        ui::text(ui::font(ui::F_SMALL), 24, RES_TOP + 50, "For example: water, burn, knot, вогнище", fb, EPD_DRAW_ALIGN_LEFT, 0x40);
-        ui::text(ui::font(ui::F_SMALL), 24, RES_TOP + 80, "Case and accents don\u2019t matter", fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        ui::text(ui::font(ui::F_SMALL), 24, RES_TOP + 50, TR("For example: water, burn, knot, вогнище"), fb, EPD_DRAW_ALIGN_LEFT, 0x40);
+        ui::text(ui::font(ui::F_SMALL), 24, RES_TOP + 80, TR("Case and accents don\u2019t matter"), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     }
     k.render(fb);
 }
@@ -1904,10 +1979,12 @@ void footer(const char* left, const char* mid, const char* midSub, const char* r
             epd_draw_line(cx + d * 4 + t, cy, cx - d * 5 + t, cy + 9, INK, fb);
         }
     };
-    char l[16], r[16];
+    char l[48], r[48];
     auto titled = [](const char* w, char* out) {   // "PREV" -> "Prev"
-        snprintf(out, 16, "%s", w);
-        for (char* c = out + 1; *c; ++c) if (*c >= 'A' && *c <= 'Z') *c += 32;
+        static const struct { const char* a; const char* b; } k[] = {
+            {"PREV", "Prev"}, {"NEXT", "Next"}, {"CLOSE", "Close"}, {"UP", "Up"}, {"DOWN", "Down"}};
+        for (const auto& e : k) if (!strcmp(w, e.a)) w = e.b;
+        snprintf(out, 48, "%s", TR(w));
     };
     if (left) {
         titled(left, l);
@@ -1922,17 +1999,17 @@ void footer(const char* left, const char* mid, const char* midSub, const char* r
     }
     char m[32];
     snprintf(m, sizeof m, "%s", mid);
-    if (!strcmp(mid, "CLOSE")) snprintf(m, sizeof m, "Close");
+    if (!strcmp(mid, "CLOSE")) snprintf(m, sizeof m, TR("Close"));
     ui::text(ui::font(ui::F_SMALL), W / 2, fy + (midSub ? 34 : 44), m, fb, EPD_DRAW_ALIGN_CENTER, 0x30);
     if (midSub) {
-        char ms[24];
-        snprintf(ms, sizeof ms, "%s", !strcmp(midSub, "CONTENTS") ? "Contents" : midSub);
+        char ms[48];
+        snprintf(ms, sizeof ms, "%s", !strcmp(midSub, "CONTENTS") ? TR("Contents") : midSub);
         ui::text(ui::font(ui::F_TINY), W / 2, fy + 58, ms, fb, EPD_DRAW_ALIGN_CENTER, ui::GREY);
     }
 }
 
 void renderToc(uint8_t* fb) {
-    ui::text(ui::font(ui::F_LABEL), MARGIN, TOP + 34, "Contents", fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(ui::font(ui::F_LABEL), MARGIN, TOP + 34, TR("Contents"), fb, EPD_DRAW_ALIGN_LEFT, INK);
     epd_fill_rect({MARGIN, TOP + 52, W - 2 * MARGIN, 1}, ui::HAIR, fb);
     const int per = tocRowsPerPage();
     if (g_tocPage >= tocPages()) g_tocPage = tocPages() - 1;
@@ -1978,7 +2055,7 @@ void renderArticle(uint8_t* fb) {
     char crumb[KEY + 40];
     const View from = g_view == V_SEARCH ? g_searchFrom : g_view;
     if (from == V_SECTION)
-        snprintf(crumb, sizeof crumb, "%s  \xE2\x80\xBA  %s", g_secs[g_sec].name, g_title);
+        snprintf(crumb, sizeof crumb, "%s  \xE2\x80\xBA  %s", TR(g_secs[g_sec].name), g_title);
     else if (from == V_BOOK || from == V_LETTER || (g_view == V_SEARCH && g_scopeBook >= 0))
         snprintf(crumb, sizeof crumb, "%s  \xE2\x80\xBA  %s", shortName(g_current.book >= 0 ? g_current.book : g_open), g_title);
     else
@@ -1997,7 +2074,7 @@ void renderArticle(uint8_t* fb) {
         }
     }
     ui::text(cf, MARGIN, TOP + 32, crumb, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
-    ui::text(ui::font(ui::F_LABEL), kSizeBtn.x + kSizeBtn.width - 4, kSizeBtn.y + 28, "Aa", fb, EPD_DRAW_ALIGN_RIGHT, INK);
+    ui::text(ui::font(ui::F_LABEL), kSizeBtn.x + kSizeBtn.width - 4, kSizeBtn.y + 28, TR("Aa"), fb, EPD_DRAW_ALIGN_RIGHT, INK);
     // A hairline that is also the progress: black for the part read.
     epd_fill_rect({MARGIN, TOP + 50, W - 2 * MARGIN, 1}, ui::HAIR, fb);
     epd_fill_rect({MARGIN, TOP + 49, (W - 2 * MARGIN) * (g_page + 1) / g_pageCount, 3}, INK, fb);
@@ -2027,6 +2104,7 @@ void renderArticle(uint8_t* fb) {
         size_t n = l.len < sizeof buf - 1 ? l.len : sizeof buf - 1;
         memcpy(buf, g_text + l.off, n);
         buf[n] = 0;
+        if (l.hyph && n + 1 < sizeof buf) { buf[n] = '-'; buf[n + 1] = 0; }
         int x = MARGIN;
         // First line of a bullet gets the bullet; continuation lines indent.
         if (l.kind == 'B') {
@@ -2038,7 +2116,7 @@ void renderArticle(uint8_t* fb) {
             x += BULLET_IN;
         }
         const EpdFont* f = fontFor(l.kind);
-        ui::text(f, x, y + h - baselineOf(l.kind), buf, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(f, x, y + h - baselineOf(l.kind), buf, fb, EPD_DRAW_ALIGN_LEFT, l.kind == 'C' ? 0x50 : INK);
         if (l.kind == 'F' && firstLineOf(l)) epd_fill_rect({MARGIN, y - 4, 60, 1}, INK, fb);
         // Links on this line: underlined, and remembered for taps.
         const uint32_t ls = l.off, le = l.off + l.len;
@@ -2048,8 +2126,11 @@ void renderArticle(uint8_t* fb) {
             const uint32_t a = L.start > ls ? L.start : ls, b = L.end < le ? L.end : le;
             const int x0 = x + widthOf(f, g_text + ls, a - ls);
             const int x1 = x + widthOf(f, g_text + ls, b - ls);
-            const int ul = y + h - baselineOf(l.kind) + 4;      // just under the baseline
-            epd_fill_rect({x0, ul, x1 - x0, 3}, INK, fb);
+            // A thin grey rule just under the baseline: a page of Wikipedia is
+            // half links, and heavy black underlines made it hard to read.
+            const int ul = y + h - baselineOf(l.kind) + 4;
+            epd_fill_rect({x0, ul, x1 - x0, 1}, 0x50, fb);
+            epd_fill_rect({x0, ul + 1, x1 - x0, 1}, 0xA0, fb);
             if (g_hotCount < MAX_HOT)
                 g_hot[g_hotCount++] = {(int16_t)x0, (int16_t)y, (int16_t)x1, (int16_t)(y + h), j};
         }
@@ -2075,8 +2156,8 @@ void renderSearch(kbd::Keyboard& k, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     if (g_bookCount <= 0) {
         doba_icons::draw(doba_icons::I_SHELF, W / 2, 300, 120, INK, PAPER, fb);
-        ui::text(ui::font(ui::F_TITLE), W / 2, 430, "NO BOOKS", fb, EPD_DRAW_ALIGN_CENTER, INK);
-        ui::text(ui::font(ui::F_SMALL), W / 2, 474, "copy books to /doba/lib on the card", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_TITLE), W / 2, 430, TR("NO BOOKS"), fb, EPD_DRAW_ALIGN_CENTER, INK);
+        ui::text(ui::font(ui::F_SMALL), W / 2, 474, TR("copy books to /doba/lib on the card"), fb, EPD_DRAW_ALIGN_CENTER, INK);
         return;
     }
     switch (g_view) {
@@ -2101,7 +2182,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
     switch (g_view) {
         case V_SHELF: {
             if (hit(kTabs, x, y)) { const int t = tabAt(x); g_view = t == 1 ? V_HOME : t == 2 ? V_RECENT : V_SHELF; g_listPage = 0; return false; }
-            if (hit(kAllSearch, x, y)) { g_scope = -1; g_scopeBook = -1; g_searchFrom = V_SHELF; g_view = V_SEARCH; k.clear(); return false; }
+            if (hit(kAllSearch, x, y)) { g_scope = -1; g_scopeBook = -1; g_searchFrom = V_SHELF; g_view = V_SEARCH; k.clear(); if (i18n::lang() == i18n::UK) k.layout = k.lastLetters = kbd::UA; return false; }
             if (shelfPages() > 1 && hit(kListPrev, x, y)) { if (g_shelfPage > 0) --g_shelfPage; return false; }
             if (shelfPages() > 1 && hit(kListNext, x, y)) { if (g_shelfPage + 1 < shelfPages()) ++g_shelfPage; return false; }
             const int b = shelfHit(x, y);
@@ -2110,7 +2191,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
         }
         case V_BOOK: {
             const int bi = g_open;
-            if (hit(kBookSearch, x, y)) { g_scope = -1; g_scopeBook = bi; g_searchFrom = V_BOOK; g_view = V_SEARCH; k.clear(); return false; }
+            if (hit(kBookSearch, x, y)) { g_scope = -1; g_scopeBook = bi; g_searchFrom = V_BOOK; g_view = V_SEARCH; k.clear(); if (i18n::lang() == i18n::UK) k.layout = k.lastLetters = kbd::UA; return false; }
             findMenu(bi);
             if (!g_bookAZ && (g_menuCount || bigBook(bi))) {
                 if (bigBook(bi) && hit(kBigAZ, x, y)) { g_bookAZ = true; return false; }
@@ -2197,7 +2278,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
         }
         case V_HOME:
             if (hit(kTabs, x, y)) { const int t = tabAt(x); g_view = t == 1 ? V_HOME : t == 2 ? V_RECENT : V_SHELF; g_listPage = 0; return false; }
-            if (hit(kAllSearch, x, y)) { g_scope = -1; g_scopeBook = -1; g_searchFrom = V_HOME; g_view = V_SEARCH; k.clear(); return false; }
+            if (hit(kAllSearch, x, y)) { g_scope = -1; g_scopeBook = -1; g_searchFrom = V_HOME; g_view = V_SEARCH; k.clear(); if (i18n::lang() == i18n::UK) k.layout = k.lastLetters = kbd::UA; return false; }
             for (int i = 0; i < g_emergCount; ++i)
                 if (hit(emergRect(i), x, y)) return openEntry(g_emerg[i].book, g_emerg[i].title);
             for (int i = 0; i < g_secCount; ++i)
@@ -2205,7 +2286,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
             return false;
         case V_SECTION: {
             const Section& sx = g_secs[g_sec];
-            if (hit(kSecSearch, x, y)) { g_scope = g_sec; g_scopeBook = -1; g_searchFrom = V_SECTION; g_view = V_SEARCH; k.clear(); return false; }
+            if (hit(kSecSearch, x, y)) { g_scope = g_sec; g_scopeBook = -1; g_searchFrom = V_SECTION; g_view = V_SEARCH; k.clear(); if (i18n::lang() == i18n::UK) k.layout = k.lastLetters = kbd::UA; return false; }
             const int pages = secPages(sx);
             if (pages > 1 && hit(kSecPrev, x, y)) { if (g_secPage > 0) --g_secPage; return false; }
             if (pages > 1 && hit(kSecNext, x, y)) { if (g_secPage + 1 < pages) ++g_secPage; return false; }
@@ -2264,7 +2345,7 @@ bool libraryBack() {
 const char* libraryTitle() {
     switch (g_view) {
         case V_SECTION: return g_secs[g_sec].name;
-        case V_SEARCH: return "Search";
+        case V_SEARCH: return TR("Search");
         default: return "";        // the page names itself, big
     }
 }
@@ -2418,7 +2499,7 @@ void cycleSize() {
     g_page = 0;
     for (int k = 0; k < g_lineCount; ++k)
         if (g_lines[k].off >= at && g_lines[k].kind != 'G') { g_page = pageOfLine(k); break; }
-    g_note = kSizeName[g_size];
+    g_note = TR(kSizeName[g_size]);
     Serial.printf("[lib] text size %d pages=%d\n", g_size, g_pageCount);
 }
 

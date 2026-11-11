@@ -1,4 +1,5 @@
 // DOBA: military-style overlay for the topo map — see milspec.h.
+#include "doba_i18n.h"
 #include "milspec.h"
 #include "doba_points.h"
 #include "doba_dem.h"
@@ -433,7 +434,7 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
 
     char m[32];
     milgeo::mgrs(lat, lon, m, sizeof m);
-    ui::text(ui::monoFont(19), x0, top + 38, m[0] ? m : "MGRS --", fb, EPD_DRAW_ALIGN_LEFT, ink);
+    ui::text(ui::monoFont(19), x0, top + 38, m[0] ? m : TR("MGRS --"), fb, EPD_DRAW_ALIGN_LEFT, ink);
 
     char ll[64];
     const doba_points::Point* tp = doba_points::at(doba_points::target());
@@ -444,7 +445,7 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
         char mil[8], ds[16];
         milgeo::mils((float)b, milsSystem(), mil, sizeof mil);
         doba_points::formatDistance(d, ds, sizeof ds);
-        snprintf(ll, sizeof ll, "\xE2\x80\xBA %.12s  \xC2\xB7  az %s  \xC2\xB7  %s", tp->name, mil, ds);
+        snprintf(ll, sizeof ll, TR("\xE2\x80\xBA %.12s  \xC2\xB7  az %s  \xC2\xB7  %s"), tp->name, mil, ds);
         ui::fillRound({x0 - 8, top + 48, W - 2 * x0 + 16, 30}, 6, 0x00, fb);
         ui::text(ui::font(ui::F_SMALL), x0, top + 70, ll, fb, EPD_DRAW_ALIGN_LEFT, 0xFF);
     } else {
@@ -462,7 +463,7 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
                  sh[0] ? "" : "", fabs(lat), lat >= 0 ? 'N' : 'S', fabs(lon), lon >= 0 ? 'E' : 'W');
         if (sh[0]) {
             char say[40];
-            snprintf(say, sizeof say, "Say %s", sh);
+            snprintf(say, sizeof say, TR("Say %s"), sh);
             ui::text(ui::font(ui::F_SMALL), W - x0, top + 68, say, fb, EPD_DRAW_ALIGN_RIGHT, 0x30);
         }
         ui::text(ui::font(ui::F_SMALL), x0, top + 68, ll, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
@@ -478,9 +479,9 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     else snprintf(v1, sizeof v1, "--");
     // course over ground means nothing standing still: shown from walking pace
     if (fix && s.gpsSpeedKmh >= 2.0f) milgeo::mils(s.courseDeg, milsSystem(), v2, sizeof v2);
-    else snprintf(v2, sizeof v2, fix ? "standing" : "--");
+    else snprintf(v2, sizeof v2, fix ? TR("standing") : "--");
     if (fix) snprintf(v3, sizeof v3, "%d", s.satellites);
-    else snprintf(v3, sizeof v3, "no fix \xC2\xB7 %d", s.satellites);
+    else snprintf(v3, sizeof v3, TR("no fix \xC2\xB7 %d"), s.satellites);
     const char* caps[3] = {c1, "Course", "Satellites"};
     if (cross) {   // the cross: how far and which way from you (or from A), its height
         const bool fromA = measureOn();

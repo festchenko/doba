@@ -1,3 +1,4 @@
+#include "doba_i18n.h"
 #include "map_view.h"
 #include "topo_layer.h"   // DOBA
 #include "milspec.h"      // DOBA
@@ -644,7 +645,7 @@ void drawScaleBar(float metersPerPixel, bool miles, uint8_t* fb) {
         int meters = targets[0];
         for (int t : targets) if (t / metersPerPixel <= 160) meters = t;
         barM = meters;
-        if (meters >= 1000) snprintf(buf, sizeof(buf), "%d km", meters / 1000);
+        if (meters >= 1000) snprintf(buf, sizeof(buf), TR("%d km"), meters / 1000);
         else snprintf(buf, sizeof(buf), "%d m", meters);
     }
     int px = (int)(barM / metersPerPixel);
@@ -772,9 +773,9 @@ void ui_render_map_layers(uint16_t mask, uint8_t* fb) {
     // What the switches do and do not do — so a rider who turns everything on
     // and sees nothing knows the tiles are the missing piece, not the setting.
     const int fy = kMapLayersRowTop + kMapLayerCount * kMapLayersRowH + 44;
-    ui::text(&Arial_L, W / 2, fy, "Shown on the map when the downloaded", fb,
+    ui::text(&Arial_L, W / 2, fy, TR("Shown on the map when the downloaded"), fb,
              EPD_DRAW_ALIGN_CENTER, 0x00);
-    ui::text(&Arial_L, W / 2, fy + 30, "tiles include them. Home to go back.", fb,
+    ui::text(&Arial_L, W / 2, fy + 30, TR("tiles include them. Home to go back."), fb,
              EPD_DRAW_ALIGN_CENTER, 0x00);
 }
 
@@ -971,9 +972,9 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
             head = "SD CARD UNREADABLE";
             sub = "Reformat it as FAT32 (not exFAT)";
         }
-        ui::text(&Arial_B, bx + bw / 2, by + 38, head, fb, EPD_DRAW_ALIGN_CENTER,
+        ui::text(&Arial_B, bx + bw / 2, by + 38, TR(head), fb, EPD_DRAW_ALIGN_CENTER,
                  0x00);
-        ui::text(&Arial_L, bx + bw / 2, by + 70, sub, fb, EPD_DRAW_ALIGN_CENTER,
+        ui::text(&Arial_L, bx + bw / 2, by + 70, TR(sub), fb, EPD_DRAW_ALIGN_CENTER,
                  0x00);
     }
 
@@ -984,7 +985,7 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
     // Label when the map is centered on the phone's position (device GPS cold).
     // No background box by request — just the text.
     if (map.phonePosition) {
-        ui::text(&Arial_L, 21, ui::STATUS_H + 28, "PHONE GPS", fb,
+        ui::text(&Arial_L, 21, ui::STATUS_H + 28, TR("PHONE GPS"), fb,
                  EPD_DRAW_ALIGN_LEFT, 0x00);
     }
 
@@ -1015,7 +1016,7 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
 
     // Status bar drawn after the map (epdiy has no clipping)
     epd_fill_rect({0, 0, W, ui::STATUS_H - 3}, 0xFF, fb);
-    ui::statusBarBack(s, fb, "Map");   // DOBA: BACK to home like every page
+    ui::statusBarBack(s, fb, TR("Map"));   // DOBA: BACK to home like every page
 
     // DOBA: a sheet-style header over the topo map: the place, how far from
     // it, and the scale as on a paper map (1:N at this screen's pixel pitch).
@@ -1049,7 +1050,7 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
                 ui::text(ui::font(ui::F_TINY), 24, y0 + 44, sub, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
             }
         } else {
-            ui::text(ui::font(ui::F_SMALL), 24, y0 + 34, "Topo map", fb, EPD_DRAW_ALIGN_LEFT, ui::INK);
+            ui::text(ui::font(ui::F_SMALL), 24, y0 + 34, TR("Topo map"), fb, EPD_DRAW_ALIGN_LEFT, ui::INK);
         }
     }
 

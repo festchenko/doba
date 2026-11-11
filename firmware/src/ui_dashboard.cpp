@@ -30,6 +30,7 @@
 #include "stealth.h"      // DOBA
 #include "milspec.h"      // DOBA
 #include "vfont.h"        // DOBA: font cache stats
+#include "doba_i18n.h"    // DOBA: lang command
 #include "doba_points.h" // DOBA
 #include "doba_dem.h"    // DOBA
 #include "doba_library.h" // DOBA
@@ -3483,11 +3484,13 @@ static void runConsoleLine(char* line) {
         ble_sensors::setScanAlways(on);
         if (on) ble_sensors::noteActivity();
         Serial.printf("[cmd] sensor scan %s — 'sensors' lists what it hears\n", on ? "ON" : "off");
+    } else if (!strcasecmp(cmd, "lang") && arg) {   // DOBA: lang en|uk
+        i18n::setLang(!strcasecmp(arg, "uk") ? i18n::UK : i18n::EN);
     } else if (!strcasecmp(cmd, "libopen") && arg) {   // DOBA: libopen <title>, the rest of the line
         char t[160];
         const char* rest = strtok(nullptr, "");
         snprintf(t, sizeof t, "%s%s%s", arg, rest ? " " : "", rest ? rest : "");
-        if (doba_lib::openTitle(t)) screen = SCREEN_LIBRARY;
+        if (doba_lib::openTitle(t)) screen = SCREEN_ARTICLE;
     } else if (!strcasecmp(cmd, "screen")) {
         if (!arg) { Serial.println("[cmd] screen <map|dash|menu|settings|gps|layers>"); return; }
         if      (!strcasecmp(arg, "map"))      screen = SCREEN_MAP;
@@ -4443,7 +4446,7 @@ void task(void*) {
                     v.second = d.second;
                     v.useMiles = settings::useMiles();
                     ui_render_gps_debug(v, fb);
-                    ui::statusBarBack(s, fb, "GPS DEBUG");
+                    ui::statusBarBack(s, fb, TR("GPS details"));
                     break;
                 }
             }

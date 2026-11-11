@@ -1,5 +1,6 @@
 // DOBA: on-screen keyboard — see doba_keyboard.h.
 #include "doba_keyboard.h"
+#include "doba_i18n.h"
 
 #include <algorithm>
 #include <cstring>
@@ -54,7 +55,7 @@ void upper(char* ch) {
     }
 }
 
-struct Key { int x, y, w, h; char label[8]; int kind; };   // kind: 0 char, 1 shift, 2 del, 3 sym, 4 lang, 5 space, 6 enter
+struct Key { int x, y, w, h; char label[24]; int kind; };   // kind: 0 char, 1 shift, 2 del, 3 sym, 4 lang, 5 space, 6 enter
 
 Key mk(int x, int y, int w, int h, const char* label, int kind) {
     Key k;
@@ -160,8 +161,8 @@ void Keyboard::render(uint8_t* fb) const {
         ui::fillRound(r, 7, dark ? 0x00 : k.kind == 0 ? 0xE6 : 0xC8, fb);
         if (!k.label[0]) continue;
         const EpdFont* f = ui::font(k.kind == 0 ? ui::F_KEY : ui::F_SMALL);
-        char lb[16];
-        ui::text(f, k.x + k.w / 2, k.y + k.h / 2 + (k.kind == 0 ? 12 : 8), k.kind == 0 ? k.label : ui::sentence(k.label, lb, sizeof lb), fb,
+        char lb[32];
+        ui::text(f, k.x + k.w / 2, k.y + k.h / 2 + (k.kind == 0 ? 12 : 8), k.kind == 0 ? k.label : ui::sentence(TR(k.label), lb, sizeof lb), fb,
                  EPD_DRAW_ALIGN_CENTER, dark ? 0xFF : 0x00);
     }
 }

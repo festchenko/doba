@@ -594,3 +594,19 @@ def test_long_cyrillic_chapter_titles_stay_apart_and_links_reach_each(doba, book
         since = doba.log_seq()
         doba.console("libopen " + t, 800)
         doba.wait_log(r"\[lib\] open '%s' " % re.escape(want), since=since)
+
+
+def test_ukrainian_interface_leaves_no_english_on_the_main_pages(doba):
+    """Language: Українська. Every page the simulator draws is checked for
+    words still in English (sim builds log them as '[i18n] drawn ...')."""
+    boot(doba)
+    doba.console("lang uk", 500)
+    allowed = re.compile(r"Doba \d+|LongFast|English|Language|MGRS|GPS|USB|UTC|SOS|abc|\d{4}")
+    since = doba.log_seq()
+    for s in ("home", "setup", "points", "mapopts", "sun", "sos", "more", "comms", "library"):
+        doba.console("screen " + s, 800)
+        time.sleep(1.0)
+    left = [l for l in doba.log(since) if "[i18n] drawn" in l and not allowed.search(l)
+            and not re.search("[\u0400-\u04ff]", l)]   # mixed lines (a callsign in Ukrainian) are fine
+    doba.console("lang en", 500)
+    assert not left, left

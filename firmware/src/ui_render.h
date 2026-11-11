@@ -152,6 +152,8 @@ void frameRound(const EpdRect& r, int rad, int t, uint8_t* fb, uint8_t color = 0
 const EpdFont* font(FontRole r);
 // DOBA: "RADIO MODE" -> "Radio mode"; strings with lower case, and acronyms
 // (GPS, USB, SOS...), stay as they are. Returns out.
+// Capitals, Cyrillic too ("місця" -> "МІСЦЯ").
+void upper(const char* in, char* out, size_t n);
 const char* sentence(const char* in, char* out, size_t n);
 // DOBA: digits at a given ink height: mono (JetBrains Mono 700) or heavy (800).
 const EpdFont* monoFont(int digitPx);

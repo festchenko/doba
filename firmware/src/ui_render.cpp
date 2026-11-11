@@ -1,3 +1,4 @@
+#include "doba_i18n.h"
 #include "ui_render.h"
 #include "stealth.h"
 #include "doba_topo_bg.h"
@@ -59,6 +60,27 @@ namespace ui {
 
 void text(const EpdFont* font, int x, int y, const char* str, uint8_t* fb,
           EpdFontFlags align, uint8_t color) {
+#ifdef OTP_SIM
+    // DOBA: in Ukrainian, the simulator lists every drawn string that still
+    // has English words in it (the i18n check; content shows up here too).
+    if (str && i18n::lang() == i18n::UK) {
+        int run = 0;
+        bool hit = false;
+        for (const char* c = str; *c && !hit; ++c) {
+            run = ((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z')) ? run + 1 : 0;
+            hit = run >= 3;
+        }
+        if (hit) {
+            static uint32_t seen[512];
+            uint32_t h = 2166136261u;
+            for (const char* c = str; *c; ++c) h = (h ^ (uint8_t)*c) * 16777619u;
+            bool dup = false;
+            for (uint32_t v : seen) dup |= v == h;
+            static int k = 0;
+            if (!dup) { seen[k++ % 512] = h; Serial.printf("[i18n] drawn '%s'\n", str); }
+        }
+    }
+#endif
     EpdFontProperties props = epd_font_properties_default();
     props.flags = align;
     props.fg_color = color >> 4;
@@ -206,7 +228,7 @@ void statusBarBack(const RideState& s, uint8_t* fb, const char* title) {
         epd_draw_line(cx + 9 + t, cy - 10, cx + t, cy, FG, fb);
         epd_draw_line(cx + t, cy, cx + 9 + t, cy + 10, FG, fb);
     }
-    text(fb2, cx + 18, base, "Back", fb, EPD_DRAW_ALIGN_LEFT, FG);
+    text(fb2, cx + 18, base, TR("Back"), fb, EPD_DRAW_ALIGN_LEFT, FG);
     char clock[10];
     formatClock(clock, sizeof(clock), s);
     char right[32];
@@ -243,11 +265,11 @@ void statusBar(const RideState& s, uint8_t* fb, const char* title) {
     // right: what matters about the device, in grey, worst news first
     char right[64];
     const char* flag = nullptr;
-    if (s.sdCard == SD_CARD_UNREADABLE) flag = "SD error";
-    else if (s.sdCard != SD_CARD_OK) flag = "No SD";
-    char gps[16];
-    if (s.gpsFix) snprintf(gps, sizeof gps, "GPS %u", (unsigned)s.satellites);
-    else snprintf(gps, sizeof gps, "No fix");
+    if (s.sdCard == SD_CARD_UNREADABLE) flag = TR("SD error");
+    else if (s.sdCard != SD_CARD_OK) flag = TR("No SD");
+    char gps[32];
+    if (s.gpsFix) snprintf(gps, sizeof gps, TR("GPS %u"), (unsigned)s.satellites);
+    else snprintf(gps, sizeof gps, "%s", TR("No fix"));
     char bat[12];
     if (s.batteryPercent == 0) snprintf(bat, sizeof bat, "--%%");
     else snprintf(bat, sizeof bat, "%u%%%s", s.batteryPercent, s.charging ? "+" : "");
@@ -2161,12 +2183,12 @@ static int sheetHead(const char* label, const char* hero, const char* detail,
 
 void ui_render_power_sheet(bool recording, uint8_t* fb) {
     sheetShell(fb);
-    sheetHead("POWER", "SHUT DOWN?",
-              recording ? "A track is recording — it will be saved first."
-                        : "Sleeps until you press the button.",
+    sheetHead(TR("Power"), TR("SHUT DOWN?"),
+              recording ? TR("A track is recording — it will be saved first.")
+                        : TR("Sleeps until you press the button."),
               fb);
-    sheetButton(kPowerShutdown, "SHUT DOWN", true, fb);
-    sheetButton(kPowerCancel, "CANCEL", false, fb);
+    sheetButton(kPowerShutdown, TR("SHUT DOWN"), true, fb);
+    sheetButton(kPowerCancel, TR("CANCEL"), false, fb);
 }
 
 // Same sheet, same two button rows, for the fixed-pairing unpair. Destructive
@@ -4083,6 +4105,23 @@ void ui::fillRound(const EpdRect& r, int rad, uint8_t color, uint8_t* fb) {
 void ui::frameRound(const EpdRect& r, int rad, int t, uint8_t* fb, uint8_t color, uint8_t inside) {
     fillRound(r, rad, color, fb);
     fillRound({r.x + t, r.y + t, r.width - 2 * t, r.height - 2 * t}, rad - t, inside, fb);
+}
+
+// Capitals for a section head, Cyrillic too (the table keeps one spelling
+// for a word used as a head and as a caption).
+void ui::upper(const char* in, char* out, size_t n) {
+    size_t o = 0;
+    for (const uint8_t* p = (const uint8_t*)in; *p && o + 3 < n;) {
+        uint8_t a = p[0], b = p[1];
+        if (a < 0x80) { out[o++] = (a >= 'a' && a <= 'z') ? a - 32 : a; ++p; continue; }
+        if (a == 0xD0 && b >= 0xB0 && b <= 0xBF) b -= 0x20;                    // а..п
+        else if (a == 0xD1 && b >= 0x80 && b <= 0x8F) { a = 0xD0; b += 0x20; }  // р..я
+        else if (a == 0xD1 && b >= 0x90 && b <= 0x9F) { a = 0xD0; b -= 0x10; }  // ѐ..џ: є і ї
+        else if (a == 0xD2 && b == 0x91) b = 0x90;                                 // ґ
+        if (b && (a & 0xE0) == 0xC0) { out[o++] = a; out[o++] = b; p += 2; continue; }
+        out[o++] = *p++;
+    }
+    out[o] = 0;
 }
 
 const char* ui::sentence(const char* in, char* out, size_t n) {

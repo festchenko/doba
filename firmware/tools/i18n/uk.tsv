@@ -1,0 +1,462 @@
+# The interface in Ukrainian. English (as in the source, C escapes kept) <TAB> Ukrainian.
+# Plurals: the English singular <TAB> one|few|many. Keep % specifiers in order.
+# Short: Ukrainian runs ~20% longer, and a button does not grow.
+#
+# --- home
+Map	Мапа
+Position	Позиція
+Library	Бібліотека
+Comms	Зв’язок
+SOS	SOS
+Sun	Сонце
+Settings	Налаштування
+Power	Живлення
+SOS on	SOS увімкнено
+topo + MGRS grid	топо + сітка MGRS
+no fix yet	ще немає GPS
+%d book on card	%d книга на карті|%d книги на карті|%d книг на карті
+stealth · listening	стелс · слухає
+stealth · radio off	стелс · радіо вимк.
+radio off	радіо вимкнено
+%d new · %d nodes	нових %d · вузлів %d
+%u%%%s · sleep / off	%u%%%s · сон / вимк.
+ charging	 заряджання
+sleep / off	сон / вимкнення
+UTC%+d · %s	UTC%+d · %s
+Stealth on	Стелс увімкнено
+Stealth	Стелс
+Hold for 5 seconds to go loud	Утримуйте 5 с, щоб вийти зі стелсу
+Silent, still listening \xC2\xB7 hold 5 s to end	Тиша, але слухає \xC2\xB7 утримуйте 5 с
+Radio and light off \xC2\xB7 hold 5 s to end	Радіо й світло вимкнено \xC2\xB7 утримуйте 5 с
+Radio and light off, screen dim	Радіо й світло вимкнено, екран тьмяний
+ON	УВІМК
+OFF	ВИМК
+# --- settings
+RADIO	Радіо
+SCREEN, CLOCK, LANGUAGE	ЕКРАН, ГОДИННИК, МОВА
+NAVIGATION	НАВІГАЦІЯ
+LISTEN	Слухати
+SILENT	Тиша
+STEALTH	Стелс
+nothing hidden	нічого не приховано
+no transmit, still hears	не передає, але чує
+radio, BT, light all off	радіо, BT і світло вимкнено
+held by stealth	вимкнено стелсом
+on: messages + nodes	увімк.: повідомлення й вузли
+off: saves battery	вимк.: економить батарею
+Europe	Європа
+Ukraine	Україна
+by GPS: %s	за GPS: %s
+set by hand: %s	вручну: %s
+COUNTRY	Країна
+AUTO	Авто
+short: %s · tap to edit	коротко: %s · змінити
+CALLSIGN	Позивний
+LOW	Низ.
+MID	Сер.
+HI	Вис.
+LIGHT	Підсвітка
+front light	підсвітка екрана
+by GPS: waiting for a fix	за GPS: чекаю на сигнал
+by GPS: %s%s	за GPS: %s%s
+, summer	, літній
+TIME ZONE	Часовий пояс
+set by hand	вручну
+LANGUAGE	Мова / Language
+the words on every screen	мова всіх екранів
+ANGLES	Кути
+NATO mils	тисячні НАТО
+6000 mils (UA)	тисячні 60-00 (UA)
+MORE	Більше
+USB, GPS, radio	USB, GPS, радіо
+Open  \xE2\x80\xBA	Відкрити  \xE2\x80\xBA
+%d nodes heard · settings save at once	почуто вузлів: %d · зберігається одразу
+# --- comms
+Everyone	Усі
+# channel %u	# канал %u
+Mesh radio \xC2\xB7 %s \xC2\xB7 %d heard	Mesh-радіо \xC2\xB7 %s \xC2\xB7 почуто %d
+Nodes %d	Вузли %d
+Chats	Чати
+%d of %d	%d з %d
+everyone in range · %s	усі поруч · %s
+private channel	приватний канал
+Tap a chat to read and write	Торкніться чату, щоб читати й писати
+nobody heard yet	поки нікого не чути
+nodes show here as their radios are heard	вузли з’являться тут, щойно їх почуємо
+%s%sdirect · %d dB	%s%sнапряму · %d дБ
+%s%s%u hop	%s%s%u перехід|%s%s%u переходи|%s%s%u переходів
+tap a node to write to it	торкніться вузла, щоб написати
+%s%sheard %s · private	%s%sчути %s · приватно
+everyone in range can read this	це прочитають усі поруч
+only those with the key	лише ті, хто має ключ
+On map	На мапі
+  NOT SENT	  НЕ НАДІСЛАНО
+No messages yet	Повідомлень ще немає
+Quick sends a ready phrase, Write types one	«Швидко» — готова фраза, «Писати» — свій текст
+Quick	Швидко
+Write	Писати
+OK	Гаразд
+Copy	Прийняв
+On my way	Іду
+Wait for me	Зачекай на мене
+Need help	Потрібна допомога
+All good	Усе добре
+Where are you?	Де ти?
+Stay there	Залишайся там
+Coming back	Повертаюся
+Low battery	Сідає батарея
+Send a ready phrase	Надіслати готову фразу
+To %s	Кому: %s
+Send my position (MGRS)	Надіслати мою позицію (MGRS)
+My position: no fix yet	Моя позиція: ще немає GPS
+One tap sends it. Back returns to the chat.	Один дотик — і надіслано. «Назад» — до чату.
+Stealth: nothing in, nothing out	Стелс: нічого не приймає й не передає
+To listen, turn the radio on in Settings.	Щоб слухати, увімкніть радіо в Налаштуваннях.
+Stealth: listen (in Settings) receives.	Стелс «Слухати» (у Налаштуваннях) приймає.
+End stealth on Home: hold the switch 5 s.	Вийти зі стелсу: на Головній утримуйте 5 с.
+The radio is off	Радіо вимкнено
+Messages and nodes need the radio.	Для повідомлень і вузлів потрібне радіо.
+It uses more battery while on.	Увімкнене, воно витрачає більше батареї.
+Turn the radio on	Увімкнути радіо
+Stealth: listening, nothing is sent	Стелс: слухає, нічого не передає
+I am at %s (%.5f, %.5f)	Я тут: %s (%.5f, %.5f)
+SEND	Надісл.
+TO: %s	КОМУ: %s
+# --- map options and legend
+RELIEF AT THIS ZOOM	РЕЛЬЄФ НА ЦЬОМУ МАСШТАБІ
+Contour every %g m	Горизонталі через %g м
+flat country: every %g m	на рівнині: через %g м
+Bold every %g m, height on it	Потовщені через %g м, з висотою
+flat country: every %g m \xC2\xB7 zoom in for finer	на рівнині: через %g м \xC2\xB7 наблизьте для дрібніших
+GRID AND COMPASS	СІТКА Й КОМПАС
+square %s: the 100 km letters, said before the numbers	квадрат %s: літери 100 км, перед цифрами
+MGRS lines, 1 km apart	Лінії MGRS через 1 км
+Magnetic north %.1f\xC2\xB0 %s of true	Магнітна північ на %.1f\xC2\xB0 %s від істинної
+east	східніше
+west	західніше
+compass az on the map already allows for it	азимут компаса на мапі вже це враховує
+MARKS	ПОЗНАЧКИ
+Saved point	Збережена точка
+Going to	Іду до
+Cross	Хрестик
+drag the map: read here	посуньте мапу: дані тут
+Measure from A	Відстань від A
+tap the cross to set	торкніться хрестика
+PLACES	Місця
+NORTH	Північ
+COURSE	Курс
+UP IS	Угорі
+the map turns with you	мапа повертається з вами
+north always up	північ завжди вгорі
+MGRS GRID	Сітка MGRS
+1 km lines, 10 km zoomed out	лінії через 1 км, віддалено — 10 км
+POINTS	Точки
+your saved points	ваші збережені точки
+Places	Місця
+hospitals, water, food... zoomed in	лікарні, вода, їжа... при наближенні
+no places file on the card	на карті немає файлу місць
+Legend	Легенда
+contours, grid, marks, place letters	горизонталі, сітка, позначки, літери місць
+Saved points	Збережені точки
+Hold a finger on the map 1 s to drop a point.	Утримайте палець на мапі 1 с — буде точка.
+Drag the map: the strip reads the cross.	Посуньте мапу: смуга внизу показує хрестик.
+Tap the cross to measure from there.	Торкніться хрестика, щоб міряти звідти.
+Tap the compass: north-up or course-up.	Компас: північ угорі або курс угорі.
+Map options	Налаштування мапи
+# --- compass points
+N	Пн
+NE	ПнСх
+E	Сх
+SE	ПдСх
+S	Пд
+SW	ПдЗх
+W	Зх
+NW	ПнЗх
+%s %s \xC2\xB7 az %s	%s %s \xC2\xB7 аз %s
+az %s	аз %s
+# --- nearby places
+Nearby	Поруч
+Needs a position: wait for a GPS fix.	Потрібна позиція: дочекайтеся GPS.
+No list of places on this card.	На цій карті немає списку місць.
+It is /doba/map/pois.dgp (maps/pois.py).	Це файл /doba/map/pois.dgp (maps/pois.py).
+Useful places within about 40 km, offline	Корисні місця в радіусі ~40 км, офлайн
+none within 40 km	немає в радіусі 40 км
+None within about 40 km.	Немає в радіусі ~40 км.
+%d of %d \xC2\xB7 tap one to go there	%d з %d \xC2\xB7 торкніться, щоб іти туди
+Tap one to go there	Торкніться, щоб іти туди
+Nearby places \xE2\x80\xBA	Місця поруч \xE2\x80\xBA
+Hospital	Лікарня
+Doctor	Лікар
+Pharmacy	Аптека
+Water	Вода
+Food shop	Продукти
+Farm	Ферма
+Shelter	Притулок
+Bunker	Бункер
+Fuel	Пальне
+Police	Поліція
+Fire station	Пожежна частина
+Hunting & arms	Мисливство, зброя
+Hardware	Будматеріали
+Outdoor shop	Туристичне
+Campsite	Кемпінг
+Assembly point	Місце збору
+Underground parking	Підземний паркінг
+Emergency care, surgery	Невідкладна допомога, хірургія
+Clinics and GPs	Поліклініки й сімейні лікарі
+Medicines, bandages	Ліки, бинти
+Wells, springs, taps	Колодязі, джерела, крани
+Supermarkets, bakers, butchers	Супермаркети, пекарні, м’ясні
+Farm shops and farmyards	Фермерські крамниці й двори
+Huts and shelters	Хатини й укриття
+Bunkers and shelters underground	Бункери й підземні укриття
+Petrol and diesel	Бензин і дизель
+Police stations	Відділки поліції
+Fire stations	Пожежні частини
+Gun and hunting shops	Збройові й мисливські крамниці
+Tools, timber, building	Інструменти, деревина, будматеріали
+Camping and outdoor gear	Кемпінгове й туристичне спорядження
+Camp sites	Кемпінги
+Where people gather in an emergency	Де збираються люди під час НС
+Car parks below ground: cover overhead	Паркінги під землею: укриття згори
+# --- position and points
+list full	список повний
+Your position \xC2\xB7 MGRS	Ваша позиція \xC2\xB7 MGRS
+Last position \xC2\xB7 no fix now	Остання позиція \xC2\xB7 GPS зараз немає
+Your position	Ваша позиція
+No fix yet	Ще немає GPS
+Waiting for satellites	Чекаю на супутники
+%.4f\xC2\xB0 %c, %.4f\xC2\xB0 %c \xC2\xB7 decl %+.1f\xC2\xB0	%.4f\xC2\xB0 %c, %.4f\xC2\xB0 %c \xC2\xB7 схил. %+.1f\xC2\xB0
+%d satellites \xC2\xB7 %d m deep	супутників %d \xC2\xB7 глибина %d м
+%d satellites \xC2\xB7 %d m high	супутників %d \xC2\xB7 висота %d м
+Mark here	Позначити тут
+Enter coords	Ввести координати
+SAVED POINTS	ЗБЕРЕЖЕНІ ТОЧКИ
+Mark here saves where you stand,	«Позначити тут» — де ви стоїте,
+Enter coords takes a grid reference,	«Ввести координати» — за сіткою,
+or hold a finger on the map.	або утримайте палець на мапі.
+Azimuth	Азимут
+compass %s	компас %s
+Distance	Відстань
+Depth %d m	Глибина %d м
+Height %d m	Висота %d м
+climb %+d m	підйом %+d м
+drop %d m	спуск %d м
+From the last GPS fix	Від останньої позиції GPS
+No GPS fix yet: the way to it shows when there is one.	Ще немає GPS: напрямок з’явиться, щойно буде сигнал.
+Stop guiding	Не вести
+Go here	Іти сюди
+Tap again to delete	Ще раз — видалити
+Delete	Видалити
+Show on map	Показати на мапі
+Go here: the map points you to it	«Іти сюди»: мапа покаже напрямок
+Save	Зберегти
+Grid (MGRS)	Сітка (MGRS)
+e.g. 32U LC 12345 67890	напр. 32U LC 12345 67890
+Name	Назва
+optional	необов’язково
+numbered if left empty	номер, якщо порожньо
+Needs zone, square and 4 to 10 digits	Потрібні зона, квадрат і 4–10 цифр
+The list is full (64 points)	Список повний (64 точки)
+Point	Точка
+New point	Нова точка
+# --- SOS
+position unknown	позиція невідома
+ (last fix)	 (остання позиція)
+Active \xC2\xB7 sent %d	Активний \xC2\xB7 надіслано %d
+Hold 5 s to send	Утримуйте 5 с
+Broadcasts on the mesh, every 5 min:	Передається в mesh кожні 5 хв:
+Hold it for 5 seconds to send	Утримуйте 5 секунд, щоб надіслати
+Hold for 5 seconds to send	Утримуйте 5 секунд, щоб надіслати
+STEALTH IS ON: sending ends it and reveals you	СТЕЛС: надсилання вимкне його й видасть вас
+radio is on	радіо увімкнено
+radio is off: it will be turned on	радіо вимкнено: його буде увімкнено
+Anyone on the channel within range sees it.	Його побачать усі на каналі поруч.
+SOS ACTIVE	SOS АКТИВНИЙ
+sent %d · next in %lu:%02lu	надіслано %d · наступне за %lu:%02lu
+Stay with the device. Replies show in COMMS.	Тримайте пристрій при собі. Відповіді — у «Зв’язку».
+CANCEL SOS	СКАСУВАТИ SOS
+# --- sun
+needs a GPS fix	потрібен GPS
+sunset %s	захід %s
+sunrise %s	схід %s
+polar day/night	полярний день/ніч
+Needs a GPS fix	Потрібен GPS
+for the date, time and place.	для дати, часу й місця.
+Daylight left	До темряви
+%ld h %02ld min	%ld год %02ld хв
++ %ld min of twilight after sunset	+ %ld хв сутінків після заходу
+Night	Ніч
+until sunrise	до сходу сонця
+FIRST LIGHT	Світанок
+SUNRISE	Схід
+SUNSET	Захід
+LAST LIGHT	Смеркання
+%d%% lit · day %d of 29	освітлено %d%% · день %d з 29
+now %s  ·  UTC%+d  ·  times local	зараз %s  ·  UTC%+d  ·  місцевий час
+Sun & moon	Сонце й місяць
+new moon	молодик
+waxing crescent	молодий місяць
+first quarter	перша чверть
+waxing gibbous	місяць росте
+full moon	повня
+waning gibbous	місяць спадає
+last quarter	остання чверть
+waning crescent	старий місяць
+# --- more
+DEVICE	ПРИСТРІЙ
+USB DRIVE	USB-накопичувач
+the card shows on a computer	карта видна на комп’ютері
+off: the card is Doba's	вимк.: карта в Доби
+fix · %u satellites	є GPS · супутників %u
+GPS	GPS
+Details  \xE2\x80\xBA	Деталі  \xE2\x80\xBA
+all nodes must match	у всіх вузлів має збігатися
+RADIO MODE	Режим радіо
+%d book	%d книга|%d книги|%d книг
+no card	немає карти
+CARD	Карта
+DOBA	ДОБА
+offline backcountry assistant \xC2\xB7 	офлайн-помічник у дорозі \xC2\xB7 
+USB DRIVE: copy books and maps from a computer	USB: копіюйте книги й мапи з комп’ютера
+CALLSIGN  (how the mesh sees you)	ПОЗИВНИЙ  (як вас бачить mesh)
+Short name: first four letters	Коротке ім’я: перші чотири літери
+SAVE	Зберегти
+More	Більше
+# --- library
+not in this book	немає в цій книзі
+TEXT: SMALL	ТЕКСТ: ДРІБНИЙ
+TEXT: MEDIUM	ТЕКСТ: СЕРЕДНІЙ
+TEXT: LARGE	ТЕКСТ: ВЕЛИКИЙ
+\nFSource: %s	\nFДжерело: %s
+FIRST AID	ПЕРША ДОПОМОГА
+WATER	ВОДА
+FIRE	ВОГОНЬ
+SHELTER	УКРИТТЯ
+FOOD	ЇЖА
+GROWING	ВИРОЩУВАННЯ
+POWER	ЕНЕРГІЯ
+HAZARDS	НЕБЕЗПЕКИ
+WEATHER	ПОГОДА
+TOOLS	ІНСТРУМЕНТИ
+KNOTS	ВУЗЛИ
+COMMS	ЗВ’ЯЗОК
+REFERENCE	ДОВІДКА
+Wikipedia	Вікіпедія
+Medicine	Медицина
+Field medicine	Польова медицина
+US manuals	Посібники США
+After disaster	Після катастрофи
+Food	Їжа
+Knots	Вузли
+iFixit repair	Ремонт iFixit
+Home repair Q&A	Ремонт дому: Q&A
+Appropedia	Appropedia
+Gardening Q&A	Сад і город: Q&A
+Chemistry Q&A	Хімія: Q&A
+Woodwork Q&A	Столярство: Q&A
+Gutenberg	Gutenberg
+My files	Мої файли
+Books	Книги
+Topics	Теми
+Recent	Недавні
+Search %d book	Пошук у %d книзі|Пошук у %d книгах|Пошук у %d книгах
+Search the %d book	Пошук у %d книзі|Пошук у всіх %d книгах|Пошук у всіх %d книгах
+In the %d book	У %d книзі|У всіх %d книгах|У всіх %d книгах
+Picked for survival	Вибране для виживання
+Documents	Документи
+Browse A\xE2\x80\x93Z	Абетка А\xE2\x80\x93Я
+Random page	Випадкова сторінка
+Search %s	Пошук: %s
+Search above, or browse A-Z.	Шукайте вгорі або за абеткою.
+BROWSE A\xE2\x80\x93Z	ЗА АБЕТКОЮ
+OTHER	ІНШЕ
+%s title%s	%s назва%s|%s назви%s|%s назв%s
+ - pick the next letters	 — оберіть наступні літери
+nothing under this letter	на цю літеру нічого
+Nothing read yet	Ще нічого не читали
+Pages you open show up here.	Тут з’являться сторінки, які ви відкриєте.
+EMERGENCY	НЕВІДКЛАДНО
+%d guide	%d порада|%d поради|%d порад
+%d book · search inside	%d книга · пошук у ній|%d книги · пошук у них|%d книг · пошук у них
+START HERE	ПОЧНІТЬ ЗВІДСИ
+No guides picked for this yet.	Порад для цього ще не дібрано.
+Search its books below.	Шукайте в книгах нижче.
+SEARCH HERE	ШУКАТИ ТУТ
+OPEN	ВІДКРИТИ
+In %s  \xC2\xB7  search all books instead	У «%s»  \xC2\xB7  шукати в усіх книгах
+Type the start of a title	Наберіть початок назви
+Nothing starts with that	Нічого не починається так
+For example: water, burn, knot, вогнище	Наприклад: вода, опік, вузол, water
+Case and accents don’t matter	Регістр і наголоси не важливі
+not on this card	немає на цій карті
+PREV	НАЗАД
+Prev	Назад
+CLOSE	ЗАКРИТИ
+Close	Закрити
+CONTENTS	ЗМІСТ
+Contents	Зміст
+UP	ВГОРУ
+DOWN	ВНИЗ
+NEXT	ДАЛІ
+NO BOOKS	КНИГ НЕМАЄ
+copy books to /doba/lib on the card	скопіюйте книги в /doba/lib на карті
+book not on this card	книги немає на цій карті
+Search	Пошук
+not in this article	немає в цій статті
+can't open it	не вдається відкрити
+%.1fM	%.1f млн
+%luk	%lu тис.
+articles	стаття|статті|статей
+questions	питання|питання|питань
+guides	посібник|посібники|посібників
+books	книга|книги|книг
+texts	текст|тексти|текстів
+documents	документ|документи|документів
+# --- map strip and header
+MGRS --	MGRS --
+\xE2\x80\xBA %.12s  \xC2\xB7  az %s  \xC2\xB7  %s	\xE2\x80\xBA %.12s  \xC2\xB7  аз %s  \xC2\xB7  %s
+Cross \xC2\xB7 	Хрестик \xC2\xB7 
+Say %s	Кажіть %s
+Height	Висота
+Depth	Глибина
+no fix \xC2\xB7 %d	немає GPS \xC2\xB7 %d
+Course	Курс
+Satellites	Супутники
+From A	Від A
+From you	Від вас
+Compass az	Аз. компаса
+%d km	%d км
+NO MAP HERE	ТУТ НЕМАЄ МАПИ
+This area is not on the card	Цієї місцевості немає на карті
+NO SD CARD	НЕМАЄ SD-КАРТИ
+Insert a FAT32 card for maps	Вставте карту FAT32 для мап
+SD CARD UNREADABLE	SD-КАРТА НЕ ЧИТАЄТЬСЯ
+Reformat it as FAT32 (not exFAT)	Відформатуйте її у FAT32 (не exFAT)
+PHONE GPS	GPS ТЕЛЕФОНА
+grid 1 km	сітка 1 км
+grid 10 km	сітка 10 км
+grid 100 km	сітка 100 км
+ \xC2\xB7 square 	 \xC2\xB7 квадрат 
+Topo map	Топомапа
+# --- keyboard
+SPACE	Пробіл
+DEL	Стерти
+# --- status bar, power sheet
+Back	Назад
+SD error	Помилка SD
+No SD	Немає SD
+GPS %u	GPS %u
+No fix	Немає GPS
+SHUT DOWN?	ВИМКНУТИ?
+Sleeps until you press the button.	Спить, доки не натиснете кнопку.
+A track is recording — it will be saved first.	Записується трек — спершу його буде збережено.
+SHUT DOWN	ВИМКНУТИ
+CANCEL	СКАСУВАТИ
+GPS details	Деталі GPS
+%d m	%d м
+%.2f km	%.2f км
+%.1f km	%.1f км
+Up	Вгору
+Down	Вниз
+Next	Далі

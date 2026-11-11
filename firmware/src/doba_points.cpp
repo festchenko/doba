@@ -1,3 +1,4 @@
+#include "doba_i18n.h"
 #include "doba_points.h"
 
 #include <Arduino.h>
@@ -121,9 +122,9 @@ bool fromHere(int i, double lat, double lon, double& bearingDeg, double& distM) 
 }
 
 void formatDistance(double m, char* out, size_t n) {
-    if (m < 1000) snprintf(out, n, "%d m", (int)(m + 0.5));
-    else if (m < 10000) snprintf(out, n, "%.2f km", m / 1000.0);
-    else snprintf(out, n, "%.1f km", m / 1000.0);
+    if (m < 1000) snprintf(out, n, TR("%d m"), (int)(m + 0.5));
+    else if (m < 10000) snprintf(out, n, TR("%.2f km"), m / 1000.0);
+    else snprintf(out, n, TR("%.1f km"), m / 1000.0);
 }
 
 }  // namespace doba_points

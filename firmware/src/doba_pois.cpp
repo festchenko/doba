@@ -1,3 +1,4 @@
+#include "doba_i18n.h"
 #include "doba_pois.h"
 
 #include <Arduino.h>
@@ -114,8 +115,8 @@ template <typename F> void scan(double lat, double lon, F fn) {
 
 }  // namespace
 
-const char* kindName(int k) { return k > 0 && k < KINDS ? kNames[k] : ""; }
-const char* kindHint(int k) { return k > 0 && k < KINDS ? kHints[k] : ""; }
+const char* kindName(int k) { return k > 0 && k < KINDS ? TR(kNames[k]) : ""; }
+const char* kindHint(int k) { return k > 0 && k < KINDS ? TR(kHints[k]) : ""; }
 bool available() { return load(); }
 
 int nearest(double lat, double lon, int kind, Poi* out, int n) {
