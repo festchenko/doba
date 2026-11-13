@@ -527,3 +527,8 @@ Ground to air: V help · X medical	Земля–повітря: V допомог
 N no · Y yes · arrow = going this way	N ні · Y так · стрілка = йду туди
 Rule of three: 3 min air · 3 h cold	Правило трьох: 3 хв повітря · 3 год холод
 3 days water · 3 weeks food	3 дні вода · 3 тижні їжа
+map centre	центр мапи
+you are here	ви тут
+%.1f km %s of it	%.1f км на %s від нього
+%.0f km %s of it	%.0f км на %s від нього
+standing	на місці

@@ -1,116 +1,151 @@
-# Доба
+<p align="center">
+  <img src="docs/hero.png" alt="Doba screens: home, topographic map, reader, power-off card, library topics" width="100%">
+</p>
 
-Автономное офлайн-устройство на e-ink: топокарты Европы и Украины с GPS, библиотека (Википедия, медицина, бушкрафт, химия, ремёсла), связь LoRa без сети.
+<h1 align="center">D.O.B.A — Доба</h1>
+<p align="center"><b>Durable Offline Backcountry Assistant</b><br>
+An e-ink pocket device that keeps working when the internet, the phone network and the power grid don't.</p>
 
-Железо: **LilyGo T5 E-Paper S3 Pro** (ESP32-S3, 4,7" e-ink 960×540, 16 оттенков серого, тач GT911, GPS MIA-M10Q, LoRa SX1262 868 МГц) + microSD в FAT32.
+<p align="center">
+  <a href="#hardware--where-to-buy">Hardware</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#screens">Screens</a> ·
+  <a href="#getting-started">Getting started</a> ·
+  <a href="docs/Doba.pdf">PDF overview</a> ·
+  <a href="README.uk.md">Українською</a> ·
+  <a href="https://github.com/sponsors/festchenko">Support ♥</a>
+</p>
 
-```
-maps/       конвейер карт: OSM + рельеф → тайлы 4 бита для e-ink
-firmware/   прошивка: форк OpenTrailPaper (Apache 2.0) + слой топокарты
-release/    готовые образы прошивки
-tools/      прошивка и подготовка SD-карты с Mac
-library/    библиотека: ZIM (Kiwix), PDF/EPUB/MD → лёгкий формат для ESP32
-```
+---
 
-## День прошивки (когда приедет устройство)
+Doba is firmware and a data pipeline for the **LilyGo T5 E-Paper S3 Pro**: a 4.7″ touch e-ink board with GPS and a LoRa radio. Put a microSD card in it with maps of Europe, a survival-oriented library and terrain heights, and it gives you:
 
-1. **Прошить.** Подключить по USB-C и выполнить:
-   ```bash
-   tools/flash-mac.sh
-   ```
-   Скрипт сначала сохраняет заводскую прошивку в `backup/` (≈4 мин), потом стирает флеш и пишет `release/doba-full.bin`. Если порт не находится: зажать BOOT, нажать и отпустить RST, отпустить BOOT.
-2. **Карта.** Отформатировать microSD в FAT32 и скопировать тайлы:
-   ```bash
-   tools/prepare-sd-mac.sh list
-   tools/prepare-sd-mac.sh format disk4        # номер диска из list!
-   DOBA_BUILD=/Volumes/SSD/doba maps/make-region.sh groenlo
-   tools/prepare-sd-mac.sh copy /Volumes/SSD/doba/tiles/groenlo
-   tools/prepare-sd-mac.sh copy-dem /Volumes/SSD/doba/dem-pack   # высоты рельефа
-   ```
-3. **Библиотека** (по желанию, можно позже):
-   ```bash
-   pip3 install libzim
-   DOBA_BUILD=/Volumes/SSD/doba library/fetch_zims.sh           # скачать ZIM с Kiwix
-   DOBA_BUILD=/Volumes/SSD/doba library/fetch_zims.sh convert   # ZIM → книги Доба
-   tools/prepare-sd-mac.sh copy-lib /Volumes/SSD/doba/lib
-   ```
-   Список книг — в начале `library/fetch_zims.sh`. Википедия EN без картинок ≈ 50 ГБ ZIM, конвертация идёт часами.
+- **topographic maps with a military grid (MGRS)**, your position, points and places nearby;
+- **an offline library**: Wikipedia with pictures, field medicine, repair guides, field manuals, classics, dictionaries and your own EPUB/PDF books;
+- **text messaging without any network** over LoRa, compatible with **Meshtastic**;
+- **a paper card when switched off**: e-ink keeps the image with no power, so the off screen shows where you were, tomorrow's daylight, an *if found* card and an emergency crib.
 
-   **Наставления и свои файлы** (PDF, EPUB, HTML, MD, TXT) — отдельными книгами, PDF режутся по главам:
-   ```bash
-   pip3 install pymupdf
-   python3 library/docs2doba.py ~/Doba/manuals /Volumes/SSD/doba/lib/manuals --name "Manuals" --source "US Army / FEMA · public domain"
-   python3 library/docs2doba.py ~/Doba/my-files /Volumes/SSD/doba/lib/mine --name "My files"
-   ```
-   Какие наставления брать и где — `library/manuals.md`.
-4. **Проверить.** Вставить карту, включить — откроется главный экран (8 плиток). Кнопка Home: главный ↔ карта, на остальных экранах — «назад».
-   - SETTINGS: радио, диапазон (EU_868 / UA_868 …), позывной, тысячные, подсветка, часовой пояс.
-   - POSITION: своя MGRS, MARK HERE, ADD GRID (ввод MGRS), список точек с азимутом в тысячных и дистанцией; GO TO — пунктир к точке на карте.
-   - COMMS → TURN ON → WRITE — сообщение в эфир Meshtastic с экранной клавиатуры (EN/RU/UA).
-   - LIBRARY — поиск по началу названия; подчёркнутые ссылки открывают статью, Home — назад.
-   - Высота берётся из рельефа на карте памяти (`/doba/dem`), если он есть, иначе из GPS.
-5. **Калибровка серого.** По USB в консоли (`screen /dev/cu.usbmodem* 115200` или Serial Monitor) ввести `greytest` — на экране 16 полос. Сфотографировать: по фото подстроим стиль карты под реальную панель.
+There is no account, no cloud, no app, and nothing transmits unless you switch the radio on. Bluetooth and Wi-Fi are off by default.
 
-Что делает прошивка сейчас — в `firmware/DOBA.md`.
+> **Status:** personal project, in active use. Built and tested on the simulator and on real hardware (H752-01). The interface is in **English and Ukrainian**.
 
-## Карты: как это работает
+## Features
 
-1. **Planetiler** превращает OpenStreetMap в векторные тайлы (схема OpenMapTiles, до z14).
-2. **Copernicus GLO-30** (рельеф 30 м) даёт горизонтали и отмывку.
-3. **`render.py`** рисует растровые тайлы 256×256 сразу в 16 уровнях серого под экран, метатайлами 8×8 (без обрезанных подписей и швов на стыках).
-4. Тайлы пакуются в файлы **`.dtp`**, по одному на клетку z8, каждый намного меньше лимита FAT32 в 4 ГБ. Формат описан в начале `maps/tilepack.py`; прошивка читает его так же: заголовок → двоичный поиск по индексу → один zlib-блок.
-5. **`preview.py`** показывает, что именно будет на экране 960×540.
-
-Стиль (уровни серого, толщины линий, шрифты, интервалы горизонталей) лежит в `maps/style.py`. Цветов нет: каждое значение — уровень 0–15, который экран покажет как есть.
-
-## Запуск на Mac (тестовый регион Гронло)
-
-Один раз:
-
-```bash
-brew install openjdk@21 python
-cd maps
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-Данные и рендер (`DOBA_BUILD` — папка на внешнем SSD):
-
-```bash
-export DOBA_BUILD=/Volumes/SSD/doba
-./fetch.sh groenlo
-python3 render.py --mbtiles $DOBA_BUILD/groenlo.mbtiles --dem $DOBA_BUILD/dem \
-    --bbox 6.50,51.97,6.75,52.12 --zoom 8-16 --out $DOBA_BUILD/tiles/groenlo
-python3 preview.py $DOBA_BUILD/tiles/groenlo --at 52.042,6.617 --zoom 10,12,14,16 \
-    --out $DOBA_BUILD/preview
-```
-
-При первом запуске `fetch.sh` дополнительно качает ~2 ГБ источников Planetiler (береговая линия, озёра), это один раз.
-
-## Проверка без интернета
-
-```bash
-cd maps
-python3 test/test_tilepack.py          # формат .dtp
-python3 test/make_synthetic.py         # выдуманные данные вокруг Гронло
-python3 render.py --mbtiles test/build/synthetic.mbtiles --dem test/build/dem \
-    --bbox 6.50,51.97,6.75,52.12 --zoom 8-16 --out test/build/tiles
-python3 preview.py test/build/tiles --at 52.042,6.617 --out test/build/preview
-```
-
-## Объёмы (оценка, Европа + Украина)
-
-| До зума | Объём |
+| | |
 |---|---|
-| z13 | ~7 ГБ |
-| z14 | ~33 ГБ |
-| z15 | ~140 ГБ |
-| z16 | ~560 ГБ |
+| **Maps** | Vector topographic tiles drawn for 4-grey e-ink: roads, buildings, forests, water, contour lines from a DEM, hillside heights. North-up or course-up, from street level to the whole country. Most of Europe plus Ukraine, built region by region. |
+| **Navigation** | MGRS position with 1 m digits, latitude/longitude, magnetic declination, azimuth in mils (6000 UA or 6400 NATO) and degrees. A measuring cross: distance and compass azimuth from you or from point A, ground height and water depth under it. |
+| **Points & places** | Save points from GPS, from the map or typed as MGRS; "go here" with distance and azimuth. Nearby: hospitals, doctors, pharmacies, water, food shops, farms, shelters, bunkers, underground parking, all from OpenStreetMap, offline. |
+| **Library** | Kiwix ZIM archives converted to a light format the ESP32 reads quickly: Wikipedia (EN, UK) with pictures, WikiMed, iFixit, Appropedia, Stack Exchange Q&A, Wikisource and Gutenberg classics, Wikivoyage, Wiktionary, US field manuals, plus your own PDF/EPUB/Markdown. Topic pages (first aid, water, fire, shelter, food…) and three emergency buttons. |
+| **Reader** | Serif text with Cyrillic hyphenation, pictures and captions, contents, links and back, text size. Long books **reopen where you stopped**, even after a restart. |
+| **Comms** | LoRa SX1262, Meshtastic-compatible channels and direct messages, node list with distance and bearing, quick phrases, an on-screen keyboard (EN/UA). **SOS** repeats your MGRS position on the mesh every 5 minutes. |
+| **Stealth** | One switch: radio silent (or listen-only), light off, screen dim. |
+| **Sun & moon** | Sunrise, sunset, civil twilight, daylight left and moon phase, offline. |
+| **Battery** | Measured current and time left at this pace, and an estimated split of where the charge goes (GPS, radio, light, screen updates). |
+| **Power** | Switched off from the menu, the battery is fully disconnected (ship mode), so the device keeps for months and starts with the POWER key. |
+| **Off screen** | MGRS and coordinates where it was switched off, time and charge, a map, tomorrow's light, the *if found* card and an emergency crib (112, SOS in Morse, ground-to-air signals, rule of three). |
+| **Library management** | Delete a whole book from its page to free space on the card. |
 
-Вся Европа рендерится на арендованном сервере (`regions/europe.env`), не на ноутбуке.
+## Screens
 
-## Известные ограничения
+<table>
+<tr>
+<td align="center"><img src="docs/screens/en/home.png" width="180"><br>Home</td>
+<td align="center"><img src="docs/screens/en/map.png" width="180"><br>Topo map + MGRS</td>
+<td align="center"><img src="docs/screens/en/position.png" width="180"><br>Position &amp; points</td>
+<td align="center"><img src="docs/screens/en/point.png" width="180"><br>Go to a point</td>
+</tr>
+<tr>
+<td align="center"><img src="docs/screens/en/nearby.png" width="180"><br>Places nearby</td>
+<td align="center"><img src="docs/screens/en/library_topics.png" width="180"><br>Library topics</td>
+<td align="center"><img src="docs/screens/en/book.png" width="180"><br>A book</td>
+<td align="center"><img src="docs/screens/en/article_p2.png" width="180"><br>Reader</td>
+</tr>
+<tr>
+<td align="center"><img src="docs/screens/en/sos.png" width="180"><br>SOS over LoRa</td>
+<td align="center"><img src="docs/screens/en/sun.png" width="180"><br>Sun &amp; moon</td>
+<td align="center"><img src="docs/screens/en/battery.png" width="180"><br>Battery</td>
+<td align="center"><img src="docs/screens/en/off.png" width="180"><br>Power-off card</td>
+</tr>
+<tr>
+<td align="center"><img src="docs/screens/uk/home.png" width="180"><br>Українською</td>
+<td align="center"><img src="docs/screens/uk/map.png" width="180"><br>Мапа</td>
+<td align="center"><img src="docs/screens/en/settings.png" width="180"><br>Settings</td>
+<td align="center"><img src="docs/screens/en/more.png" width="180"><br>Device</td>
+</tr>
+</table>
 
-- Copernicus — модель **поверхности** (с лесом и домами), поэтому на равнинах горизонтали сглаживаются, а мелкие замкнутые кольца отбрасываются. Если на реальных данных будет шумно, увеличить `DEM_SMOOTH_M` в `style.py` или перейти на FABDEM (рельеф без леса).
-- Названия улиц вдоль линий пока не рисуются.
-- Шрифт DejaVu Sans Condensed (латиница, кириллица, греческий), лицензия в `maps/fonts/`.
+Screens are rendered by the firmware itself, compiled for the desktop simulator (`firmware/sim`), with a real map of Groenlo (NL).
+
+## Hardware & where to buy
+
+| Part | Notes | Where |
+|---|---|---|
+| **LilyGo T5 E-Paper S3 Pro** (H752-01) | ESP32-S3, 16 MB flash, 8 MB PSRAM, 4.7″ 960×540 touch e-ink, GPS, SX1262 LoRa, 1500 mAh battery, RTC. **Pick the version with GPS and the LoRa band for your region** (868 MHz in Europe/Ukraine, 915 MHz in the Americas). | [LilyGo store](https://lilygo.cc/products/t5-e-paper-s3-pro) · [Tindie](https://www.tindie.com/products/lilygo/lilygo-t5-e-paper-s3-pro/) · LilyGo's official AliExpress store |
+| **microSD card**, 256 GB – 1 TB | Formatted **FAT32** (the scripts do it). Any A1/A2 card works: the device reads over SPI, so speed class barely matters; a faster card only shortens the copy from the computer. | Any shop |
+| *Optional:* a second Meshtastic node | To message with Doba, or as a relay on a windowsill, e.g. a Heltec V3 (868 MHz). | Any Meshtastic seller |
+
+## Getting started
+
+### 1. Flash
+
+Prebuilt images are in [`release/`](release). With Python and `esptool`:
+
+```bash
+pip3 install esptool
+python3 -m esptool --chip esp32s3 write-flash 0x0 release/doba-full.bin
+```
+
+On a Mac, `tools/flash-mac.sh` backs up the factory firmware first and then flashes. If the port isn't found: hold **BOOT**, press **RST**, release **BOOT**.
+
+### 2. Build the card
+
+Everything on the card is made from open data by the scripts in this repo, on any Mac or Linux machine with Python 3 and enough disk space (≈1 TB for all of Europe and the full library):
+
+```bash
+# maps: OSM + terrain -> 4-bit e-ink tiles, per region (maps/regions/*.env)
+DOBA_BUILD=/Volumes/SSD/doba maps/make-region.sh netherlands
+# library: download Kiwix ZIMs and convert them (list at the top of the script)
+DOBA_BUILD=/Volumes/SSD/doba library/fetch_zims.sh && library/fetch_zims.sh convert
+# your own books: PDF, EPUB, HTML, Markdown
+python3 library/docs2doba.py ~/Books /Volumes/SSD/doba/lib/my_books --name "My books"
+# format the card (FAT32) and copy maps, heights and books
+tools/prepare-sd-mac.sh list
+tools/prepare-sd-mac.sh format diskN
+tools/prepare-sd-mac.sh all /Volumes/SSD/doba
+```
+
+Detailed notes (in Russian) are in [`docs/build-notes.ru.md`](docs/build-notes.ru.md).
+
+### 3. Use
+
+| Button | Short press | Hold |
+|---|---|---|
+| **BOOT** | Home | 1.5 s: power menu (switch off) |
+| **IO48** (side) | Front light | |
+| **POWER** | Switch on after a power-off | |
+| **RST** | Restart | |
+
+## Repository
+
+```
+firmware/   the device: fork of OpenTrailPaper (Apache-2.0) + Doba's screens, maps, library, comms
+firmware/sim  the firmware compiled for the desktop, with tests (pytest) and screenshots
+maps/       map pipeline: OpenStreetMap + DEM -> packed 4-bit tiles, places, heights
+library/    ZIM / PDF / EPUB / HTML -> Doba books, topic menus, cleanup and audit
+tools/      flashing and card preparation on a Mac
+release/    prebuilt firmware images
+```
+
+## Credits & licenses
+
+- Firmware is a fork of **[OpenTrailPaper](https://github.com/RaemondBW/OpenTrailPaper)** by Raemond Bergstrom-Wood, **Apache License 2.0** (see [`firmware/LICENSE`](firmware/LICENSE) and [`firmware/NOTICE`](firmware/NOTICE)). Doba's own code is under the same license.
+- Map data © **OpenStreetMap** contributors, ODbL. Terrain from public DEMs (Copernicus / SRTM).
+- Library content comes from **Kiwix** archives of Wikipedia, Wikisource, Wikivoyage, Wiktionary, WikiMed, iFixit, Appropedia, Stack Exchange and Project Gutenberg, each under its own license (CC BY-SA, CC BY-NC-SA, public domain). **No content is included in this repository.** You build the card yourself from the sources.
+- Meshtastic is a trademark of Meshtastic LLC; Doba speaks its open protocol and is not affiliated.
+
+Doba is not a certified safety or medical device. Carry a phone, a paper map and a compass too.
+
+## Support
+
+If Doba is useful to you, you can support its development through **[GitHub Sponsors](https://github.com/sponsors/festchenko)**. Issues and pull requests are welcome.

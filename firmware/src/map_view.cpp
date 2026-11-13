@@ -1032,8 +1032,8 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
         {   // the grid spacing and the 100 km square letters, as on a sheet's margin
             char sq[4], gl[40];
             milspec::square(map.centerLat, map.centerLon, sq, sizeof sq);
-            snprintf(gl, sizeof gl, "%s%s%s", map.metersPerPixel < 20.0f ? "grid 1 km" : map.metersPerPixel < 200.0f ? "grid 10 km" : "grid 100 km",
-                     sq[0] ? " \xC2\xB7 square " : "", sq);
+            snprintf(gl, sizeof gl, "%s%s%s", TR(map.metersPerPixel < 20.0f ? "grid 1 km" : map.metersPerPixel < 200.0f ? "grid 10 km" : "grid 100 km"),
+                     sq[0] ? TR(" \xC2\xB7 square ") : "", sq);
             ui::text(ui::font(ui::F_TINY), W - 24, y0 + 44, gl, fb, EPD_DRAW_ALIGN_RIGHT, ui::GREY);
         }
         const int room = W - 24 - ui::textWidth(ui::font(ui::F_SMALL), scale) - 16;

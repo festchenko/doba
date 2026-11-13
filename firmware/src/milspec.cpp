@@ -510,7 +510,7 @@ void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
     const char* vals[3] = {v1, v2, v3};
     const int cols[3] = {x0, x0 + 170, x0 + 330};
     for (int i = 0; i < 3; ++i) {
-        ui::text(ui::font(ui::F_TINY), cols[i], top + 104, caps[i], fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        ui::text(ui::font(ui::F_TINY), cols[i], top + 104, TR(caps[i]), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
         ui::text(ui::font(ui::F_LABEL), cols[i], top + 134, vals[i], fb, EPD_DRAW_ALIGN_LEFT, i == 2 && !fix && !cross ? 0x77 : 0x00);
     }
 }

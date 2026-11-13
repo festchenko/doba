@@ -1795,9 +1795,9 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
                 static const char* const kDir[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
                 // the spot relative to the place: from the place, towards here
                 const char* dir = kDir[(int)lround(fmod(b + 180.0, 360.0) / 45.0) % 8];
-                if (d < 800) snprintf(qSub, sizeof qSub, mapPanned() ? "map centre" : "you are here");
-                else if (d < 10000) snprintf(qSub, sizeof qSub, "%.1f km %s of it", d / 1000.0, dir);
-                else snprintf(qSub, sizeof qSub, "%.0f km %s of it", d / 1000.0, dir);
+                if (d < 800) snprintf(qSub, sizeof qSub, "%s", mapPanned() ? TR("map centre") : TR("you are here"));
+                else if (d < 10000) snprintf(qSub, sizeof qSub, TR("%.1f km %s of it"), d / 1000.0, TR(dir));
+                else snprintf(qSub, sizeof qSub, TR("%.0f km %s of it"), d / 1000.0, TR(dir));
             } else {
                 qName[0] = qSub[0] = 0;
             }
