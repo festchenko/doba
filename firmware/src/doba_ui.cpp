@@ -2148,109 +2148,158 @@ void renderBattery(const RideState& s, uint8_t* fb) {
 //
 // E-paper keeps its picture with no power at all, so a switched-off Doba is a
 // paper card: what someone (you, later, or whoever finds it) most needs to read.
+
+// Cut to a width with "..." (whole UTF-8 characters).
+static void fitTextTo(const EpdFont* f, char* t, int w) {
+    if (ui::textWidth(f, t) <= w) return;
+    size_t n = strlen(t);
+    while (n > 1) {
+        --n;
+        while (n > 0 && ((uint8_t)t[n] & 0xC0) == 0x80) --n;
+        memcpy(t + n, "...", 4);
+        if (ui::textWidth(f, t) <= w) return;
+        t[n] = 0;
+    }
+}
+
 void renderOffCard(const RideState& s, bool powerKey, uint8_t* fb) {
-    constexpr int MAP_TOP = 320, MAP_BOT = 640;
+    // The map is already drawn, centred on the position at y 430 (riderY).
+    constexpr int MAP_TOP = 262, MAP_BOT = 598;
+    // Paper above and below the map window, then contour lines on it: the
+    // same landscape texture as Doba's own screens. Cards go on top, white.
     epd_fill_rect({0, 0, W, MAP_TOP}, PAPER, fb);
     epd_fill_rect({0, MAP_BOT, W, H - MAP_BOT}, PAPER, fb);
-    epd_fill_rect({0, MAP_TOP, W, 2}, INK, fb);
-    epd_fill_rect({0, MAP_BOT - 2, W, 2}, INK, fb);
+    topo_bg::draw({0, 0, W, MAP_TOP}, fb, 3);
+    topo_bg::draw({0, MAP_BOT, W, H - MAP_BOT}, fb, 3);
 
-    // the band: off, and how to wake it
-    epd_fill_rect({0, 0, W, 72}, INK, fb);
-    char up[64];
-    ui::upper(TR("POWERED OFF"), up, sizeof up);
-    ui::text(ui::font(ui::F_LABEL), 24, 32, up, fb, EPD_DRAW_ALIGN_LEFT, PAPER);
-    ui::text(ui::font(ui::F_TINY), 24, 60, powerKey ? TR("press POWER to switch on") : TR("press BOOT to wake"), fb,
-             EPD_DRAW_ALIGN_LEFT, PAPER);
+    auto card = [&](int y, int h) {
+        const EpdRect r = {16, y, W - 32, h};
+        ui::fillRound(r, 12, PAPER, fb);
+        ui::frameRound(r, 12, 2, fb, INK, PAPER);
+        return r;
+    };
+    auto label = [&](int x, int y, const char* en) {
+        char up[64];
+        ui::upper(TR(en), up, sizeof up);
+        ui::text(ui::font(ui::F_TINY), x, y, up, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    };
+    char line[160], a[24];
 
+    // --- head: the mark, and how to wake it
+    {
+        const EpdRect m = {24, 22, 150, 54};
+        ui::fillRound(m, 6, PAPER, fb);
+        for (int t = 0; t < 3; ++t) epd_draw_rect({m.x + t, m.y + t, m.width - 2 * t, m.height - 2 * t}, INK, fb);
+        ui::text(ui::font(ui::F_TITLE), m.x + m.width / 2, m.y + 40, "D.O.B.A", fb, EPD_DRAW_ALIGN_CENTER, INK);
+        const EpdRect st = {190, 22, W - 24 - 190, 54};
+        ui::fillRound(st, 8, INK, fb);
+        char up[64];
+        ui::upper(TR("POWERED OFF"), up, sizeof up);
+        ui::text(ui::font(ui::F_LABEL), st.x + st.width / 2, st.y + 24, up, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+        ui::text(ui::font(ui::F_TINY), st.x + st.width / 2, st.y + 46,
+                 powerKey ? TR("press POWER to switch on") : TR("press BOOT to wake"), fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+    }
+
+    // --- where it was switched off
     double lat = s.latitude, lon = s.longitude;
     bool pos = s.everHadFix;
     if (!pos) pos = settings::lastPosition(lat, lon);
-    char line[160], a[24], b[24], c[24], d[24];
-
-    section(84, "WHERE I WAS", fb);
-    if (pos) {
-        milgeo::mgrs(lat, lon, line, sizeof line);
-        ui::text(ui::font(ui::F_LABEL), 24, 148, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        snprintf(line, sizeof line, "%.5f, %.5f", lat, lon);
-        ui::text(ui::font(ui::F_SMALL), 24, 180, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    } else {
-        ui::text(ui::font(ui::F_SMALL), 24, 148, TR("no position yet"), fb, EPD_DRAW_ALIGN_LEFT, INK);
-    }
-    // when, and the charge
     doba_batt::Report br;
     doba_batt::report(br);
     const int pct = br.have ? br.soc : s.batteryPercent;
-    if (s.timeValid) {
-        const time_t t = s.utc + settings::tzMinutes() * 60;
-        struct tm tm;
-        gmtime_r(&t, &tm);
-        snprintf(a, sizeof a, "%02d.%02d %02d:%02d", tm.tm_mday, tm.tm_mon + 1, tm.tm_hour, tm.tm_min);
-    } else snprintf(a, sizeof a, "--");
-    if (br.hoursLeft > 0) snprintf(line, sizeof line, TR("off %s · charge %d%% (about %s of use)"), a, pct, hoursText(br.hoursLeft));
-    else snprintf(line, sizeof line, TR("off %s · charge %d%%"), a, pct);
-    ui::text(ui::font(ui::F_SMALL), 24, 212, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
-
-    // tomorrow's sun and tonight's moon
-    section(224, "TOMORROW", fb);
-    if (pos && s.timeValid) {
-        const doba_sun::Day dd = doba_sun::day(lat, lon, s.utc + 86400);
-        if (dd.dawnOk) hhmm(dd.dawn, a, sizeof a); else snprintf(a, sizeof a, "--");
-        if (dd.riseOk) hhmm(dd.rise, b, sizeof b); else snprintf(b, sizeof b, "--");
-        if (dd.setOk) hhmm(dd.set, c, sizeof c); else snprintf(c, sizeof c, "--");
-        if (dd.duskOk) hhmm(dd.dusk, d, sizeof d); else snprintf(d, sizeof d, "--");
-        snprintf(line, sizeof line, TR("light %s · sunrise %s · sunset %s · dark %s"), a, b, c, d);
-        ui::text(ui::font(ui::F_SMALL), 24, 278, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        snprintf(line, sizeof line, TR("moon: %s, %d%% lit"), TR(doba_sun::moonName(s.utc)),
-                 (int)(doba_sun::moonLit(s.utc) * 100 + 0.5));
-        ui::text(ui::font(ui::F_SMALL), 24, 306, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    } else {
-        ui::text(ui::font(ui::F_SMALL), 24, 278, TR("needs a GPS fix once"), fb, EPD_DRAW_ALIGN_LEFT, INK);
-    }
-
-    // the owner card
-    int y = MAP_BOT + 14;
-    if (settings::owner()[0]) {
-        const EpdRect box = {16, y, W - 32, 88};
-        ui::frameRound(box, 10, 3, fb, INK, PAPER);
-        ui::upper(TR("IF FOUND"), up, sizeof up);
-        ui::text(ui::font(ui::F_TINY), 32, y + 28, up, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
-        // up to two lines, cut at a space
-        const char* o = settings::owner();
-        char l1[128], l2[128];
-        snprintf(l1, sizeof l1, "%s", o);
-        l2[0] = 0;
-        const EpdFont* f = ui::font(ui::F_SMALL);
-        if (ui::textWidth(f, l1) > box.width - 32) {
-            int best = 0;
-            for (int i = 1; l1[i]; ++i) {
-                if (l1[i] != ' ') continue;
-                char t[128];
-                memcpy(t, l1, i); t[i] = 0;
-                if (ui::textWidth(f, t) <= box.width - 32) best = i; else break;
-            }
-            if (best) { snprintf(l2, sizeof l2, "%s", l1 + best + 1); l1[best] = 0; }
+    {
+        const EpdRect r = card(92, 156);
+        label(r.x + 18, r.y + 28, "WHERE I WAS");
+        if (pos) {
+            milgeo::mgrs(lat, lon, line, sizeof line);
+            ui::text(ui::font(ui::F_MONO), r.x + 18, r.y + 72, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+            snprintf(line, sizeof line, "%.5f, %.5f", lat, lon);
+            ui::text(ui::font(ui::F_SMALL), r.x + 18, r.y + 104, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        } else {
+            ui::text(ui::font(ui::F_SMALL), r.x + 18, r.y + 72, TR("no position yet"), fb, EPD_DRAW_ALIGN_LEFT, INK);
         }
-        ui::text(f, 32, y + 56, l1, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        if (l2[0]) ui::text(f, 32, y + 80, l2, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        y += 100;
+        if (s.timeValid) {
+            const time_t t = s.utc + settings::tzMinutes() * 60;
+            struct tm tm;
+            gmtime_r(&t, &tm);
+            snprintf(a, sizeof a, "%02d.%02d %02d:%02d", tm.tm_mday, tm.tm_mon + 1, tm.tm_hour, tm.tm_min);
+        } else snprintf(a, sizeof a, "--");
+        if (br.hoursLeft > 0) snprintf(line, sizeof line, TR("off %s · charge %d%% (about %s of use)"), a, pct, hoursText(br.hoursLeft));
+        else snprintf(line, sizeof line, TR("off %s · charge %d%%"), a, pct);
+        ui::text(ui::font(ui::F_TINY), r.x + 18, r.y + 138, line, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        // the charge as a small cell, right
+        const EpdRect cell = {r.x + r.width - 18 - 64, r.y + 14, 58, 24};
+        ui::frameRound(cell, 4, 2, fb, INK, PAPER);
+        epd_fill_rect({cell.x + cell.width, cell.y + 7, 4, 10}, INK, fb);
+        epd_fill_rect({cell.x + 4, cell.y + 4, (cell.width - 8) * std::max(0, std::min(100, pct)) / 100, cell.height - 8}, INK, fb);
     }
 
-    // the crib: what to signal, what lasts how long
-    section(y - 8, "IN AN EMERGENCY", fb);
-    y += 40;
-    static const char* const kCrib[] = {
-        "112 · SOS: ... --- ... (3 short, 3 long, 3 short)",
-        "Ground to air: V help · X medical · N no · Y yes · arrow = going this way",
-        "Three of anything (fires, whistles, flashes) = distress",
-        "Rule of three: 3 min air · 3 h cold · 3 days water · 3 weeks food",
-    };
-    for (const char* k : kCrib) {
-        if (y > H - 12) break;
-        char t[160];
-        snprintf(t, sizeof t, "%s", TR(k));
-        ui::text(ui::font(ui::F_TINY), 24, y, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        y += 34;
+    // --- the map window
+    epd_fill_rect({0, MAP_TOP, W, 2}, INK, fb);
+    epd_fill_rect({0, MAP_BOT - 2, W, 2}, INK, fb);
+
+    // --- tomorrow's light, four times in a row, and the moon
+    int y = MAP_BOT + 12;
+    {
+        const EpdRect r = card(y, 116);
+        label(r.x + 18, r.y + 26, "TOMORROW");
+        if (pos && s.timeValid) {
+            const doba_sun::Day dd = doba_sun::day(lat, lon, s.utc + 86400);
+            const struct { const char* name; bool ok; time_t t; } col[4] = {
+                {"light", dd.dawnOk, dd.dawn}, {"sunrise", dd.riseOk, dd.rise},
+                {"sunset", dd.setOk, dd.set},  {"dark", dd.duskOk, dd.dusk}};
+            const int cw = (r.width - 36) / 4;
+            for (int k = 0; k < 4; ++k) {
+                const int cx = r.x + 18 + k * cw;
+                if (col[k].ok) hhmm(col[k].t, a, sizeof a); else snprintf(a, sizeof a, "--");
+                ui::text(ui::font(ui::F_KEY), cx, r.y + 66, a, fb, EPD_DRAW_ALIGN_LEFT, INK);
+                ui::text(ui::font(ui::F_TINY), cx, r.y + 88, TR(col[k].name), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+            }
+            snprintf(line, sizeof line, TR("moon: %s, %d%% lit"), TR(doba_sun::moonName(s.utc)),
+                     (int)(doba_sun::moonLit(s.utc) * 100 + 0.5));
+            ui::text(ui::font(ui::F_TINY), r.x + r.width - 18, r.y + 26, line, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        } else {
+            ui::text(ui::font(ui::F_SMALL), r.x + 18, r.y + 70, TR("needs a GPS fix once"), fb, EPD_DRAW_ALIGN_LEFT, INK);
+        }
+        y += 116 + 10;
+    }
+
+    // --- the owner card
+    if (settings::owner()[0]) {
+        const EpdRect r = card(y, 78);
+        label(r.x + 18, r.y + 26, "IF FOUND");
+        char t[128];
+        snprintf(t, sizeof t, "%s", settings::owner());
+        fitTextTo(ui::font(ui::F_SMALL), t, r.width - 36);
+        ui::text(ui::font(ui::F_SMALL), r.x + 18, r.y + 58, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        y += 78 + 10;
+    }
+
+    // --- the crib, black: the part to find at a glance
+    {
+        const int h = H - 10 - y;
+        const EpdRect r = {16, y, W - 32, h};
+        ui::fillRound(r, 12, INK, fb);
+        char up[64];
+        ui::upper(TR("IN AN EMERGENCY"), up, sizeof up);
+        ui::text(ui::font(ui::F_TINY), r.x + 18, r.y + 26, up, fb, EPD_DRAW_ALIGN_LEFT, 0xB0);
+        static const char* const kCrib[] = {
+            "112 · SOS: ... --- ... (3 short, 3 long, 3 short)",
+            "Ground to air: V help · X medical",
+            "N no · Y yes · arrow = going this way",
+            "Three of anything (fires, whistles, flashes) = distress",
+            "Rule of three: 3 min air · 3 h cold",
+            "3 days water · 3 weeks food",
+        };
+        int ly = r.y + 54;
+        for (const char* k : kCrib) {
+            if (ly > r.y + h - 8) break;
+            char t[160];
+            snprintf(t, sizeof t, "%s", TR(k));
+            fitTextTo(ui::font(ui::F_TINY), t, r.width - 36);
+            ui::text(ui::font(ui::F_TINY), r.x + 18, ly, t, fb, EPD_DRAW_ALIGN_LEFT, PAPER);
+            ly += 26;
+        }
     }
 }
 
