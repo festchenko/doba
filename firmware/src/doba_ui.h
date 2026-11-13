@@ -36,6 +36,10 @@ enum Go : uint8_t {
 // Called every pass of the UI loop: repeats an active SOS. True when the SOS
 // page (or HOME's tile) needs a repaint.
 bool tick(const RideState& s);
+// The power-off screen around the farewell map: where Doba was switched off,
+// tomorrow's sun, the charge, the owner card and an emergency crib. The map is
+// already in fb; this keeps a band of it around the position (y 320..640).
+void renderOffCard(const RideState& s, bool powerKey, uint8_t* fb);
 bool sosActive();
 
 // Show waypoint i on the POINT page next (after a long-press on the map).

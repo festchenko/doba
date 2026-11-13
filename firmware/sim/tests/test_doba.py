@@ -681,3 +681,16 @@ def test_battery_page_forecasts_and_splits_the_draw(doba):
     doba.screenshot(os.path.join(doba.dir, "battery_uk.png"))
     left = [l for l in doba.log(since) if "[i18n] miss" in l and "LongFast" not in l]
     assert not left, left
+
+
+def test_the_power_off_screen_is_a_paper_card(doba):
+    """Switched off, the glass keeps: where Doba was, tomorrow's sun, the
+    charge, the owner card and the emergency crib."""
+    boot(doba)
+    doba.gps(52.0421, 6.6170)
+    time.sleep(3)
+    doba.console("lang uk", 500)
+    since = doba.log_seq()
+    doba.console("farewell", 800)
+    time.sleep(3)
+    doba.screenshot(os.path.join(doba.dir, "offcard.png"))

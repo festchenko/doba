@@ -428,7 +428,7 @@ void renderFarewell(uint8_t* fb) {
               (int)mapMpp, (unsigned long)(t1 - t0), (unsigned long)(millis() - t1), map.projectedTiles,
               map.wantedTiles, map.featureCount, map.waterCount, map.parkCount,
               map.partial ? " CUT" : "", map.hasMap ? "" : " NOMAP", map.centerLat, map.centerLon);
-    ui_render_shutdown_screen(fb, g_offByPowerKey);
+    doba_ui::renderOffCard(s, g_offByPowerKey, fb);   // DOBA: the paper card
 }
 
 void shutdownDevice(uint8_t* fb, const char* reason) {

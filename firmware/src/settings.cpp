@@ -27,7 +27,8 @@ bool miles = false;  // false = km, true = miles
 bool clk24 = true;   // true = 24-hour clock, false = 12-hour
 bool usbDrv = true;
 bool btOn = false;    // DOBA: Bluetooth off unless asked for
-bool wifiOn = false;  // DOBA: WiFi off unless asked for  // true = expose SD as USB drive when plugged into a host
+bool wifiOn = false;  // DOBA: WiFi off unless asked for
+char ownerText[128] = "";   // DOBA: "if found" card on the power-off screen  // true = expose SD as USB drive when plugged into a host
 // false = a field whose sensor is unpaired is dropped from the dashboard and
 // the rest re-pack; true = it stays, showing no data. ON by default: a new
 // device should show the layout the rider configured, gaps and all, rather
@@ -99,6 +100,7 @@ void begin() {
     btOn = prefs.getBool("bt", false);
 #endif
     wifiOn = prefs.getBool("wifi", false);
+    prefs.getString("owner", ownerText, sizeof ownerText);
     showOff = prefs.getBool("showoff", true);
     mapLayerMask = prefs.getUShort("maplayers", 0x003F);
     autoPause = prefs.getInt("apause", 10);
@@ -226,6 +228,11 @@ void setUsbDrive(bool on) {
 bool bluetooth() { return btOn; }
 void setBluetooth(bool on) { btOn = on; prefs.putBool("bt", on); }
 bool wifi() { return wifiOn; }
+const char* owner() { return ownerText; }
+void setOwner(const char* t) {
+    snprintf(ownerText, sizeof ownerText, "%s", t ? t : "");
+    prefs.putString("owner", ownerText);
+}
 void setWifi(bool on) { wifiOn = on; prefs.putBool("wifi", on); }
 
 bool showOffline() { return showOff; }

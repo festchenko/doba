@@ -1265,8 +1265,14 @@ void renderField(const char* caption, const char* note, kbd::Keyboard& k, const 
     k.render(fb);
 }
 
+bool g_fieldOwner = false;   // the SETUP_NAME page edits the owner card instead
 Go tapSetupName(int x, int y) {
     const kbd::Action a = g_nameKbd.tap(x, y);
+    if (g_fieldOwner) {
+        while (strlen(g_nameKbd.text) > 120) kbd::popUtf8(g_nameKbd.text);
+        if (a == kbd::ENTER) { settings::setOwner(g_nameKbd.text); g_fieldOwner = false; return TO_MORE; }
+        return STAY;
+    }
     while (strlen(g_nameKbd.text) > 36) kbd::popUtf8(g_nameKbd.text);
     if (a == kbd::ENTER && g_nameKbd.text[0]) {
         char sh[20];
@@ -1968,7 +1974,7 @@ void renderSun(const RideState& s, uint8_t* fb) {
 // --- MORE ----------------------------------------------------------------------
 
 const char* hoursText(float h);
-enum MoreRow { M_USB, M_BT, M_WIFI, M_BATT, M_GPS, M_MODE, M_CARD, M_ABOUT, M_COUNT };
+enum MoreRow { M_USB, M_BT, M_WIFI, M_BATT, M_OWNER, M_GPS, M_MODE, M_CARD, M_ABOUT, M_COUNT };
 int moreRowY(int r) { return TOP + 4 + SEC_H + r * SROW_H; }
 
 void renderMore(const RideState& s, uint8_t* fb) {
@@ -2001,6 +2007,13 @@ void renderMore(const RideState& s, uint8_t* fb) {
                 else snprintf(sub, sizeof sub, "%s", br.charging ? TR("charging") : TR("measuring..."));
                 caption(y, SROW_H, "BATTERY", sub, fb);
                 button({CTRL_X, y + (SROW_H - CTRL_H) / 2, CTRL_W, CTRL_H}, "Details  \xE2\x80\xBA", false, fb);
+                break;
+            }
+            case M_OWNER: {
+                char o[40];
+                snprintf(o, sizeof o, "%.30s%s", settings::owner(), strlen(settings::owner()) > 30 ? "..." : "");
+                caption(y, SROW_H, "IF FOUND", o[0] ? o : TR("empty: tap to write"), fb);
+                button({CTRL_X, y + (SROW_H - CTRL_H) / 2, CTRL_W, CTRL_H}, "Edit  \xE2\x80\xBA", false, fb);
                 break;
             }
             case M_GPS:
@@ -2054,6 +2067,12 @@ Go tapMore(int x, int y) {
     if (r == M_WIFI && toggleHit(x)) settings::setWifi(x >= CTRL_X + CTRL_W - 75);
     if (r == M_GPS && x >= CTRL_X) return TO_GPSDEBUG;
     if (r == M_BATT && x >= CTRL_X) return TO_BATTERY;
+    if (r == M_OWNER) {
+        g_nameKbd.clear();
+        snprintf(g_nameKbd.text, sizeof g_nameKbd.text, "%s", settings::owner());
+        g_fieldOwner = true;
+        return TO_SETUP_NAME;
+    }
     if (r == M_MODE && x >= CTRL_X) {
         const int n = mesh::PRESET_COUNT, step = stepperHit(x) < 0 ? -1 : 1;
         mesh_service::setPreset((uint8_t)(((mesh_service::presetIndex() + step) % n + n) % n));
@@ -2124,6 +2143,117 @@ void renderBattery(const RideState& s, uint8_t* fb) {
 
 }  // namespace
 
+
+// --- the power-off card -------------------------------------------------------------
+//
+// E-paper keeps its picture with no power at all, so a switched-off Doba is a
+// paper card: what someone (you, later, or whoever finds it) most needs to read.
+void renderOffCard(const RideState& s, bool powerKey, uint8_t* fb) {
+    constexpr int MAP_TOP = 320, MAP_BOT = 640;
+    epd_fill_rect({0, 0, W, MAP_TOP}, PAPER, fb);
+    epd_fill_rect({0, MAP_BOT, W, H - MAP_BOT}, PAPER, fb);
+    epd_fill_rect({0, MAP_TOP, W, 2}, INK, fb);
+    epd_fill_rect({0, MAP_BOT - 2, W, 2}, INK, fb);
+
+    // the band: off, and how to wake it
+    epd_fill_rect({0, 0, W, 72}, INK, fb);
+    char up[64];
+    ui::upper(TR("POWERED OFF"), up, sizeof up);
+    ui::text(ui::font(ui::F_LABEL), 24, 32, up, fb, EPD_DRAW_ALIGN_LEFT, PAPER);
+    ui::text(ui::font(ui::F_TINY), 24, 60, powerKey ? TR("press POWER to switch on") : TR("press BOOT to wake"), fb,
+             EPD_DRAW_ALIGN_LEFT, PAPER);
+
+    double lat = s.latitude, lon = s.longitude;
+    bool pos = s.everHadFix;
+    if (!pos) pos = settings::lastPosition(lat, lon);
+    char line[160], a[24], b[24], c[24], d[24];
+
+    section(84, "WHERE I WAS", fb);
+    if (pos) {
+        milgeo::mgrs(lat, lon, line, sizeof line);
+        ui::text(ui::font(ui::F_LABEL), 24, 148, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        snprintf(line, sizeof line, "%.5f, %.5f", lat, lon);
+        ui::text(ui::font(ui::F_SMALL), 24, 180, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    } else {
+        ui::text(ui::font(ui::F_SMALL), 24, 148, TR("no position yet"), fb, EPD_DRAW_ALIGN_LEFT, INK);
+    }
+    // when, and the charge
+    doba_batt::Report br;
+    doba_batt::report(br);
+    const int pct = br.have ? br.soc : s.batteryPercent;
+    if (s.timeValid) {
+        const time_t t = s.utc + settings::tzMinutes() * 60;
+        struct tm tm;
+        gmtime_r(&t, &tm);
+        snprintf(a, sizeof a, "%02d.%02d %02d:%02d", tm.tm_mday, tm.tm_mon + 1, tm.tm_hour, tm.tm_min);
+    } else snprintf(a, sizeof a, "--");
+    if (br.hoursLeft > 0) snprintf(line, sizeof line, TR("off %s · charge %d%% (about %s of use)"), a, pct, hoursText(br.hoursLeft));
+    else snprintf(line, sizeof line, TR("off %s · charge %d%%"), a, pct);
+    ui::text(ui::font(ui::F_SMALL), 24, 212, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+
+    // tomorrow's sun and tonight's moon
+    section(224, "TOMORROW", fb);
+    if (pos && s.timeValid) {
+        const doba_sun::Day dd = doba_sun::day(lat, lon, s.utc + 86400);
+        if (dd.dawnOk) hhmm(dd.dawn, a, sizeof a); else snprintf(a, sizeof a, "--");
+        if (dd.riseOk) hhmm(dd.rise, b, sizeof b); else snprintf(b, sizeof b, "--");
+        if (dd.setOk) hhmm(dd.set, c, sizeof c); else snprintf(c, sizeof c, "--");
+        if (dd.duskOk) hhmm(dd.dusk, d, sizeof d); else snprintf(d, sizeof d, "--");
+        snprintf(line, sizeof line, TR("light %s · sunrise %s · sunset %s · dark %s"), a, b, c, d);
+        ui::text(ui::font(ui::F_SMALL), 24, 278, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        snprintf(line, sizeof line, TR("moon: %s, %d%% lit"), TR(doba_sun::moonName(s.utc)),
+                 (int)(doba_sun::moonLit(s.utc) * 100 + 0.5));
+        ui::text(ui::font(ui::F_SMALL), 24, 306, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    } else {
+        ui::text(ui::font(ui::F_SMALL), 24, 278, TR("needs a GPS fix once"), fb, EPD_DRAW_ALIGN_LEFT, INK);
+    }
+
+    // the owner card
+    int y = MAP_BOT + 14;
+    if (settings::owner()[0]) {
+        const EpdRect box = {16, y, W - 32, 88};
+        ui::frameRound(box, 10, 3, fb, INK, PAPER);
+        ui::upper(TR("IF FOUND"), up, sizeof up);
+        ui::text(ui::font(ui::F_TINY), 32, y + 28, up, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        // up to two lines, cut at a space
+        const char* o = settings::owner();
+        char l1[128], l2[128];
+        snprintf(l1, sizeof l1, "%s", o);
+        l2[0] = 0;
+        const EpdFont* f = ui::font(ui::F_SMALL);
+        if (ui::textWidth(f, l1) > box.width - 32) {
+            int best = 0;
+            for (int i = 1; l1[i]; ++i) {
+                if (l1[i] != ' ') continue;
+                char t[128];
+                memcpy(t, l1, i); t[i] = 0;
+                if (ui::textWidth(f, t) <= box.width - 32) best = i; else break;
+            }
+            if (best) { snprintf(l2, sizeof l2, "%s", l1 + best + 1); l1[best] = 0; }
+        }
+        ui::text(f, 32, y + 56, l1, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        if (l2[0]) ui::text(f, 32, y + 80, l2, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        y += 100;
+    }
+
+    // the crib: what to signal, what lasts how long
+    section(y - 8, "IN AN EMERGENCY", fb);
+    y += 40;
+    static const char* const kCrib[] = {
+        "112 · SOS: ... --- ... (3 short, 3 long, 3 short)",
+        "Ground to air: V help · X medical · N no · Y yes · arrow = going this way",
+        "Three of anything (fires, whistles, flashes) = distress",
+        "Rule of three: 3 min air · 3 h cold · 3 days water · 3 weeks food",
+    };
+    for (const char* k : kCrib) {
+        if (y > H - 12) break;
+        char t[160];
+        snprintf(t, sizeof t, "%s", TR(k));
+        ui::text(ui::font(ui::F_TINY), 24, y, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        y += 34;
+    }
+}
+
 void render(Page p, const RideState& s, uint8_t* fb) {
     switch (p) {
         case HOME:    renderHome(s, fb); break;
@@ -2135,7 +2265,10 @@ void render(Page p, const RideState& s, uint8_t* fb) {
         case ARTICLE: doba_lib::renderArticle(fb); break;
         case SETUP:   renderSetup(s, fb); break;
         case SETUP_NAME:
-            renderField("CALLSIGN  (how the mesh sees you)", "Short name: first four letters", g_nameKbd, "SAVE", fb);
+            if (g_fieldOwner)
+                renderField("IF FOUND  (shown when Doba is off)", "Name, blood group, allergies, a phone", g_nameKbd, "SAVE", fb);
+            else
+                renderField("CALLSIGN  (how the mesh sees you)", "Short name: first four letters", g_nameKbd, "SAVE", fb);
             break;
         case POINTS:  renderPoints(s, fb); break;
         case POINT:   renderPoint(s, fb); break;
@@ -2216,7 +2349,7 @@ Go back(Page p) {
             if (doba_lib::articleBack()) return STAY;   // back along a followed link
             return TO_LIBRARY;
         case SETUP:   return TO_HOME;
-        case SETUP_NAME: return TO_SETUP;
+        case SETUP_NAME: if (g_fieldOwner) { g_fieldOwner = false; return TO_MORE; } return TO_SETUP;
         case POINTS:
             if (g_nearby) { g_nearby = g_nearby == 2 ? 1 : 0; g_nearPage = 0; return STAY; }
             return TO_HOME;

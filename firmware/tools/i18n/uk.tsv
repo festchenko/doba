@@ -500,3 +500,22 @@ Radio (LoRa)	Радіо (LoRa)
 Front light	Підсвітка
 Screen updates	Оновлення екрана
 Processor and the rest	Процесор та інше
+# --- power-off card
+WHERE I WAS	ДЕ Я БУВ
+no position yet	позиції ще немає
+off %s · charge %d%% (about %s of use)	вимкнено %s · заряд %d%% (≈%s роботи)
+off %s · charge %d%%	вимкнено %s · заряд %d%%
+TOMORROW	ЗАВТРА
+light %s · sunrise %s · sunset %s · dark %s	світає %s · схід %s · захід %s · темно %s
+moon: %s, %d%% lit	місяць: %s, освітлено %d%%
+needs a GPS fix once	потрібен хоча б один GPS-фікс
+IF FOUND	ЯКЩО ЗНАЙШЛИ
+IN AN EMERGENCY	У НАДЗВИЧАЙНІЙ СИТУАЦІЇ
+112 · SOS: ... --- ... (3 short, 3 long, 3 short)	112 · SOS: ... --- ... (3 коротких, 3 довгих, 3 коротких)
+Ground to air: V help · X medical · N no · Y yes · arrow = going this way	Земля–повітря: V допомога · X медицина · N ні · Y так · стрілка = йду туди
+Three of anything (fires, whistles, flashes) = distress	Будь-що тричі (вогні, свистки, спалахи) = лихо
+Rule of three: 3 min air · 3 h cold · 3 days water · 3 weeks food	Правило трьох: 3 хв повітря · 3 год холод · 3 дні вода · 3 тижні їжа
+IF FOUND  (shown when Doba is off)	ЯКЩО ЗНАЙШЛИ  (видно, коли Доба вимкнена)
+Name, blood group, allergies, a phone	Ім’я, група крові, алергії, телефон
+empty: tap to write	порожньо: торкніться, щоб написати
+Edit  \xE2\x80\xBA	Змінити  \xE2\x80\xBA

@@ -55,6 +55,9 @@ void setUsbDrive(bool on);
 bool bluetooth();
 void setBluetooth(bool on);
 bool wifi();
+// DOBA: the owner card on the power-off screen ("" = none).
+const char* owner();
+void setOwner(const char* t);
 void setWifi(bool on);
 
 // true = keep a field on the dashboard even when its sensor is not paired,
