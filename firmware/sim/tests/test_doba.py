@@ -690,6 +690,7 @@ def test_the_power_off_screen_is_a_paper_card(doba):
     doba.gps(52.0421, 6.6170)
     time.sleep(3)
     doba.console("lang uk", 500)
+    doba.console("owner Денис Фещенко · кров A(II)+ · алергії немає · +31 6 0000 0000", 500)
     since = doba.log_seq()
     doba.console("farewell", 800)
     time.sleep(3)

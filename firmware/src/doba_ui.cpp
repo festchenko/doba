@@ -2164,7 +2164,7 @@ static void fitTextTo(const EpdFont* f, char* t, int w) {
 
 void renderOffCard(const RideState& s, bool powerKey, uint8_t* fb) {
     // The map is already drawn, centred on the position at y 430 (riderY).
-    constexpr int MAP_TOP = 262, MAP_BOT = 598;
+    constexpr int MAP_TOP = 262, MAP_BOT = 560;
     // Paper above and below the map window, then contour lines on it: the
     // same landscape texture as Doba's own screens. Cards go on top, white.
     epd_fill_rect({0, 0, W, MAP_TOP}, PAPER, fb);
@@ -2241,7 +2241,7 @@ void renderOffCard(const RideState& s, bool powerKey, uint8_t* fb) {
     // --- tomorrow's light, four times in a row, and the moon
     int y = MAP_BOT + 12;
     {
-        const EpdRect r = card(y, 116);
+        const EpdRect r = card(y, 104);
         label(r.x + 18, r.y + 26, "TOMORROW");
         if (pos && s.timeValid) {
             const doba_sun::Day dd = doba_sun::day(lat, lon, s.utc + 86400);
@@ -2252,8 +2252,8 @@ void renderOffCard(const RideState& s, bool powerKey, uint8_t* fb) {
             for (int k = 0; k < 4; ++k) {
                 const int cx = r.x + 18 + k * cw;
                 if (col[k].ok) hhmm(col[k].t, a, sizeof a); else snprintf(a, sizeof a, "--");
-                ui::text(ui::font(ui::F_KEY), cx, r.y + 66, a, fb, EPD_DRAW_ALIGN_LEFT, INK);
-                ui::text(ui::font(ui::F_TINY), cx, r.y + 88, TR(col[k].name), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+                ui::text(ui::font(ui::F_KEY), cx, r.y + 62, a, fb, EPD_DRAW_ALIGN_LEFT, INK);
+                ui::text(ui::font(ui::F_TINY), cx, r.y + 86, TR(col[k].name), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
             }
             snprintf(line, sizeof line, TR("moon: %s, %d%% lit"), TR(doba_sun::moonName(s.utc)),
                      (int)(doba_sun::moonLit(s.utc) * 100 + 0.5));
@@ -2261,18 +2261,35 @@ void renderOffCard(const RideState& s, bool powerKey, uint8_t* fb) {
         } else {
             ui::text(ui::font(ui::F_SMALL), r.x + 18, r.y + 70, TR("needs a GPS fix once"), fb, EPD_DRAW_ALIGN_LEFT, INK);
         }
-        y += 116 + 10;
+        y += 104 + 10;
     }
 
     // --- the owner card
     if (settings::owner()[0]) {
-        const EpdRect r = card(y, 78);
+        // up to two lines, broken at a space
+        const EpdFont* f = ui::font(ui::F_SMALL);
+        const int tw = W - 32 - 36;
+        char l1[128], l2[128];
+        snprintf(l1, sizeof l1, "%s", settings::owner());
+        l2[0] = 0;
+        if (ui::textWidth(f, l1) > tw) {
+            int best = 0;
+            for (int i = 1; l1[i]; ++i) {
+                if (l1[i] != ' ') continue;
+                char t[128];
+                memcpy(t, l1, i); t[i] = 0;
+                if (ui::textWidth(f, t) <= tw) best = i; else break;
+            }
+            if (best) { snprintf(l2, sizeof l2, "%s", l1 + best + 1); l1[best] = 0; }
+            fitTextTo(f, l1, tw);
+            fitTextTo(f, l2, tw);
+        }
+        const int h = l2[0] ? 108 : 80;
+        const EpdRect r = card(y, h);
         label(r.x + 18, r.y + 26, "IF FOUND");
-        char t[128];
-        snprintf(t, sizeof t, "%s", settings::owner());
-        fitTextTo(ui::font(ui::F_SMALL), t, r.width - 36);
-        ui::text(ui::font(ui::F_SMALL), r.x + 18, r.y + 58, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        y += 78 + 10;
+        ui::text(f, r.x + 18, r.y + 58, l1, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        if (l2[0]) ui::text(f, r.x + 18, r.y + 88, l2, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        y += h + 10;
     }
 
     // --- the crib, black: the part to find at a glance
@@ -2298,7 +2315,7 @@ void renderOffCard(const RideState& s, bool powerKey, uint8_t* fb) {
             snprintf(t, sizeof t, "%s", TR(k));
             fitTextTo(ui::font(ui::F_TINY), t, r.width - 36);
             ui::text(ui::font(ui::F_TINY), r.x + 18, ly, t, fb, EPD_DRAW_ALIGN_LEFT, PAPER);
-            ly += 26;
+            ly += 25;
         }
     }
 }

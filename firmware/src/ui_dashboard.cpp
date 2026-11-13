@@ -3509,6 +3509,12 @@ static void runConsoleLine(char* line) {
         const char* rest = strtok(nullptr, "");
         snprintf(t, sizeof t, "%s%s%s", arg, rest ? " " : "", rest ? rest : "");
         if (doba_lib::openTitle(t)) screen = SCREEN_ARTICLE;
+    } else if (!strcasecmp(cmd, "owner")) {   // DOBA: owner <text>: the IF FOUND card ("owner" alone clears it)
+        char t[160] = "";
+        const char* rest = arg ? strtok(nullptr, "") : nullptr;
+        if (arg) snprintf(t, sizeof t, "%s%s%s", arg, rest ? " " : "", rest ? rest : "");
+        settings::setOwner(t);
+        Serial.printf("[cmd] owner '%s'\n", t);
     } else if (!strcasecmp(cmd, "screen")) {
         if (!arg) { Serial.println("[cmd] screen <map|dash|menu|settings|gps|layers>"); return; }
         if      (!strcasecmp(arg, "map"))      screen = SCREEN_MAP;
