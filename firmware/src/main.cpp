@@ -800,6 +800,26 @@ bool board_side_button_pressed() {
     return first && second;
 }
 
+bool board_battery_ship_mode() {
+    i2cLock();
+    Wire.beginTransmission(0x6B);
+    Wire.write(0x09);
+    bool ok = Wire.endTransmission(false) == 0;
+    uint8_t v = 0;
+    if (ok) ok = Wire.requestFrom((uint8_t)0x6B, (uint8_t)1) == 1;
+    if (ok) v = Wire.read();
+    if (ok) {
+        v |= 0x20;            // BATFET_DIS: battery FET off
+        v &= (uint8_t)~0x08;  // BATFET_DLY = 0: now, not after ~10 s
+        Wire.beginTransmission(0x6B);
+        Wire.write(0x09);
+        Wire.write(v);
+        ok = Wire.endTransmission() == 0;
+    }
+    i2cUnlock();
+    return ok;
+}
+
 // BQ25896 REG11 bit 7 is VBUS_GD, a live status bit independent of ADC mode.
 // Read only: do not reset/reconfigure the charger owned by the panel driver.
 bool board_usb_power_present(bool& present) {

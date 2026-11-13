@@ -458,6 +458,10 @@ GPS %u	GPS %u
 No fix	Немає GPS
 SHUT DOWN?	ВИМКНУТИ?
 Sleeps until you press the button.	Спить, доки не натиснете кнопку.
+Switch on again with POWER.	Увімкнути знову: кнопка POWER.
+POWERED OFF	ВИМКНЕНО
+press POWER to switch on	натисніть POWER, щоб увімкнути
+press BOOT to wake	натисніть BOOT, щоб розбудити
 A track is recording — it will be saved first.	Записується трек — спершу його буде збережено.
 SHUT DOWN	ВИМКНУТИ
 CANCEL	СКАСУВАТИ

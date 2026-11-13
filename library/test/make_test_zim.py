@@ -67,7 +67,11 @@ severe bleeding from a limb.</p><h2>Use</h2><p>Apply 5–7 cm above the wound.</
      """<html><body><p>Повість Івана Франка про громаду Тухольщини. Розділи: <a href="./Захар_Беркут/I">перший</a>,
 <a href="./Захар_Беркут/II">другий</a>.</p></body></html>"""),
     ("Твори_(Франко,_1956–1962)/13/Захар_Беркут/I", "Твори (Франко, 1956–1962)/13/Захар Беркут/I",
-     """<html><body><p>Розділ перший. Тухольщина в горах, громада вирішує, як зустріти ворога і що робити далі.</p></body></html>"""),
+     # long enough to be a book: several pages, for "opens where reading stopped"
+     "<html><body><p>Розділ перший. Тухольщина в горах, громада вирішує, як зустріти ворога і що робити далі.</p>"
+     + "".join("<p>Абзац %d. Над Тухлею стояли гори, вкриті смерековим лісом, і громада сходилася на раду, "
+               "щоб разом вирішити, як жити далі й берегти свою землю від чужої сили.</p>" % i for i in range(1, 61))
+     + "</body></html>"),
     ("Твори_(Франко,_1956–1962)/13/Захар_Беркут/II", "Твори (Франко, 1956–1962)/13/Захар Беркут/II",
      """<html><body><p>Розділ другий. Монголи йдуть через гори, і Захар Беркут збирає людей на раду біля скелі.</p></body></html>"""),
     ("Knots", "Knots", """<html class="vector-feature-toc-pinned-clientpref-0"><body class="skin-vector mediawiki"><p>A knot is a method of fastening cordage; the bowline makes a fixed loop

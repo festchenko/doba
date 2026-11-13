@@ -641,8 +641,12 @@ void extractLinks() {
     g_text[w] = 0;
 }
 
-void addRecent(const char* dir, const char* title);
+uint32_t addRecent(const char* dir, const char* title);
+void savePlace();
+int pageOfLine(int k);
+constexpr int RESUME_MIN_PAGES = 4;
 bool openArticle(const Result& r) {
+    savePlace();   // the article being left keeps its page
     const uint32_t t0 = millis();
     g_note = nullptr;
     if (r.book >= 0 && r.book < g_bookCount) g_book = r.book;
@@ -676,13 +680,20 @@ bool openArticle(const Result& r) {
     g_page = 0;
     Serial.printf("[lib] open '%s' pages=%d links=%d in %lu ms\n", g_title, g_pageCount, g_linkCount,
                   (unsigned long)(millis() - t0));
-    addRecent(b.dir, r.title);
+    const uint32_t at = addRecent(b.dir, r.title);
+    if (at && g_pageCount >= RESUME_MIN_PAGES) {
+        for (int k = 0; k < g_lineCount; ++k)
+            if (g_lines[k].off >= at) { g_page = pageOfLine(k); break; }
+        Serial.printf("[lib] resume '%s' at page %d\n", g_title, g_page + 1);
+    }
     return true;
 }
 
 // --- recent: what was read last, newest first (/doba/recent.txt "book|title") -------
 constexpr int MAX_RECENT = 30;
-struct Recent { char dir[32]; char title[KEY + 1]; };
+// off: where reading stopped, a byte offset into the article's text (0 = top).
+// A page number would move with the font and the screen; the text does not.
+struct Recent { char dir[32]; char title[KEY + 1]; uint32_t off; };
 PsArr<Recent, MAX_RECENT> g_recent;
 int g_recentCount = -1;      // -1: not loaded
 const char* kRecentPath = "/doba/recent.txt";
@@ -702,7 +713,15 @@ void loadRecent() {
                     *bar = 0;
                     Recent& r = g_recent[g_recentCount++];
                     snprintf(r.dir, sizeof r.dir, "%s", line);
-                    snprintf(r.title, sizeof r.title, "%s", bar + 1);
+                    // "book|title|offset" — the offset is optional (older files).
+                    char* t = bar + 1;
+                    char* last = strrchr(t, '|');
+                    r.off = 0;
+                    if (last && last[1] && strspn(last + 1, "0123456789") == strlen(last + 1)) {
+                        r.off = (uint32_t)strtoul(last + 1, nullptr, 10);
+                        *last = 0;
+                    }
+                    snprintf(r.title, sizeof r.title, "%s", t);
                 }
                 n = 0;
                 if (c < 0) break;
@@ -712,23 +731,43 @@ void loadRecent() {
     }
     sdUnlock();
 }
-void addRecent(const char* dir, const char* title) {
+void writeRecent() {
+    sdLock();
+    File f = SD.open(kRecentPath, FILE_WRITE);
+    if (f) {
+        for (int i = 0; i < g_recentCount; ++i)
+            f.printf("%s|%s|%lu\n", g_recent[i].dir, g_recent[i].title, (unsigned long)g_recent[i].off);
+        f.close();
+    }
+    sdUnlock();
+}
+// Brings (dir, title) to the front; returns where reading stopped last time.
+uint32_t addRecent(const char* dir, const char* title) {
     loadRecent();
     int at = g_recentCount < MAX_RECENT ? g_recentCount : MAX_RECENT - 1;
     for (int i = 0; i < g_recentCount; ++i)
         if (!strcmp(g_recent[i].dir, dir) && !strcmp(g_recent[i].title, title)) { at = i; break; }
-    if (at == 0 && g_recentCount > 0 && !strcmp(g_recent[0].title, title)) return;
+    const bool known = at < g_recentCount;
+    const uint32_t off = known ? g_recent[at].off : 0;
+    if (at == 0 && known) return off;
     for (int i = at; i > 0; --i) g_recent[i] = g_recent[i - 1];
     snprintf(g_recent[0].dir, sizeof g_recent[0].dir, "%s", dir);
     snprintf(g_recent[0].title, sizeof g_recent[0].title, "%s", title);
-    if (at == g_recentCount) ++g_recentCount;
-    sdLock();
-    File f = SD.open(kRecentPath, FILE_WRITE);
-    if (f) {
-        for (int i = 0; i < g_recentCount; ++i) { f.print(g_recent[i].dir); f.print("|"); f.print(g_recent[i].title); f.print("\n"); }
-        f.close();
-    }
-    sdUnlock();
+    g_recent[0].off = off;
+    if (!known) ++g_recentCount;
+    writeRecent();
+    return off;
+}
+// The open article's place, kept on the card as the page turns: a book read
+// over weeks opens where it was left, even after the battery ran flat.
+// Short articles are not worth it (a Wikipedia page should open at its top).
+void savePlace() {
+    if (!g_textLen || !g_pageCount || g_pageCount < RESUME_MIN_PAGES || g_recentCount <= 0) return;
+    if (strcmp(g_recent[0].title, g_current.title) != 0) return;
+    const uint32_t off = g_page > 0 && g_page < g_pageCount ? g_lines[g_pageStarts[g_page]].off : 0;
+    if (off == g_recent[0].off) return;
+    g_recent[0].off = off;
+    writeRecent();
 }
 
 // --- search screen geometry -------------------------------------------------------
@@ -2048,6 +2087,7 @@ void renderToc(uint8_t* fb) {
 }  // namespace
 
 void renderArticle(uint8_t* fb) {
+    savePlace();   // only writes when the page moved
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     g_hotCount = 0;
     if (!g_text || !g_pageStarts || g_pageCount == 0) return;
@@ -2569,6 +2609,6 @@ bool articleBack() {
     return false;
 }
 
-void leaveArticle() { g_historyCount = 0; g_toc = false; }
+void leaveArticle() { savePlace(); g_historyCount = 0; g_toc = false; }
 
 }  // namespace doba_lib

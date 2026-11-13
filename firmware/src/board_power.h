@@ -10,6 +10,10 @@ void board_radio_power(bool on);
 
 // Side button on the IO expander (PC12), pressed = true.
 bool board_side_button_pressed();
+// DOBA: cut the battery off (BQ25896 ship mode, REG09 BATFET_DIS). The board is
+// then truly off — no deep-sleep drain — until the POWER key (the charger's
+// QON) is pressed or USB is plugged in. Does nothing useful while on USB.
+bool board_battery_ship_mode();
 
 // Instantaneous battery voltage (mV) and current (mA, signed: negative =
 // discharging) from the fuel gauge. Returns false if the gauge is absent.

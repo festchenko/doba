@@ -611,3 +611,27 @@ def test_ukrainian_interface_leaves_no_english_on_the_main_pages(doba):
     doba.console("lang en", 500)
     assert not left, left
 
+
+
+def test_a_long_text_opens_where_reading_stopped(doba, book):
+    """A book read over days: its place is kept on the card (/doba/recent.txt,
+    as a byte offset), so opening it again lands on the same page, even after
+    a restart."""
+    shutil.copytree(book, os.path.join(doba.sd, "doba", "lib", "field"))
+    boot(doba)
+    t = "Твори (Франко, 1956–1962)/13/Захар Беркут/I"
+    since = doba.log_seq()
+    doba.console("libopen " + t, 800)
+    line = doba.wait_log(r"\[lib\] open 'Захар Беркут / I' pages=\d+", since=since)
+    pages = int(re.search(r"pages=(\d+)", line).group(1))
+    assert pages >= 4, pages
+    for _ in range(2):
+        doba.tap(450, 500)                                # NEXT: the right of the page
+        time.sleep(0.8)
+    doba.console("screen home", 800)
+    time.sleep(0.5)
+    since = doba.log_seq()
+    doba.console("libopen " + t, 800)
+    doba.wait_log(r"\[lib\] resume 'Захар Беркут / I' at page 3", since=since)
+    with open(os.path.join(doba.sd, "doba", "recent.txt"), encoding="utf-8") as f:
+        assert re.search(r"^field\|.*\|[1-9]\d*$", f.read(), re.M)

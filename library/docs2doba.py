@@ -259,6 +259,28 @@ def read_html(path, title):
     return [(title, strip_links(to_text(title, raw)))]
 
 
+def epub_toc(z, names):
+    """{chapter file: its name in the table of contents}, from EPUB 3 nav or
+    EPUB 2 toc.ncx; the first label wins for each file."""
+    out = {}
+    def add(base, href, label):
+        f = os.path.normpath(os.path.join(base, href.split("#")[0])).replace("\\", "/")
+        label = clean(html.unescape(re.sub(r"<[^>]+>", " ", label)))
+        if f and label and f not in out:
+            out[f] = label[:120]
+    for n in names:
+        if n.endswith(".ncx"):
+            x = z.read(n).decode("utf-8", "replace")
+            for lab, src in re.findall(r"<navLabel>\s*<text>(.*?)</text>\s*</navLabel>\s*<content[^>]*src=\"([^\"]+)\"", x, re.S):
+                add(os.path.dirname(n), src, lab)
+    for n in names:
+        if n.endswith((".xhtml", ".html")) and "nav" in os.path.basename(n).lower():
+            x = z.read(n).decode("utf-8", "replace")
+            for src, lab in re.findall(r'<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', x, re.S):
+                add(os.path.dirname(n), src, lab)
+    return out
+
+
 def read_epub(path, title):
     z = zipfile.ZipFile(path)
     names = z.namelist()
@@ -278,12 +300,19 @@ def read_epub(path, title):
                 order.append(os.path.normpath(os.path.join(base, href)).replace("\\", "/"))
     if not order:
         order = sorted(n for n in names if n.endswith((".xhtml", ".html", ".htm")))
+    labels = epub_toc(z, names)
     body = []
     for n in order:
         if n not in names:
             continue
         t = strip_links(to_text("", z.read(n).decode("utf-8", "replace")))
-        body += [ln for ln in t.split("\n")[1:] if ln]
+        lines = [ln for ln in t.split("\n")[1:] if ln]
+        # A chapter file without a heading of its own still gets one, from the
+        # book's table of contents: the reader's CONTENTS is built from them.
+        lab = labels.get(n)
+        if lab and not any(ln[:1] == "H" for ln in lines[:3]):
+            lines.insert(0, "H" + lab)
+        body += lines
     text = "\n".join(["T" + title] + body)
     return split_long(title, text)
 

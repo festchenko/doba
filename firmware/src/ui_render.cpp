@@ -2185,7 +2185,7 @@ void ui_render_power_sheet(bool recording, uint8_t* fb) {
     sheetShell(fb);
     sheetHead(TR("Power"), TR("SHUT DOWN?"),
               recording ? TR("A track is recording — it will be saved first.")
-                        : TR("Sleeps until you press the button."),
+                        : TR("Switch on again with POWER."),
               fb);
     sheetButton(kPowerShutdown, TR("SHUT DOWN"), true, fb);
     sheetButton(kPowerCancel, TR("CANCEL"), false, fb);
@@ -2262,7 +2262,7 @@ static void drawDobaMark(int cx, int topY, int height, uint8_t* fb, bool halo = 
     ui::text(sub, cx, topY + 174, kDobaLine, fb, EPD_DRAW_ALIGN_CENTER, 0x00);
 }
 
-void ui_render_shutdown_screen(uint8_t* fb) {
+void ui_render_shutdown_screen(uint8_t* fb, bool powerKey) {
     const int W = epd_rotated_display_width();
     const int cx = W / 2;
     // The device's front door, on the way out too: mark and wordmark above the
@@ -2275,8 +2275,8 @@ void ui_render_shutdown_screen(uint8_t* fb) {
     epd_fill_rect({0, bandY, W, bandH}, 0x00, fb);
     epd_fill_rect({0, bandY - 3, W, 3}, 0xFF, fb);
     epd_fill_rect({0, bandY + bandH, W, 3}, 0xFF, fb);
-    ui::label(cx, bandY + 50, "POWERED OFF", fb, 0xFF, &Arial_B);
-    ui::text(&Arial_L, cx, bandY + 90, "press the BOOT button to wake", fb,
+    ui::label(cx, bandY + 50, TR("POWERED OFF"), fb, 0xFF, &Arial_B);
+    ui::text(&Arial_L, cx, bandY + 90, powerKey ? TR("press POWER to switch on") : TR("press BOOT to wake"), fb,
              EPD_DRAW_ALIGN_CENTER, 0xFF);   // white on the black band
 }
 

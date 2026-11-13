@@ -384,6 +384,11 @@ void radioRailOffProbe() {
               (okCfg && !(cfg0 & (1 << IOEXP_PIN_RADIO_POWER))) ? "output" : "NOT OUTPUT",
               maOn, maOff, maOff - maOn, edgesOn, edgesOff);
 }
+
+// DOBA: a power-off from the menu on battery cuts the battery (ship mode), and
+// then only the POWER key brings Doba back; auto-sleep and power-off on USB
+// stay in deep sleep, woken by BOOT. The farewell screen says which.
+static bool g_offByPowerKey = false;
 }  // namespace
 
 // The map the device leaves on the glass when it powers off. Logs what it got, because
@@ -422,7 +427,7 @@ void renderFarewell(uint8_t* fb) {
               (int)mapMpp, (unsigned long)(t1 - t0), (unsigned long)(millis() - t1), map.projectedTiles,
               map.wantedTiles, map.featureCount, map.waterCount, map.parkCount,
               map.partial ? " CUT" : "", map.hasMap ? "" : " NOMAP", map.centerLat, map.centerLon);
-    ui_render_shutdown_screen(fb);
+    ui_render_shutdown_screen(fb, g_offByPowerKey);
 }
 
 void shutdownDevice(uint8_t* fb, const char* reason) {
@@ -437,6 +442,11 @@ void shutdownDevice(uint8_t* fb, const char* reason) {
     // honours it: the device wakes seconds later and boots, "reset: wake from
     // sleep". Taking the lock first means no idle can arm anything from here on.
     power_mgmt::busyAcquire();   // deliberately never released — we don't return
+    {
+        bool usb = false;
+        board_usb_power_present(usb);
+        g_offByPowerKey = strstr(reason, "user") != nullptr && !usb;
+    }
 
     // Answer the tap NOW, before the slow part. Saving the ride and flushing
     // the diag log are seconds of SD work, and with nothing on the glass in
@@ -583,6 +593,10 @@ void shutdownDevice(uint8_t* fb, const char* reason) {
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     esp_sleep_enable_ext0_wakeup((gpio_num_t)BOARD_BOOT_BTN, 0);
     diag::storageStage(7);
+    if (g_offByPowerKey) {
+        board_battery_ship_mode();   // the lights go out here on battery
+        delay(1500);                 // still running: USB arrived meanwhile
+    }
     esp_deep_sleep_start();
 }
 

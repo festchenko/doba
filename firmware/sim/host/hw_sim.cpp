@@ -129,6 +129,12 @@ bool board_usb_power_present(bool& present) {
     present = g_charging.load();
     return true;
 }
+// Ship mode: on the board the battery is cut and nothing runs on. The sim just
+// says so; the deep sleep that follows is what ends the process.
+bool board_battery_ship_mode() {
+    Serial.println("[sim] battery ship mode (board would be off)");
+    return true;
+}
 
 // ---- PWM outputs (cov/workouts) ---------------------------------------------------------
 // analogWrite() as the LEDC would take it: the duty is kept per pin, so a test

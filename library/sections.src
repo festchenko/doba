@@ -195,7 +195,7 @@ section comms | COMMS | comms | gov,manuals,mine,wiki_en
   - Meshtastic            | the radio Doba speaks                 | wiki_en:Meshtastic
   - Amateur radio         | emergency nets                        | wiki_en:Amateur radio emergency communications
 
-section reference | REFERENCE | books | wiki_en,wiki_uk,shelf_en,shelf_uk,manuals,mine,gov
+section reference | REFERENCE | books | my_books,wiki_en,wiki_uk,shelf_en,shelf_uk,books_uk,school_uk,dsns_uk,voyage_en,voyage_uk,dict_en,dict_uk,manuals,mine,gov
   * Survival skills       | the overview                          | wiki_en:Survival skills
   - Wilderness medicine   | care far from help                    | med_en:Wilderness medical emergency ; wiki_en:Wilderness medical emergency
   - Disaster preparedness | getting ready at home                 | gov:Are You Ready* ; wiki_en:Emergency management
