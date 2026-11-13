@@ -1,5 +1,6 @@
 // DOBA: main screen, comms and library pages — see doba_ui.h.
 #include "doba_i18n.h"
+#include "doba_psram.h"
 #include "doba_ui.h"
 #include "stealth.h"
 #include "settings.h"
@@ -1308,7 +1309,7 @@ int g_nearby = 0;       // 0 off, 1 the kinds, 2 the places of one kind
 int g_nearKind = 0, g_nearPage = 0;
 constexpr int NEAR_TOP = TOP + 112, NEAR_ROW = 84;
 constexpr int NEAR_MAX = 30;
-doba_pois::Poi g_near[NEAR_MAX];
+PsArr<doba_pois::Poi, NEAR_MAX> g_near;
 int g_nearCount = 0;
 doba_pois::Poi g_each[doba_pois::KINDS];
 int g_kindOrder[doba_pois::KINDS], g_kindCount = 0;   // the kinds found, nearest first

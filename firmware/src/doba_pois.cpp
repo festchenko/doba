@@ -1,4 +1,5 @@
 #include "doba_i18n.h"
+#include "doba_psram.h"
 #include "doba_pois.h"
 
 #include <Arduino.h>
@@ -81,7 +82,7 @@ template <typename F> void scan(double lat, double lon, F fn) {
     const int la = (int)floor(lat / CELL), lo = (int)floor(lon / CELL);
     sdLock();
     File f = SD.open(kPath, FILE_READ);
-    static uint8_t buf[REC * 64];
+    static PsArr<uint8_t, REC * 64> buf;
     for (int dy = -RINGS; f && dy <= RINGS; ++dy)
         for (int dx = -RINGS; dx <= RINGS; ++dx) {
             const Cell* c = findCell(la + dy, lo + dx);

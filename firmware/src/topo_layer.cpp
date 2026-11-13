@@ -1,5 +1,6 @@
 // DOBA: topographic base layer — see topo_layer.h.
 #include "topo_layer.h"
+#include "doba_psram.h"
 
 #include <Arduino.h>
 #include <SD.h>
@@ -254,7 +255,7 @@ int drawBase(const MapScreenData& map, uint8_t* fb) {
     const double scale = map.metersPerPixel / nativeMpp(z, lat);
     const int maxT = (1 << z) - 1;
 
-    static int32_t colW[SCREEN_W];
+    static PsArr<int32_t, SCREEN_W> colW;
     for (int x = 0; x < SCREEN_W; ++x)
         colW[x] = (int32_t)floor(rcx + (x - map.riderX) * scale);
 

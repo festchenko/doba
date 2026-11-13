@@ -673,9 +673,16 @@ void setup() {
     // SPI) ran to within 64 bytes of the end once the speed-sensor UI grew,
     // and overflowed into a boot loop (Memfault dumps, Oct 2026). loop() logs
     // the high-water mark so the margin is visible.
-    xTaskCreatePinnedToCore(ui_dashboard::task, "ui", 12288, nullptr, 2, &g_uiTask, 1);
+    // DOBA: checked. When internal RAM ran short this failed without a word and
+    // the panel stayed on the boot screen for good (see doba_psram.h).
+    if (xTaskCreatePinnedToCore(ui_dashboard::task, "ui", 12288, nullptr, 2, &g_uiTask, 1) != pdPASS)
+        diag::log("boot: UI TASK NOT CREATED — internal RAM free=%u largest=%u",
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 
-    diag::log("boot: all tasks started");
+    diag::log("boot: all tasks started (internal RAM free=%u largest=%u)",
+              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     diag::finishBoot();
 }
 

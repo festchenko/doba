@@ -3579,6 +3579,11 @@ void pollSerialCommands() {
     }
 }
 
+#ifdef DOBA_TRACE
+#define TRC(tag) do { static uint8_t n_ = 0; if (n_ < 3) { ++n_; Serial.printf("[trc] %lu %s\n", (unsigned long)millis(), tag); Serial.flush(); } } while (0)
+#else
+#define TRC(tag) ((void)0)
+#endif
 void task(void*) {
     uint32_t lastDraw = 0;
     Screen lastScreen = screen;
@@ -3592,21 +3597,21 @@ void task(void*) {
     // once ran long enough to trip the interrupt watchdog, and since a reset
     // mid-recovery tears another file, every reboot found more to do than the
     // last. Off the boot path a slow recovery costs time, not a brick.
-    ride_recorder::recoverRides();
+TRC("enter");     ride_recorder::recoverRides();
     // A ride the reset cut short: put the question on screen before anything
     // else happens to the file.
     if (ride_recorder::pendingRecovery(&pendingSummary)) {
         recoveryPrompt = true;
         screen = SCREEN_SUMMARY;
     }
-    applySdUpdate();          // flash a firmware.bin from the SD card, if present
-    usb_storage::begin();     // THEN expose the SD to a host computer over USB
-    bool lastHostActive = false;
+TRC("recovered");     applySdUpdate();          // flash a firmware.bin from the SD card, if present
+TRC("sdupdate");     usb_storage::begin();     // THEN expose the SD to a host computer over USB
+TRC("usb");     bool lastHostActive = false;
 
     for (;;) {
         // When the computer releases the SD (eject/unplug), check whether it
         // dropped a firmware.bin on the card and flash it automatically.
-        bool host = usb_storage::hostActive();
+TRC("loop");         bool host = usb_storage::hostActive();
         if (lastHostActive && !host) {
             applySdUpdate();
             map_store::rescanCard(); doba_lib::rescan(); doba_points::rescan(); doba_dem::rescan();  // DOBA   // it may have added/removed maps too
@@ -3676,7 +3681,7 @@ void task(void*) {
         // A firmware update in progress takes over the screen with a progress
         // modal (redrawn only when the percentage/phase moves so the e-paper
         // isn't thrashed). Everything else is paused until it finishes/reboots.
-        if (ble_server::updateInProgress()) {
+TRC("upd");         if (ble_server::updateInProgress()) {
             int pct = ble_server::updatePercent();
             const char* phase = ble_server::updatePhase();
             int phaseId = phase[0] == 'I' ? 2 : 1;
@@ -3960,7 +3965,7 @@ void task(void*) {
         // DOBA: an active SOS repeats; its page counts down.
         {
             static uint32_t sosPaint = 0;
-            if (doba_ui::tick(g_state.snapshot())) forceDraw = true;
+TRC("dobatick");             if (doba_ui::tick(g_state.snapshot())) forceDraw = true;
             // DOBA stealth: the light goes dark the moment it starts.
             static int8_t wasStealth = -1;
             const bool st = stealth::active();
@@ -3979,7 +3984,7 @@ void task(void*) {
         // Touch: interrupt-driven. getPoint() (an I2C read) runs when the
         // GT911 INT fired, while a touch is ongoing (to catch the release),
         // or on a slow fallback tick so input is never dropped.
-        if (touchOk) {
+TRC("touch");         if (touchOk) {
             static int16_t lastX = 0, lastY = 0, downX = 0, downY = 0;
             static uint32_t lastTouchPoll = 0;
             if (touchIrq || touchWasDown || millis() - lastTouchPoll > 200) {
@@ -4041,7 +4046,7 @@ void task(void*) {
             }
         }
 
-        pollSerialCommands();   // serial-driven button presses (testing/profiling)
+TRC("serial");         pollSerialCommands();   // serial-driven button presses (testing/profiling)
 
         // A layout the rider just changed in the app should land on the panel
         // now, not up to a second later — they are looking at both screens.
@@ -4177,7 +4182,7 @@ void task(void*) {
         // still: a real change (the modal opening or closing, a button press)
         // comes through screenChanged/forceDraw, and lastDraw is left stale so
         // the frame after the modal closes paints immediately.
-        const bool modalHoldsStill = powerOverlay || navPrompt;
+TRC("predraw");         const bool modalHoldsStill = powerOverlay || navPrompt;
         if (screenChanged || forceDraw ||
             (!modalHoldsStill && millis() - lastDraw >= 1000)) {
             lastDraw = millis();
@@ -4390,8 +4395,8 @@ void task(void*) {
                 case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE:
                 case SCREEN_ARTICLE: {   // DOBA
                     const uint32_t t0 = micros(), ev0 = vf_evictions();
-                    doba_ui::render(dobaPage(), s, fb);
-                    if (screen == SCREEN_HOME) ui::statusBar(s, fb, doba_ui::title(dobaPage()));
+TRC("render");                     doba_ui::render(dobaPage(), s, fb);
+TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s, fb, doba_ui::title(dobaPage()));
                     else ui::statusBarBack(s, fb, doba_ui::title(dobaPage()));
                     // DOBA: what drawing the page cost (the panel's own update
                     // comes after); a font face thrown out means glyphs drawn again.

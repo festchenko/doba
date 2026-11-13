@@ -1,4 +1,5 @@
 #include "doba_i18n.h"
+#include "doba_psram.h"
 #include "doba_points.h"
 
 #include <Arduino.h>
@@ -14,7 +15,7 @@ namespace doba_points {
 namespace {
 
 constexpr const char* kPath = "/doba/points.txt";
-Point g_pts[MAX_POINTS];
+PsArr<Point, MAX_POINTS> g_pts;
 int g_count = 0;
 int g_target = -1;
 char g_targetName[NAME_LEN] = "";   // the target survives a reload by name

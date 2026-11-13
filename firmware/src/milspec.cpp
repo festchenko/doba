@@ -1,5 +1,6 @@
 // DOBA: military-style overlay for the topo map — see milspec.h.
 #include "doba_i18n.h"
+#include "doba_psram.h"
 #include "milspec.h"
 #include "doba_points.h"
 #include "doba_dem.h"
@@ -161,7 +162,7 @@ void drawPois(const MapScreenData& map, uint8_t* fb) {
     if (!poisOn() || map.metersPerPixel <= 0 || map.metersPerPixel > 25.0f) return;
     // The SD scan is not per frame: the nearest few hundred round the view's
     // middle, again only when the view has moved a good part of a screen.
-    static doba_pois::Poi cache[60];
+    static PsArr<doba_pois::Poi, 60> cache;
     static int cn = -1;
     static double qLat = 99, qLon = 0;
     static float qMpp = 0;

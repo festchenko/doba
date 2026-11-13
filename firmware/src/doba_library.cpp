@@ -1,5 +1,6 @@
 // DOBA: offline library reader — see doba_library.h.
 #include "doba_i18n.h"
+#include "doba_psram.h"
 #include "doba_library.h"
 #include "doba_icons.h"
 
@@ -39,7 +40,7 @@ constexpr int RESULTS = 6;
 const char* kRoot = "/doba/lib";
 
 struct Book { char dir[32]; char name[40]; char source[64]; uint32_t count; uint32_t shown; char unit[16]; char about[100]; };
-Book g_books[MAX_BOOKS];
+PsArr<Book, MAX_BOOKS> g_books;
 int g_bookCount = -1;      // -1 = not scanned yet
 int g_book = 0;
 
@@ -682,7 +683,7 @@ bool openArticle(const Result& r) {
 // --- recent: what was read last, newest first (/doba/recent.txt "book|title") -------
 constexpr int MAX_RECENT = 30;
 struct Recent { char dir[32]; char title[KEY + 1]; };
-Recent g_recent[MAX_RECENT];
+PsArr<Recent, MAX_RECENT> g_recent;
 int g_recentCount = -1;      // -1: not loaded
 const char* kRecentPath = "/doba/recent.txt";
 void loadRecent() {
@@ -1414,7 +1415,7 @@ void renderBook(uint8_t* fb) {
 constexpr int MAX_KIDS = 36, LIST_MAX = 64, MAX_DEPTH = 12;
 struct Kid { char label[28]; uint32_t from, to; bool more; };
 struct Level { char key[KEY + 1]; char label[28]; uint32_t from, to; bool group; };
-Kid g_kids[MAX_KIDS];
+PsArr<Kid, MAX_KIDS> g_kids;
 int g_kidCount = 0;
 Level g_levels[MAX_DEPTH];
 int g_depth = 0;                 // g_levels[g_depth - 1] is on screen
