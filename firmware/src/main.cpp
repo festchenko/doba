@@ -634,9 +634,17 @@ void setup() {
     if (ioExpanderOk) ioExpander.pinMode(IOEXP_PIN_SIDE_BUTTON, INPUT);
 
     BOOT_STEP("ui_dashboard done -> ble_sensors::begin()");
-    ble_sensors::begin();
-    BOOT_STEP("ble_sensors done -> ble_server::begin()");
-    ble_server::begin();   // GATT server for the iOS companion app
+    // DOBA: Bluetooth only when switched on in Settings (default off). Left
+    // off, nothing advertises, nothing can be seen by a phone, and the NimBLE
+    // host never takes its ~50 KB of internal RAM.
+    const bool btOn = settings::bluetooth();
+    if (btOn) {
+        ble_sensors::begin();
+        BOOT_STEP("ble_sensors done -> ble_server::begin()");
+        ble_server::begin();   // GATT server for the iOS companion app
+    } else {
+        diag::log("ble: off in settings — not started");
+    }
 
     BOOT_STEP("ble_server done -> power_mgmt::begin()");
 
@@ -647,12 +655,14 @@ void setup() {
     BOOT_STEP("power_mgmt done -> creating tasks");
 
     xTaskCreatePinnedToCore(gps_service::task, "gps", 4096, nullptr, 3, nullptr, 0);
+    if (btOn) {
     xTaskCreatePinnedToCore(ble_sensors::task, "ble", 6144, nullptr, 2, nullptr, 0);
     xTaskCreatePinnedToCore(ble_server::task, "srv", 4096, nullptr, 1, nullptr, 0);
     // The phone link: decodes the app's requests, does the SD work they need
     // and is the one sender on its TX characteristic (src/link.cpp).
     xTaskCreatePinnedToCore(phone_link::task, "link", phone_link::TASK_STACK, nullptr, 1,
                             nullptr, 0);
+    }
     xTaskCreatePinnedToCore(ride_recorder::task, "rec", 6144, nullptr, 3, nullptr, 1);
     xTaskCreatePinnedToCore(batteryTask, "bat", 3072, nullptr, 1, nullptr, 1);
     // No task at all when nothing is fitted — the whole feature costs an absent
@@ -757,6 +767,21 @@ bool board_gauge_report(char* out, size_t n) {
 bool board_side_button_pressed() {
     if (!ioExpanderOk) return false;
     i2cLock();
+    // DOBA: the panel driver's power-up loop turns pins 8-13 into outputs, and
+    // it runs again on every panel wake — not just once at boot, where setup()
+    // already takes pin 10 back. A button pin left as an output reads its own
+    // latch and never sees a press. Check the direction bit and take it back.
+    {
+        const int cfg = ioExpander.readConfig(ExtensionIOXL9555::PORT1);
+        if (cfg >= 0 && !(cfg & (1 << (IOEXP_PIN_SIDE_BUTTON - 8)))) {
+            ioExpander.pinMode(IOEXP_PIN_SIDE_BUTTON, INPUT);
+            static uint32_t lastFixLog = 0;
+            if (millis() - lastFixLog > 60000) {
+                lastFixLog = millis();
+                diag::log("side btn: pin was an output again (panel driver) — set back to input");
+            }
+        }
+    }
     bool first = ioExpander.digitalRead(IOEXP_PIN_SIDE_BUTTON) == LOW;
     bool second = false;
     if (first) {

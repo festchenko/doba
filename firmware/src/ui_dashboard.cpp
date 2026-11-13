@@ -3930,8 +3930,10 @@ TRC("upd");         if (ble_server::updateInProgress()) {
                     } else if (bootLow > 1 && !bootLong && !powerOverlay &&
                                millis() - bootDownAt > 1500) {
                         bootLong = true;
+                        Serial.println("[btn] boot: hold -> power sheet");
                         sheetKind = SHEET_POWER;
                         powerOverlay = true;       // hold -> power dialog
+                        forceDraw = true;
                     }
                 } else {
                     // ONE confirmed LOW read is enough to count as a press.
@@ -3944,19 +3946,37 @@ TRC("upd");         if (ble_server::updateInProgress()) {
                     // The edge interrupt that woke us is already independent
                     // evidence, so a single debounced read is not noise.
                     // DOBA: no ride recording; BOOT goes HOME.
-                    if (bootLow >= 1 && !bootLong) { noteActivity(); screen = SCREEN_HOME; forceDraw = true; }
+                    if (bootLow >= 1 && !bootLong) {
+                        Serial.println("[btn] boot: short -> home");
+                        noteActivity(); screen = SCREEN_HOME; forceDraw = true;
+                    }
                     bootLow = 0;
                 }
             }
 
+            // DOBA: the side key is the power key. Hold 1.5 s: the power
+            // sheet (switch off, restart). Short press: the front light.
             static int sideLow = 0;
-            static uint32_t sidePoll = 0;
+            static uint32_t sidePoll = 0, sideDownAt = 0;
+            static bool sideLong = false;
             if (irq || sideLow > 0 || millis() - sidePoll > 200) {
                 sidePoll = millis();
                 if (board_side_button_pressed()) {
                     if (sideLow < 200) sideLow++;
+                    if (sideLow == 1) { sideDownAt = millis(); sideLong = false; }
+                    else if (!sideLong && !powerOverlay && millis() - sideDownAt > 1500) {
+                        sideLong = true;
+                        Serial.println("[btn] side: hold -> power sheet");
+                        noteActivity();
+                        sheetKind = SHEET_POWER;
+                        powerOverlay = true;
+                        forceDraw = true;
+                    }
                 } else {
-                    if (sideLow >= 1) { noteActivity(); cycleBacklight(); }  // see above
+                    if (sideLow >= 1 && !sideLong) {
+                        Serial.println("[btn] side: short -> light");
+                        noteActivity(); cycleBacklight();
+                    }
                     sideLow = 0;
                 }
             }

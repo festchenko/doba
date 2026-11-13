@@ -601,7 +601,7 @@ def test_ukrainian_interface_leaves_no_english_on_the_main_pages(doba):
     words still in English (sim builds log them as '[i18n] drawn ...')."""
     boot(doba)
     doba.console("lang uk", 500)
-    allowed = re.compile(r"Doba \d+|LongFast|English|Language|MGRS|GPS|USB|UTC|SOS|abc|\d{4}")
+    allowed = re.compile(r"Doba \d+|LongFast|English|Language|MGRS|GPS|USB|UTC|SOS|Bluetooth|Wi-Fi|abc|\d{4}")
     since = doba.log_seq()
     for s in ("home", "setup", "points", "mapopts", "sun", "sos", "more", "comms", "library"):
         doba.console("screen " + s, 800)
@@ -610,3 +610,4 @@ def test_ukrainian_interface_leaves_no_english_on_the_main_pages(doba):
             and not re.search("[\u0400-\u04ff]", l)]   # mixed lines (a callsign in Ukrainian) are fine
     doba.console("lang en", 500)
     assert not left, left
+

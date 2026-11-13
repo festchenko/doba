@@ -178,14 +178,17 @@ void setup() {
     ui_dashboard::bootDetailFor("Display", "sim 540x960");
     ui_dashboard::bootStatus("Display", uiOk);
     ui_dashboard::begin();
-    ble_sensors::begin();
-    ble_server::begin();
+    const bool btOn = settings::bluetooth();   // DOBA: as src/main.cpp
+    if (btOn) { ble_sensors::begin(); ble_server::begin(); }
+    else diag::log("ble: off in settings — not started");
     power_mgmt::begin();
     workout_service::begin();
     xTaskCreatePinnedToCore(gps_service::task, "gps", 4096, nullptr, 3, nullptr, 0);
-    xTaskCreatePinnedToCore(ble_sensors::task, "ble", 6144, nullptr, 2, nullptr, 0);
-    xTaskCreatePinnedToCore(ble_server::task, "srv", 4096, nullptr, 1, nullptr, 0);
-    xTaskCreatePinnedToCore(phone_link::task, "link", phone_link::TASK_STACK, nullptr, 1, nullptr, 0);
+    if (btOn) {
+        xTaskCreatePinnedToCore(ble_sensors::task, "ble", 6144, nullptr, 2, nullptr, 0);
+        xTaskCreatePinnedToCore(ble_server::task, "srv", 4096, nullptr, 1, nullptr, 0);
+        xTaskCreatePinnedToCore(phone_link::task, "link", phone_link::TASK_STACK, nullptr, 1, nullptr, 0);
+    }
     xTaskCreatePinnedToCore(ride_recorder::task, "rec", 6144, nullptr, 3, nullptr, 1);
     if (meshOk) xTaskCreatePinnedToCore(mesh_service::task, "mesh", 6144, nullptr, 2, nullptr, 0);
     xTaskCreatePinnedToCore(ui_dashboard::task, "ui", 12288, nullptr, 2, nullptr, 1);

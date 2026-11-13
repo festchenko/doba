@@ -50,6 +50,12 @@ void setClock24h(bool h);
 
 bool usbDrive();          // true = expose SD as a USB drive when plugged in
 void setUsbDrive(bool on);
+// DOBA: both radios default OFF. Bluetooth is brought up only at boot, so a
+// change takes effect after a restart; WiFi is never started unless allowed.
+bool bluetooth();
+void setBluetooth(bool on);
+bool wifi();
+void setWifi(bool on);
 
 // true = keep a field on the dashboard even when its sensor is not paired,
 // showing "no data" rather than removing it and re-packing the layout.

@@ -3116,6 +3116,7 @@ void task(void*) {
 // DOBA stealth: stop advertising and drop every link now; leaving stealth
 // makes the device findable again.
 void applyStealth() {
+    if (!settings::bluetooth()) return;   // DOBA: never brought up
     NimBLEServer* srv = NimBLEDevice::getServer();
     if (stealth::active()) {
         NimBLEDevice::stopAdvertising();

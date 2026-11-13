@@ -25,7 +25,9 @@ int bl = 0;  // backlight level 0-3; OFF until the rider turns it on — e-paper
              // needs no light in daylight, and a lit panel drains a fresh device
 bool miles = false;  // false = km, true = miles
 bool clk24 = true;   // true = 24-hour clock, false = 12-hour
-bool usbDrv = true;  // true = expose SD as USB drive when plugged into a host
+bool usbDrv = true;
+bool btOn = false;    // DOBA: Bluetooth off unless asked for
+bool wifiOn = false;  // DOBA: WiFi off unless asked for  // true = expose SD as USB drive when plugged into a host
 // false = a field whose sensor is unpaired is dropped from the dashboard and
 // the rest re-pack; true = it stays, showing no data. ON by default: a new
 // device should show the layout the rider configured, gaps and all, rather
@@ -90,6 +92,13 @@ void begin() {
     // that had the old (default-ON) "usbdrv" value stored. OFF = the device
     // keeps the SD (logs/recording) when plugged in.
     usbDrv = prefs.getBool("usbdrv2", false);
+#ifdef OTP_SIM
+    // The simulator keeps the phone link up: its app-sync suites drive it.
+    btOn = prefs.getBool("bt", true);
+#else
+    btOn = prefs.getBool("bt", false);
+#endif
+    wifiOn = prefs.getBool("wifi", false);
     showOff = prefs.getBool("showoff", true);
     mapLayerMask = prefs.getUShort("maplayers", 0x003F);
     autoPause = prefs.getInt("apause", 10);
@@ -213,6 +222,11 @@ void setUsbDrive(bool on) {
     usbDrv = on;
     prefs.putBool("usbdrv2", usbDrv);
 }
+
+bool bluetooth() { return btOn; }
+void setBluetooth(bool on) { btOn = on; prefs.putBool("bt", on); }
+bool wifi() { return wifiOn; }
+void setWifi(bool on) { wifiOn = on; prefs.putBool("wifi", on); }
 
 bool showOffline() { return showOff; }
 uint16_t mapLayers() { return mapLayerMask; }

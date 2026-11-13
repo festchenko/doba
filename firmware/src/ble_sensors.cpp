@@ -1095,6 +1095,7 @@ void forget(const char* addr) {
 
 // DOBA stealth: drop every sensor link; the task stops scanning on its own.
 void applyStealth() {
+    if (!settings::bluetooth()) return;   // DOBA: never brought up
     if (!stealth::active()) return;
     for (int k = 0; k < KIND_COUNT; ++k) disconnect(k);
 }

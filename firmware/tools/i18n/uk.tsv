@@ -308,6 +308,14 @@ DEVICE	ПРИСТРІЙ
 USB DRIVE	USB-накопичувач
 the card shows on a computer	карта видна на комп’ютері
 off: the card is Doba's	вимк.: карта в Доби
+BLUETOOTH	BLUETOOTH
+Bluetooth	Bluetooth
+Wifi	Wi-Fi
+on: visible to phones	увімк.: видно телефонам
+off · switching restarts Doba	вимк. · зміна перезапускає Добу
+WIFI	WI-FI
+allowed when something needs it	дозволено, коли потрібно
+off: never switched on	вимк.: ніколи не вмикається
 fix · %u satellites	є GPS · супутників %u
 GPS	GPS
 Details  \xE2\x80\xBA	Деталі  \xE2\x80\xBA
