@@ -16,6 +16,7 @@
 #include "gps_service.h"
 #include "rtc_clock.h"
 #include "settings.h"
+#include "doba_battery.h"
 #include "routes.h"
 #include "segments.h"
 #include "ble_sensors.h"
@@ -232,6 +233,15 @@ static void batteryTask(void*) {
                     s.batteryPercent = (uint8_t)soc;
                     s.charging = chg;
                 });
+                // DOBA: the battery page's measurement (current, what is left).
+                i2cLock();
+                const uint16_t mv = fuelGauge.getVoltage();
+                const int16_t ma = fuelGauge.getCurrent();
+                const uint16_t rc = fuelGauge.getRemainingCapacity();
+                i2cUnlock();
+                bool usb = false;
+                board_usb_power_present(usb);
+                doba_batt::sample(mv, ma, (uint8_t)soc, rc, chg || usb);
             }
         }
         bool socValid = fuelGaugeOk && soc >= 1 && soc <= 100;

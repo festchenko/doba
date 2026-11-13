@@ -472,3 +472,31 @@ GPS details	Деталі GPS
 Up	Вгору
 Down	Вниз
 Next	Далі
+# --- deleting a book
+Delete "%s"?	Видалити «%s»?
+frees %.1f GB on the card	звільнить %.1f ГБ на картці
+frees %lu MB on the card	звільнить %lu МБ на картці
+It can only come back from a computer.	Повернути можна лише з комп’ютера.
+DELETE	ВИДАЛИТИ
+# --- battery
+Battery	Батарея
+BATTERY	БАТАРЕЯ
+about %s left	ще приблизно %s
+charging	заряджається
+measuring...	вимірюю...
+%d days	%d дн.
+%d h	%d год
+%d min	%d хв
+On USB: charging, no forecast	На USB: заряджається, прогнозу немає
+About %s left at this pace	При такому темпі ще приблизно %s
+Measuring: a forecast in a few minutes	Вимірюю: прогноз за кілька хвилин
+%d mA now · %d mA average · %u mAh left · %.2f V	%d мА зараз · %d мА в середньому · %u мАг лишилось · %.2f В
+WHERE IT GOES	КУДИ ЙДЕ
+%d mA · %d%%	%d мА · %d%%
+without it: about %s	без цього: приблизно %s
+measured total · split estimated from typical draws	загальне виміряно · розподіл оцінено за типовим споживанням
+GPS	GPS
+Radio (LoRa)	Радіо (LoRa)
+Front light	Підсвітка
+Screen updates	Оновлення екрана
+Processor and the rest	Процесор та інше

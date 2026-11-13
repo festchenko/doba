@@ -18,6 +18,7 @@
 #include "sd_diagnostics.h"
 #include "gps_service.h"
 #include "board_power.h"
+#include "doba_battery.h"
 #include <esp_sleep.h>
 #include <esp_system.h>
 #include <esp32-hal-tinyusb.h>   // usb_persist_restart / RESTART_BOOTLOADER
@@ -80,7 +81,7 @@ enum Screen { SCREEN_DASH, SCREEN_MAP, SCREEN_SUMMARY, SCREEN_MENU,
               // DOBA: the launcher, comms and library (doba_ui.h).
               SCREEN_HOME, SCREEN_COMMS, SCREEN_COMPOSE, SCREEN_LIBRARY,
               SCREEN_ARTICLE, SCREEN_SETUP, SCREEN_SETUP_NAME, SCREEN_POINTS,
-              SCREEN_POINT, SCREEN_POINT_NEW, SCREEN_MAPOPTS, SCREEN_SOS, SCREEN_SUN, SCREEN_MORE };
+              SCREEN_POINT, SCREEN_POINT_NEW, SCREEN_MAPOPTS, SCREEN_SOS, SCREEN_SUN, SCREEN_MORE, SCREEN_BATTERY };
 #ifdef OTP_SIM
 // DOBA: the inherited OTP sim suites were written for a dashboard boot; they set
 // DOBA_START=dash (sim/tests/conftest.py). The device always boots to HOME.
@@ -733,6 +734,7 @@ bool refresh(bool screenChanged, bool fastInPage, bool listFast,
         epdc_scrub_bits(scrubBits);
         scrubBits = nullptr;
     }
+    doba_batt::notePaint();   // DOBA: the battery page counts repaints
     epdc_paint();
 
     if (dbgTiming)
@@ -813,6 +815,7 @@ doba_ui::Page dobaPage() {
         case SCREEN_SOS: return doba_ui::SOS;
         case SCREEN_SUN: return doba_ui::SUN;
         case SCREEN_MORE: return doba_ui::MORE;
+        case SCREEN_BATTERY: return doba_ui::BATTERY;
         default:             return doba_ui::HOME;
     }
 }
@@ -841,6 +844,7 @@ void dobaGo(doba_ui::Go g) {
         case doba_ui::TO_SOS:      screen = SCREEN_SOS; break;
         case doba_ui::TO_SUN:      screen = SCREEN_SUN; break;
         case doba_ui::TO_MORE:     screen = SCREEN_MORE; break;
+        case doba_ui::TO_BATTERY:  screen = SCREEN_BATTERY; break;
         case doba_ui::TO_GPSDEBUG: screen = SCREEN_GPSDEBUG; break;
         case doba_ui::TO_POWER:    sheetKind = SHEET_POWER; powerOverlay = true; break;
     }
@@ -868,7 +872,7 @@ void goBack() {
         case SCREEN_COMPOSE:
         case SCREEN_LIBRARY:
         case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
-        case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE:
+        case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE: case SCREEN_BATTERY:
         case SCREEN_ARTICLE:  dobaGo(doba_ui::back(dobaPage())); break;
         case SCREEN_SENSORS:  leaveList(); break;  // also stops the BLE scan
         case SCREEN_MENU:     screen = SCREEN_DASH; break;
@@ -1000,7 +1004,7 @@ bool isDobaSubPage(Screen sc) {
     switch (sc) {
         case SCREEN_COMMS: case SCREEN_COMPOSE: case SCREEN_LIBRARY: case SCREEN_ARTICLE:
         case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS: case SCREEN_POINT:
-        case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE:
+        case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE: case SCREEN_BATTERY:
         case SCREEN_MAP: case SCREEN_SETTINGS: case SCREEN_GPSDEBUG: case SCREEN_MAPLAYERS:
             return true;
         default:
@@ -1376,7 +1380,7 @@ void handleTap(int x, int y) {
         case SCREEN_COMPOSE:
         case SCREEN_LIBRARY:
         case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
-        case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE:
+        case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE: case SCREEN_BATTERY:
         case SCREEN_ARTICLE: {  // DOBA
             const int bl = settings::backlight();
             dobaGo(doba_ui::tap(dobaPage(), x, y, g_state.snapshot()));
@@ -3523,6 +3527,7 @@ static void runConsoleLine(char* line) {
         else if (!strcasecmp(arg, "sos"))      screen = SCREEN_SOS;       // DOBA
         else if (!strcasecmp(arg, "sun"))      screen = SCREEN_SUN;       // DOBA
         else if (!strcasecmp(arg, "more"))     screen = SCREEN_MORE;      // DOBA
+        else if (!strcasecmp(arg, "battery"))  screen = SCREEN_BATTERY;   // DOBA
         else { Serial.printf("[cmd] unknown screen '%s'\n", arg); return; }
         noteActivity();
     } else if (!strcasecmp(cmd, "zoom")) {
@@ -4426,7 +4431,7 @@ TRC("predraw");         const bool modalHoldsStill = powerOverlay || navPrompt;
                 case SCREEN_COMPOSE:
                 case SCREEN_LIBRARY:
                 case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
-                case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE:
+                case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE: case SCREEN_BATTERY:
                 case SCREEN_ARTICLE: {   // DOBA
                     const uint32_t t0 = micros(), ev0 = vf_evictions();
 TRC("render");                     doba_ui::render(dobaPage(), s, fb);

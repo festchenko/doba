@@ -1,6 +1,7 @@
 // DOBA: main screen, comms and library pages — see doba_ui.h.
 #include "doba_i18n.h"
 #include "doba_psram.h"
+#include "doba_battery.h"
 #include "doba_ui.h"
 #include "stealth.h"
 #include "settings.h"
@@ -1966,7 +1967,8 @@ void renderSun(const RideState& s, uint8_t* fb) {
 
 // --- MORE ----------------------------------------------------------------------
 
-enum MoreRow { M_USB, M_BT, M_WIFI, M_GPS, M_MODE, M_CARD, M_ABOUT, M_COUNT };
+const char* hoursText(float h);
+enum MoreRow { M_USB, M_BT, M_WIFI, M_BATT, M_GPS, M_MODE, M_CARD, M_ABOUT, M_COUNT };
 int moreRowY(int r) { return TOP + 4 + SEC_H + r * SROW_H; }
 
 void renderMore(const RideState& s, uint8_t* fb) {
@@ -1992,6 +1994,15 @@ void renderMore(const RideState& s, uint8_t* fb) {
                         "off: never switched on", fb);
                 toggle(y, SROW_H, settings::wifi(), fb);
                 break;
+            case M_BATT: {
+                doba_batt::Report br;
+                doba_batt::report(br);
+                if (br.hoursLeft > 0) snprintf(sub, sizeof sub, TR("about %s left"), hoursText(br.hoursLeft));
+                else snprintf(sub, sizeof sub, "%s", br.charging ? TR("charging") : TR("measuring..."));
+                caption(y, SROW_H, "BATTERY", sub, fb);
+                button({CTRL_X, y + (SROW_H - CTRL_H) / 2, CTRL_W, CTRL_H}, "Details  \xE2\x80\xBA", false, fb);
+                break;
+            }
             case M_GPS:
                 snprintf(sub, sizeof sub, s.gpsFix ? TR("fix · %u satellites") : TR("no fix yet"), (unsigned)s.satellites);
                 caption(y, SROW_H, "GPS", sub, fb);
@@ -2042,11 +2053,73 @@ Go tapMore(int x, int y) {
     }
     if (r == M_WIFI && toggleHit(x)) settings::setWifi(x >= CTRL_X + CTRL_W - 75);
     if (r == M_GPS && x >= CTRL_X) return TO_GPSDEBUG;
+    if (r == M_BATT && x >= CTRL_X) return TO_BATTERY;
     if (r == M_MODE && x >= CTRL_X) {
         const int n = mesh::PRESET_COUNT, step = stepperHit(x) < 0 ? -1 : 1;
         mesh_service::setPreset((uint8_t)(((mesh_service::presetIndex() + step) % n + n) % n));
     }
     return STAY;
+}
+
+// --- BATTERY ---------------------------------------------------------------------
+//
+// The gauge measures the board as a whole; the split is an estimate from what
+// each part is doing (doba_battery.h). The forecast is measured.
+
+const char* hoursText(float h) {
+    static char b[32];
+    if (h >= 48) snprintf(b, sizeof b, TR("%d days"), (int)(h / 24 + 0.5f));
+    else if (h >= 1) snprintf(b, sizeof b, TR("%d h"), (int)(h + 0.5f));
+    else snprintf(b, sizeof b, TR("%d min"), (int)(h * 60 + 0.5f));
+    return b;
+}
+
+void renderBattery(const RideState& s, uint8_t* fb) {
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    doba_batt::Report r;
+    doba_batt::report(r);
+    char big[48], line[128];
+    const int pct = r.have ? r.soc : s.batteryPercent;
+    snprintf(big, sizeof big, "%d%%", pct);
+    ui::text(ui::font(ui::F_TITLE), 24, TOP + 70, big, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    // the cell, filled to its level
+    const EpdRect cell = {W - 24 - 150, TOP + 28, 140, 56};
+    ui::frameRound(cell, 6, 3, fb, INK, PAPER);
+    epd_fill_rect({cell.x + cell.width, cell.y + 18, 8, 20}, INK, fb);
+    epd_fill_rect({cell.x + 8, cell.y + 8, (cell.width - 16) * std::max(0, std::min(100, pct)) / 100, cell.height - 16}, INK, fb);
+
+    if (r.charging) snprintf(line, sizeof line, "%s", TR("On USB: charging, no forecast"));
+    else if (r.hoursLeft > 0) snprintf(line, sizeof line, TR("About %s left at this pace"), hoursText(r.hoursLeft));
+    else snprintf(line, sizeof line, "%s", TR("Measuring: a forecast in a few minutes"));
+    ui::text(ui::font(ui::F_LABEL), 24, TOP + 130, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (r.have) {
+        snprintf(line, sizeof line, TR("%d mA now · %d mA average · %u mAh left · %.2f V"),
+                 (int)(r.nowMa + 0.5f), (int)(std::max(0.0f, r.avgMa) + 0.5f), (unsigned)r.remainingMah, r.mv / 1000.0f);
+        ui::text(ui::font(ui::F_TINY), 24, TOP + 166, line, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    }
+
+    section(TOP + 200, "WHERE IT GOES", fb);
+    float total = 0;
+    for (int i = 0; i < r.parts; ++i) total += r.part[i].ma;
+    int y = TOP + 250;
+    for (int i = 0; i < r.parts; ++i) {
+        const doba_batt::Part& p = r.part[i];
+        const int share = total > 0 ? (int)(p.ma * 100 / total + 0.5f) : 0;
+        ui::text(ui::font(ui::F_SMALL), 24, y + 24, TR(p.name), fb, EPD_DRAW_ALIGN_LEFT, INK);
+        snprintf(line, sizeof line, TR("%d mA · %d%%"), (int)(p.ma + 0.5f), share);
+        ui::text(ui::font(ui::F_SMALL), W - 24, y + 24, line, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+        const int bw = (W - 48) * share / 100;
+        epd_fill_rect({24, y + 36, W - 48, 10}, 0xE0, fb);
+        epd_fill_rect({24, y + 36, bw, 10}, INK, fb);
+        // what switching it off would give
+        if (!r.charging && r.avgMa > p.ma + 1 && r.remainingMah && strcmp(p.name, "Processor and the rest") != 0) {
+            snprintf(line, sizeof line, TR("without it: about %s"), hoursText(r.remainingMah / (r.avgMa - p.ma)));
+            ui::text(ui::font(ui::F_TINY), 24, y + 72, line, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        }
+        y += 92;
+    }
+    ui::text(ui::font(ui::F_TINY), W / 2, H - 24, TR("measured total · split estimated from typical draws"), fb,
+             EPD_DRAW_ALIGN_CENTER, INK);
 }
 
 }  // namespace
@@ -2071,6 +2144,7 @@ void render(Page p, const RideState& s, uint8_t* fb) {
         case SOS:     renderSos(s, fb); break;
         case SUN:     renderSun(s, fb); break;
         case MORE:    renderMore(s, fb); break;
+        case BATTERY: renderBattery(s, fb); break;
     }
 }
 
@@ -2104,6 +2178,7 @@ const char* title(Page p) {
         case SOS: return TR("SOS");
         case SUN: return TR("Sun & moon");
         case MORE: return TR("More");
+        case BATTERY: return TR("Battery");
     }
     return nullptr;
 }
@@ -2126,6 +2201,7 @@ Go tap(Page p, int x, int y, const RideState& s) {
         case SOS:     return tapSos(x, y, s);
         case SUN:     return STAY;
         case MORE:    return tapMore(x, y);
+        case BATTERY: return STAY;
     }
     return STAY;
 }
@@ -2152,6 +2228,7 @@ Go back(Page p) {
         case SOS:     return TO_HOME;
         case SUN:     return TO_HOME;
         case MORE:    return TO_SETUP;
+        case BATTERY: return TO_MORE;
     }
     return TO_HOME;
 }

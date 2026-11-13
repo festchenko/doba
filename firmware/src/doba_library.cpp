@@ -937,6 +937,9 @@ const BookLook kLooks[] = {
     {"garden_se", "Gr", "Gardening Q&A"}, {"chem_se", "Ch", "Chemistry Q&A"},
     {"wood_se", "Wd", "Woodwork Q&A"},    {"shelf_en", "Lib", "Gutenberg"},
     {"shelf_uk", "Дж", "Вікіджерела"},    {"mine", "Me", "My files"},
+    {"my_books", "Кн", "Мої книги"},      {"books_uk", "Пд", "Вікіпідручник"},
+    {"voyage_uk", "Мн", "Вікімандри"},    {"voyage_en", "Vy", "Wikivoyage"},
+    {"dict_uk", "Сл", "Вікісловник"},     {"dict_en", "Dic", "Wiktionary"},
 };
 constexpr int N_LOOKS = sizeof(kLooks) / sizeof(kLooks[0]);
 
@@ -1207,7 +1210,7 @@ EpdRect letterRect(int bi, int i) {
 void renderBookHead(int bi, uint8_t* fb) {
     char t[48];
     snprintf(t, sizeof t, "%s", shortName(bi));
-    fitText(ui::font(ui::F_H1), t, W - 48);
+    fitText(ui::font(ui::F_H1), t, W - 48 - 76);
     ui::text(ui::font(ui::F_H1), 24, TOP + 44, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
     char cnt[16], sub[160];
     const Book& b = g_books[bi];
@@ -1425,9 +1428,90 @@ void renderBigBar(uint8_t* fb) {
     epd_fill_rect({kBigRandom.x, kBigRandom.y + 37, ui::textWidth(f, "Random page"), 2}, INK, fb);
 }
 
+// --- deleting a book: the one way to give the card's space back ------------------
+//
+// Articles live inside packed, compressed chunks, so taking one out frees
+// nothing; a whole book is a folder, and removing it does. A bin on the book's
+// page, then a plain question with the size in it.
+const EpdRect kBookDel = {W - 24 - 60, TOP + 10, 60, 52};
+const EpdRect kDelBox = {24, TOP + 190, W - 48, 330};
+const EpdRect kDelYes = {48, TOP + 420, (W - 96 - 20) / 2, 72};
+const EpdRect kDelNo = {48 + (W - 96 - 20) / 2 + 20, TOP + 420, (W - 96 - 20) / 2, 72};
+int g_delAsk = -1;              // the book whose delete is being asked about
+uint64_t g_delBytes = 0;
+
+uint64_t treeBytes(const char* path) {
+    File d = SD.open(path);
+    if (!d) return 0;
+    if (!d.isDirectory()) { const uint64_t n = d.size(); d.close(); return n; }
+    uint64_t n = 0;
+    for (File e = d.openNextFile(); e; e = d.openNextFile()) {
+        char child[160];
+        snprintf(child, sizeof child, "%s", e.path());
+        const bool dir = e.isDirectory();
+        const uint64_t sz = dir ? 0 : e.size();
+        e.close();
+        n += dir ? treeBytes(child) : sz;
+    }
+    d.close();
+    return n;
+}
+// Always takes the FIRST entry and reopens: a FAT directory being listed while
+// it is changed can skip entries.
+bool rmTree(const char* path) {
+    for (;;) {
+        File d = SD.open(path);
+        if (!d) return false;
+        if (!d.isDirectory()) { d.close(); return SD.remove(path); }
+        File e = d.openNextFile();
+        if (!e) { d.close(); break; }
+        char child[160];
+        snprintf(child, sizeof child, "%s", e.path());
+        const bool dir = e.isDirectory();
+        e.close();
+        d.close();
+        if (!(dir ? rmTree(child) : SD.remove(child))) return false;
+    }
+    return SD.rmdir(path);
+}
+void drawBin(const EpdRect& r, uint8_t* fb) {
+    ui::frameRound(r, 8, 2, fb, INK, PAPER);
+    const int cx = r.x + r.width / 2, top = r.y + 13;
+    epd_fill_rect({cx - 13, top, 26, 3}, INK, fb);          // lid
+    epd_fill_rect({cx - 5, top - 4, 10, 4}, INK, fb);       // handle
+    for (int t = 0; t < 2; ++t) {                           // body, slightly tapered
+        epd_draw_line(cx - 10 + t, top + 6, cx - 8 + t, top + 28, INK, fb);
+        epd_draw_line(cx + 10 - t, top + 6, cx + 8 - t, top + 28, INK, fb);
+    }
+    epd_fill_rect({cx - 8, top + 27, 17, 2}, INK, fb);
+    epd_fill_rect({cx - 1, top + 10, 2, 14}, 0x60, fb);
+}
+void renderDeleteAsk(int bi, uint8_t* fb) {
+    epd_fill_rect(kDelBox, PAPER, fb);
+    ui::frameRound(kDelBox, 12, 3, fb, INK, PAPER);
+    char t[96];
+    snprintf(t, sizeof t, TR("Delete \"%s\"?"), shortName(bi));
+    fitText(ui::font(ui::F_TITLE), t, kDelBox.width - 40);
+    ui::text(ui::font(ui::F_TITLE), W / 2, kDelBox.y + 64, t, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    char sz[64];
+    if (g_delBytes >= 1000000000ULL) snprintf(sz, sizeof sz, TR("frees %.1f GB on the card"), g_delBytes / 1e9);
+    else snprintf(sz, sizeof sz, TR("frees %lu MB on the card"), (unsigned long)(g_delBytes / 1000000ULL + 1));
+    ui::text(ui::font(ui::F_SMALL), W / 2, kDelBox.y + 116, sz, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    ui::text(ui::font(ui::F_SMALL), W / 2, kDelBox.y + 156, TR("It can only come back from a computer."), fb,
+             EPD_DRAW_ALIGN_CENTER, ui::GREY);
+    epd_fill_rect(kDelYes, INK, fb);
+    ui::text(ui::font(ui::F_LABEL), kDelYes.x + kDelYes.width / 2, kDelYes.y + 47, TR("DELETE"), fb,
+             EPD_DRAW_ALIGN_CENTER, PAPER);
+    ui::frameRound(kDelNo, 8, 2, fb, INK, PAPER);
+    ui::text(ui::font(ui::F_LABEL), kDelNo.x + kDelNo.width / 2, kDelNo.y + 47, TR("CANCEL"), fb,
+             EPD_DRAW_ALIGN_CENTER, INK);
+}
+
 void renderBook(uint8_t* fb) {
     const int bi = g_open;
     renderBookHead(bi, fb);
+    drawBin(kBookDel, fb);
+    if (g_delAsk == bi) { renderDeleteAsk(bi, fb); return; }
     char lbl[64];
     snprintf(lbl, sizeof lbl, TR("Search %s"), shortName(bi));
     searchBar(kBookSearch, lbl, fb);
@@ -2232,6 +2316,35 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
         }
         case V_BOOK: {
             const int bi = g_open;
+            if (g_delAsk == bi) {
+                if (hit(kDelYes, x, y)) {
+                    char path[96];
+                    snprintf(path, sizeof path, "%s/%s", kRoot, g_books[bi].dir);
+                    Serial.printf("[lib] delete book %s (%.1f GB)\n", g_books[bi].dir, g_delBytes / 1e9);
+                    const uint32_t t0 = millis();
+                    sdLock();
+                    const bool ok = rmTree(path);
+                    sdUnlock();
+                    Serial.printf("[lib] delete %s %s in %lu ms\n", path, ok ? "ok" : "FAILED",
+                                  (unsigned long)(millis() - t0));
+                    g_delAsk = -1;
+                    g_menuBook = -1;
+                    rescan();            // the shelf without it
+                    return false;
+                }
+                if (hit(kDelNo, x, y) || !hit(kDelBox, x, y)) g_delAsk = -1;
+                return false;
+            }
+            if (hit(kBookDel, x, y)) {
+                char path[96];
+                snprintf(path, sizeof path, "%s/%s", kRoot, g_books[bi].dir);
+                sdLock();
+                g_delBytes = treeBytes(path);
+                sdUnlock();
+                g_delAsk = bi;
+                Serial.printf("[lib] delete? %s %.1f GB\n", g_books[bi].dir, g_delBytes / 1e9);
+                return false;
+            }
             if (hit(kBookSearch, x, y)) { g_scope = -1; g_scopeBook = bi; g_searchFrom = V_BOOK; g_view = V_SEARCH; k.clear(); if (i18n::lang() == i18n::UK) k.layout = k.lastLetters = kbd::UA; return false; }
             findMenu(bi);
             if (!g_bookAZ && (g_menuCount || bigBook(bi))) {

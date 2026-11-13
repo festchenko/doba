@@ -9,6 +9,8 @@
 #include "gps_service.h"
 #include "rtc_clock.h"
 #include "settings.h"
+#include "doba_battery.h"
+#include "board_power.h"
 #include "routes.h"
 #include "segments.h"
 #include "ble_sensors.h"
@@ -197,6 +199,18 @@ void setup() {
 }
 
 void loop() {
+    {   // DOBA: the battery page's reading, as the board's battery task does
+        static uint32_t last = 0;
+        if (!last || millis() - last > 30000) {
+            last = millis();
+            uint16_t mv = 0; int16_t ma = 0;
+            bool usb = false;
+            board_read_power(mv, ma);
+            board_usb_power_present(usb);
+            RideState st = g_state.snapshot();
+            doba_batt::sample(mv, ma, st.batteryPercent, (uint16_t)(1500 * st.batteryPercent / 100), usb);
+        }
+    }
     usb_storage::poll();
     ride_recorder::retryMountIfNeeded();
     power_mgmt::tick();

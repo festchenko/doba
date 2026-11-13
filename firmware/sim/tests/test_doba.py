@@ -635,3 +635,49 @@ def test_a_long_text_opens_where_reading_stopped(doba, book):
     doba.wait_log(r"\[lib\] resume 'Захар Беркут / I' at page 3", since=since)
     with open(os.path.join(doba.sd, "doba", "recent.txt"), encoding="utf-8") as f:
         assert re.search(r"^field\|.*\|[1-9]\d*$", f.read(), re.M)
+
+
+def test_a_book_can_be_deleted_from_its_page_to_free_the_card(doba, book):
+    """The bin on a book's page asks first (with the size it frees), then
+    removes the book's folder from the card; the shelf no longer has it."""
+    lib = os.path.join(doba.sd, "doba", "lib", "field")
+    shutil.copytree(book, lib)
+    boot(doba)
+    doba.console("screen library", 800)
+    time.sleep(0.6)
+    since = doba.log_seq()
+    doba.tap(100, TOP + 204 + 75)                           # the first cover
+    doba.wait_log(r"\[lib\] book field", since=since)
+    time.sleep(0.6)
+    doba.tap(W - 24 - 30, TOP + 36)                         # the bin
+    doba.wait_log(r"\[lib\] delete\? field \d+\.\d GB", since=since)
+    time.sleep(0.6)
+    doba.screenshot(os.path.join(doba.dir, "delete_ask.png"))
+    doba.tap(W - 120, TOP + 456)                            # CANCEL
+    time.sleep(0.6)
+    assert os.path.isdir(lib)
+    doba.tap(W - 24 - 30, TOP + 36)
+    time.sleep(0.6)
+    since = doba.log_seq()
+    doba.tap(120, TOP + 456)                                # DELETE
+    doba.wait_log(r"\[lib\] delete .*/field ok", since=since)
+    assert not os.path.exists(lib)
+
+
+def test_battery_page_forecasts_and_splits_the_draw(doba):
+    """Settings > More > Battery: how long at this pace (from the gauge), and
+    where the current goes (estimated per part, adding up to the measurement)."""
+    boot(doba)
+    time.sleep(1.5)
+    doba.console("screen battery", 800)
+    time.sleep(1.2)
+    doba.screenshot(os.path.join(doba.dir, "battery.png"))
+    doba.console("lang uk", 500)
+    since = doba.log_seq()
+    doba.console("screen more", 800)
+    time.sleep(0.8)
+    doba.console("screen battery", 800)
+    time.sleep(1.2)
+    doba.screenshot(os.path.join(doba.dir, "battery_uk.png"))
+    left = [l for l in doba.log(since) if "[i18n] miss" in l and "LongFast" not in l]
+    assert not left, left
