@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "client"))
 
-from otpsim import LinkClient, SimDevice, SimPhone, pb  # noqa: E402
+from otpsim import SimDevice  # noqa: E402
 
 # Wall-clock bounds (boot time, throughput) are set on a developer Mac; a CI
 # runner is slower, so it scales them (OTP_SIM_TIME_SCALE=3 in build.yml).
@@ -119,23 +119,4 @@ def device(request):
     shutil.rmtree(dev.dir, ignore_errors=True)
 
 
-def paired_phone(device, identity="d0:00:00:00:00:01", name="Sim iPhone"):
-    phone = SimPhone(device.ble_port, identity=identity, name=name).connect()
-    sec = phone.wait_security(10)
-    assert sec["encrypted"] and sec["bonded"], sec
-    return phone
 
-
-@pytest.fixture
-def phone(device):
-    p = paired_phone(device)
-    yield p
-    p.disconnect()
-
-
-@pytest.fixture
-def link(phone):
-    return LinkClient(phone).hello()
-
-
-__all__ = ["paired_phone", "pb"]

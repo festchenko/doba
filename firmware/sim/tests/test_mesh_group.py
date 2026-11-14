@@ -13,6 +13,7 @@ import time
 from conftest import TIME_SCALE
 from mesh_kit import keep_artifacts, mesh, start_device  # noqa: F401
 from otpsim import mesh as M
+
 from test_regressions_ui import Glass
 
 HOOD_RIVER = (45.70531, -121.52147)

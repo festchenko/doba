@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from otpsim import LinkClient, SimDevice, pb
+from otpsim import SimDevice
 
 LAT, LON = 37.7749, -122.4194
 
@@ -62,73 +62,3 @@ def test_speed_drops_to_zero_when_the_fix_is_lost_or_the_receiver_goes_quiet(dev
     device.wait_status(lambda s: not s["ride"]["gps_fix"] and s["ride"]["speed_kmh"] == 0, timeout=8)
 
 
-@indoors
-def test_the_phone_location_sets_the_clock_without_a_gps_fix(device, phone):
-    """f428896: indoors after a reboot the status bar and CLOCK field showed
-    --:-- until GPS produced a time, although the phone sends UTC with every
-    location. The clock now comes from the phone and keeps ticking."""
-    link = LinkClient(phone).hello(unix_ms=0)   # an app that doesn't send its clock in Hello
-    time.sleep(1.5)
-    assert not device.status()["ride"]["time_valid"]
-    now = time.time()
-    phone_fix(link, LAT, LON, utc=now)
-    st = device.wait_status(lambda s: s["ride"]["time_valid"], timeout=5)
-    assert abs(st["wall_unix"] - now) < 5, st["wall_unix"]
-    time.sleep(2.5)
-    st = device.status()
-    assert st["ride"]["time_valid"]
-    assert abs(st["wall_unix"] - time.time()) < 5
-
-
-@indoors
-def test_hello_sets_the_clock_without_a_location_stream(device, phone):
-    """3e93c8f: a phone that connects but doesn't stream locations (no
-    permission, or the device already has a fix-less receiver and the app
-    holds back) left the clock at --:--. The phone's clock now comes in
-    Hello on every connection."""
-    time.sleep(1.5)
-    assert not device.status()["ride"]["time_valid"]
-    now = time.time()
-    LinkClient(phone).hello(unix_ms=now * 1000)
-    st = device.wait_status(lambda s: s["ride"]["time_valid"], timeout=5)
-    assert abs(st["wall_unix"] - now) < 5, st["wall_unix"]
-
-
-def test_the_live_position_follows_the_phone_before_any_fix(device, link):
-    """b8adbc1: the app's map page drew the device's rider marker only once
-    the device had ever had a GPS fix; indoors after a reboot the live frames
-    carried no position although the device map was centred on the phone."""
-    link.expect_result(live_subscribe=pb.LiveSubscribe(topics=[pb.LIVE_TOPIC_POSITION]))
-    phone_fix(link, LAT, LON, utc=time.time())
-    frame = link.wait_push("live", lambda f: f.HasField("position") and f.position.lat_e7 != 0, timeout=5)
-    assert abs(frame.position.lat_e7 / 1e7 - LAT) < 1e-5
-    assert abs(frame.position.lon_e7 / 1e7 - LON) < 1e-5
-    assert frame.position.from_phone and frame.position.current
-
-
-def test_phone_speed_is_shown_when_the_device_has_no_fix(device, link):
-    """d9ae99d (#103): with the phone as the position source, the speed sat
-    at 0 (and the heading at due north): nothing wrote the phone's motion
-    into the ride state."""
-    for i in range(3):
-        phone_fix(link, LAT, LON + i * 0.0001, utc=time.time(), speed_cms=800, course_cdeg=9000)
-        time.sleep(1)
-    st = device.wait_status(lambda s: abs(s["ride"]["speed_kmh"] - 28.8) < 1, timeout=5)
-    assert not st["ride"]["gps_fix"]
-
-
-def test_a_ride_records_the_phone_position_while_the_receiver_has_none(device, link):
-    """363940b: the recorder only wrote a point inside `if (s.gpsFix)`, so
-    with a cold receiver — the opening minutes of a ride, phone in the
-    pocket — the ride had no track and no distance."""
-    device.button("boot")
-    device.wait_status(lambda s: s["ride"]["recording"], timeout=10)
-    lat, lon = LAT, LON
-    step = 8.0   # metres a second, ~29 km/h, due north
-    for _ in range(12):
-        phone_fix(link, lat, lon, utc=time.time(), speed_cms=800, course_cdeg=0)
-        lat += step / 111320.0
-        time.sleep(1)
-    st = device.wait_status(lambda s: s["ride"]["distance_m"] > 40, timeout=5)
-    assert not st["ride"]["gps_fix"]
-    assert st["ride"]["distance_m"] < 12 * step * 1.5

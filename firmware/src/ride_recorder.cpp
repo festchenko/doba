@@ -373,7 +373,6 @@ Motion motionEvidence(const RideState& s, bool resuming) {
         witnesses++;
         if (s.cadenceRpm > 0) moving = true;
     }
-    if (speed_source::sensorFresh(s, now)) witnesses++;   // wheel sensor talking
     if (fresh(s.wheelMoveMs)) moving = true;   // rev counter advanced recently
     if (s.gpsFix) {
         witnesses++;
@@ -1196,7 +1195,7 @@ void task(void*) {
         // fitted. Its accuracy is the circumference setting's. Otherwise
         // distance comes from positions, exactly as before. One source per
         // tick, so the two never double-count.
-        const bool wheelDist = s.speedSource == speed_source::SENSOR;
+        const bool wheelDist = false;   // DOBA: no wheel sensor
         if (wheelDist) distanceM += wheelDeltaM;
 
         static bool wheelSourceLogged = false;

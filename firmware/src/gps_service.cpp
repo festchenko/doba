@@ -17,7 +17,6 @@
 #include "config.h"
 #include "ride_state.h"
 #include "routes.h"
-#include "phone_motion.h"
 #include "speed_source.h"
 #include "settings.h"
 #include "rtc_clock.h"

@@ -2,7 +2,6 @@
 #include "settings.h"
 #include "tz_auto.h"
 #include <ctime>
-#include "ble_sensors.h"
 #include <string.h>
 
 #include <Arduino.h>
@@ -11,7 +10,6 @@
 
 #include "config.h"
 #include "mesh_proto.h"
-#include "wheel_speed.h"
 
 namespace {
 
@@ -19,15 +17,12 @@ Preferences prefs;
 bool tzAutoOn = true;   // DOBA
 bool regionAutoOn = true;
 float compassOff = NAN;
-int ftp = FTP_WATTS;
 int tz = TIMEZONE_OFFSET_MINUTES;
 int bl = 0;  // backlight level 0-3; OFF until the rider turns it on — e-paper
              // needs no light in daylight, and a lit panel drains a fresh device
 bool miles = false;  // false = km, true = miles
 bool clk24 = true;   // true = 24-hour clock, false = 12-hour
 bool usbDrv = true;
-bool btOn = false;    // DOBA: Bluetooth off unless asked for
-bool wifiOn = false;  // DOBA: WiFi off unless asked for
 char ownerText[128] = "";
 char ownerF[5][64] = {};    // DOBA: name, born, blood, medical, contact   // DOBA: "if found" card on the power-off screen  // true = expose SD as USB drive when plugged into a host
 // false = a field whose sensor is unpaired is dropped from the dashboard and
@@ -39,15 +34,10 @@ uint16_t mapLayerMask = 0x003F;   // MAP_LAYERS_ALL: every cycling layer on
 // Seconds of no movement (power, cadence, wheel and GPS all quiet) before the
 // ride timer auto-pauses. 0 disables auto-pause entirely.
 int autoPause = 10;
-int wheelMm = wheel_speed::kDefaultCircMm;   // wheel speed sensor circumference
-bool wkPauseStep = false;
 bool panelScanOn = false;   // paint through epd_scan.cpp, not the driver's path
 // Per kind, a ';'-separated list of paired addresses, most recent first (max
 // SENSOR_MAX_PAIRED). Stored under the same NVS key as the old single address,
 // which parses as a one-entry list — no migration.
-char addrs[ble_sensors::KIND_COUNT][settings::SENSOR_MAX_PAIRED * 18 + 4] = {};
-char addrScratch[ble_sensors::KIND_COUNT][18];   // sensorAddr()/sensorAddrAt() return into these
-char names[ble_sensors::KIND_COUNT][32] = {};   // remembered vendor/model per paired kind
 double lastLat = 0, lastLon = 0;
 bool rtcSynced = false;  // has GPS ever written UTC to the coin-cell RTC?
 // Mesh messaging, OFF until the rider turns it on. Joining a public mesh means
@@ -70,11 +60,7 @@ uint8_t meshRegionIdx = 0;
 int8_t  meshTxDbm = 0;
 uint8_t meshSlot = 0;
 char meshLong[40] = "";
-char phName[32] = "";   // paired phone's GAP name, ASCII-folded
-char phId[20] = "";     // its identity address, "aa:bb:cc:dd:ee:ff"
 char meshShort[8] = "";
-const char* KEYS[ble_sensors::KIND_COUNT] = {"sens_hr", "sens_pwr", "sens_cad", "sens_rdr", "sens_spd"};
-const char* NAME_KEYS[ble_sensors::KIND_COUNT] = {"snm_hr", "snm_pwr", "snm_cad", "snm_rdr", "snm_spd"};
 
 }  // namespace
 
@@ -83,7 +69,6 @@ namespace settings {
 void begin() {
     prefs.begin("bike", false);
     compassOff = prefs.getFloat("cmpoff", NAN);
-    ftp = prefs.getInt("ftp", FTP_WATTS);
     tz = prefs.getInt("tz", TIMEZONE_OFFSET_MINUTES);
     bl = prefs.getInt("bl", 0);
     miles = prefs.getBool("miles", false);
@@ -94,13 +79,6 @@ void begin() {
     // that had the old (default-ON) "usbdrv" value stored. OFF = the device
     // keeps the SD (logs/recording) when plugged in.
     usbDrv = prefs.getBool("usbdrv2", false);
-#ifdef OTP_SIM
-    // The simulator keeps the phone link up: its app-sync suites drive it.
-    btOn = prefs.getBool("bt", true);
-#else
-    btOn = prefs.getBool("bt", false);
-#endif
-    wifiOn = prefs.getBool("wifi", false);
     prefs.getString("owner", ownerText, sizeof ownerText);
     for (int i = 0; i < 5; ++i) {
         char k[8]; snprintf(k, sizeof k, "own%d", i);
@@ -109,12 +87,7 @@ void begin() {
     showOff = prefs.getBool("showoff", true);
     mapLayerMask = prefs.getUShort("maplayers", 0x003F);
     autoPause = prefs.getInt("apause", 10);
-    wkPauseStep = prefs.getBool("wkpstep", false);
     panelScanOn = prefs.getBool("pscan", false);
-    for (int k = 0; k < ble_sensors::KIND_COUNT; ++k) {
-        prefs.getString(KEYS[k], addrs[k], sizeof(addrs[k]));
-        prefs.getString(NAME_KEYS[k], names[k], sizeof(names[k]));
-    }
     lastLat = prefs.getDouble("lastlat", 0);
     lastLon = prefs.getDouble("lastlon", 0);
     rtcSynced = prefs.getBool("rtcok", false);
@@ -146,19 +119,9 @@ void begin() {
     meshSlot = prefs.getUChar("meshslot", 0);
     prefs.getString("meshlong", meshLong, sizeof(meshLong));
     prefs.getString("meshshort", meshShort, sizeof(meshShort));
-    prefs.getString("phname", phName, sizeof(phName));
-    prefs.getString("phid", phId, sizeof(phId));
-    wheelMm = prefs.getInt("wheelmm", wheel_speed::kDefaultCircMm);
-    if (!wheel_speed::validCircMm(wheelMm)) wheelMm = wheel_speed::kDefaultCircMm;
-    Serial.printf("[cfg] ftp=%dW tz=%dmin wheel=%dmm sensors=[%s|%s|%s|%s|%s]\n", ftp, tz,
-                  wheelMm, addrs[0], addrs[1], addrs[2], addrs[3], addrs[4]);
+    Serial.printf("[cfg] tz=%dmin usbdrive=%d mesh=%d\n", tz, usbDrv, meshOn);
 }
 
-int ftpWatts() { return ftp; }
-void setFtpWatts(int w) {
-    ftp = constrain(w, 50, 500);
-    prefs.putInt("ftp", ftp);
-}
 
 bool panelScan() { return panelScanOn; }
 void setPanelScan(bool on) {
@@ -166,11 +129,6 @@ void setPanelScan(bool on) {
     prefs.putBool("pscan", on);
 }
 
-bool workoutPauseEachBlock() { return wkPauseStep; }
-void setWorkoutPauseEachBlock(bool on) {
-    wkPauseStep = on;
-    prefs.putBool("wkpstep", on);
-}
 
 int autoPauseSec() { return autoPause; }
 void setAutoPauseSec(int s) {
@@ -178,15 +136,6 @@ void setAutoPauseSec(int s) {
     prefs.putInt("apause", autoPause);
 }
 
-int wheelCircMm() { return wheelMm; }
-bool setWheelCircMm(int mm) {
-    if (!wheel_speed::validCircMm(mm)) return false;
-    if (mm != wheelMm) {
-        wheelMm = mm;
-        prefs.putInt("wheelmm", wheelMm);
-    }
-    return true;
-}
 
 // DOBA: by default the zone comes from the last GPS position (tz_auto), summer
 // time included; a manual offset is kept for when that is wrong or unknown.
@@ -230,9 +179,6 @@ void setUsbDrive(bool on) {
     prefs.putBool("usbdrv2", usbDrv);
 }
 
-bool bluetooth() { return btOn; }
-void setBluetooth(bool on) { btOn = on; prefs.putBool("bt", on); }
-bool wifi() { return wifiOn; }
 const char* owner() { return ownerText; }
 const char* ownerField(int i) { return i >= 0 && i < 5 ? ownerF[i] : ""; }
 void setOwnerField(int i, const char* t) {
@@ -246,7 +192,6 @@ void setOwner(const char* t) {
     snprintf(ownerText, sizeof ownerText, "%s", t ? t : "");
     prefs.putString("owner", ownerText);
 }
-void setWifi(bool on) { wifiOn = on; prefs.putBool("wifi", on); }
 
 bool showOffline() { return showOff; }
 uint16_t mapLayers() { return mapLayerMask; }
@@ -260,122 +205,20 @@ void setShowOffline(bool on) {
     prefs.putBool("showoff", showOff);
 }
 
-// Split addrs[kind] into up to SENSOR_MAX_PAIRED entries of `out`.
-static int splitAddrs(int kind, char out[][18]) {
-    int n = 0;
-    const char* p = addrs[kind];
-    while (*p && n < SENSOR_MAX_PAIRED) {
-        const char* e = strchr(p, ';');
-        size_t len = e ? (size_t)(e - p) : strlen(p);
-        if (len > 0 && len < 18) {
-            memcpy(out[n], p, len);
-            out[n][len] = 0;
-            ++n;
-        }
-        if (!e) break;
-        p = e + 1;
-    }
-    return n;
-}
 
-static void joinAddrs(int kind, char in[][18], int n) {
-    addrs[kind][0] = 0;
-    size_t used = 0;
-    for (int i = 0; i < n; ++i) {
-        used += snprintf(addrs[kind] + used, sizeof(addrs[kind]) - used, "%s%s",
-                         i ? ";" : "", in[i]);
-    }
-    prefs.putString(KEYS[kind], addrs[kind]);
-}
 
-int sensorAddrCount(int kind) {
-    if (kind < 0 || kind >= ble_sensors::KIND_COUNT) return 0;
-    char list[SENSOR_MAX_PAIRED][18];
-    return splitAddrs(kind, list);
-}
 
-const char* sensorAddrAt(int kind, int i) {
-    if (kind < 0 || kind >= ble_sensors::KIND_COUNT) return "";
-    char list[SENSOR_MAX_PAIRED][18];
-    int n = splitAddrs(kind, list);
-    if (i < 0 || i >= n) return "";
-    snprintf(addrScratch[kind], sizeof(addrScratch[kind]), "%s", list[i]);
-    return addrScratch[kind];
-}
 
-const char* sensorAddr(int kind) { return sensorAddrAt(kind, 0); }
 
-bool sensorPaired(int kind, const char* addr) {
-    if (kind < 0 || kind >= ble_sensors::KIND_COUNT || !addr || !addr[0]) return false;
-    char list[SENSOR_MAX_PAIRED][18];
-    int n = splitAddrs(kind, list);
-    for (int i = 0; i < n; ++i)
-        if (strcasecmp(list[i], addr) == 0) return true;
-    return false;
-}
 
-void addSensorAddr(int kind, const char* addr) {
-    if (kind < 0 || kind >= ble_sensors::KIND_COUNT || !addr || !addr[0] || strlen(addr) >= 18) return;
-    char list[SENSOR_MAX_PAIRED][18];
-    int n = splitAddrs(kind, list);
-    // Move-to-front: the newest pairing is the first the scanner reports and
-    // the one the console/app calls "the" paired sensor.
-    char next[SENSOR_MAX_PAIRED][18];
-    int m = 0;
-    snprintf(next[m++], 18, "%s", addr);
-    for (int i = 0; i < n && m < SENSOR_MAX_PAIRED; ++i)
-        if (strcasecmp(list[i], addr) != 0) snprintf(next[m++], 18, "%s", list[i]);
-    joinAddrs(kind, next, m);
-}
 
-void removeSensorAddr(int kind, const char* addr) {
-    if (kind < 0 || kind >= ble_sensors::KIND_COUNT || !addr) return;
-    char list[SENSOR_MAX_PAIRED][18];
-    int n = splitAddrs(kind, list);
-    char next[SENSOR_MAX_PAIRED][18];
-    int m = 0;
-    for (int i = 0; i < n; ++i)
-        if (strcasecmp(list[i], addr) != 0) snprintf(next[m++], 18, "%s", list[i]);
-    joinAddrs(kind, next, m);
-}
 
-void clearSensorAddrs(int kind) {
-    if (kind < 0 || kind >= ble_sensors::KIND_COUNT) return;
-    addrs[kind][0] = 0;
-    prefs.putString(KEYS[kind], "");
-}
 
-const char* sensorName(int kind) {
-    return (kind >= 0 && kind < ble_sensors::KIND_COUNT) ? names[kind] : "";
-}
 
-void setSensorName(int kind, const char* name) {
-    if (kind < 0 || kind >= ble_sensors::KIND_COUNT || !name || !name[0]) return;
-    snprintf(names[kind], sizeof(names[kind]), "%s", name);
-    prefs.putString(NAME_KEYS[kind], names[kind]);
-}
 
-const char* phoneName() { return phName; }
-const char* phoneId() { return phId; }
 
-void setPhoneId(const char* id) {
-    if (!id || strcmp(id, phId) == 0) return;   // no flash write per reconnect
-    snprintf(phId, sizeof(phId), "%s", id);
-    prefs.putString("phid", phId);
-}
 
-void setPhoneName(const char* name) {
-    if (!name || strcmp(name, phName) == 0) return;
-    snprintf(phName, sizeof(phName), "%s", name);
-    prefs.putString("phname", phName);
-}
 
-void clearPhone() {
-    phName[0] = 0;
-    phId[0] = 0;
-    prefs.remove("phname");
-    prefs.remove("phid");
-}
 
 bool lastPosition(double& lat, double& lon) {
     if (lastLat == 0 && lastLon == 0) return false;

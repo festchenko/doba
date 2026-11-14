@@ -1989,7 +1989,7 @@ void renderSun(const RideState& s, uint8_t* fb) {
 // --- MORE ----------------------------------------------------------------------
 
 const char* hoursText(float h);
-enum MoreRow { M_USB, M_BT, M_WIFI, M_BATT, M_OWNER, M_GPS, M_MODE, M_CARD, M_ABOUT, M_COUNT };
+enum MoreRow { M_USB, M_BATT, M_OWNER, M_GPS, M_MODE, M_CARD, M_ABOUT, M_COUNT };
 int moreRowY(int r) { return TOP + 4 + SEC_H + r * SROW_H; }
 
 void renderMore(const RideState& s, uint8_t* fb) {
@@ -2002,18 +2002,6 @@ void renderMore(const RideState& s, uint8_t* fb) {
             case M_USB:
                 caption(y, SROW_H, "USB DRIVE", settings::usbDrive() ? "the card shows on a computer" : "off: the card is Doba's", fb);
                 toggle(y, SROW_H, settings::usbDrive(), fb);
-                break;
-            case M_BT:
-                // Changing it restarts Doba: the Bluetooth stack is only ever
-                // brought up at boot (and left off it costs no RAM at all).
-                caption(y, SROW_H, "BLUETOOTH", settings::bluetooth() ? "on: visible to phones" :
-                        "off · switching restarts Doba", fb);
-                toggle(y, SROW_H, settings::bluetooth(), fb);
-                break;
-            case M_WIFI:
-                caption(y, SROW_H, "WIFI", settings::wifi() ? "allowed when something needs it" :
-                        "off: never switched on", fb);
-                toggle(y, SROW_H, settings::wifi(), fb);
                 break;
             case M_BATT: {
                 doba_batt::Report br;
@@ -2069,17 +2057,6 @@ Go tapMore(int x, int y) {
         settings::setUsbDrive(on);
         usb_storage::setDriveEnabled(on);
     }
-    if (r == M_BT && toggleHit(x)) {
-        const bool on = x >= CTRL_X + CTRL_W - 75;
-        if (on != settings::bluetooth()) {
-            settings::setBluetooth(on);
-            Serial.printf("[doba] bluetooth %s — restarting\n", on ? "on" : "off");
-            Serial.flush();
-            delay(150);
-            esp_restart();
-        }
-    }
-    if (r == M_WIFI && toggleHit(x)) settings::setWifi(x >= CTRL_X + CTRL_W - 75);
     if (r == M_GPS && x >= CTRL_X) return TO_GPSDEBUG;
     if (r == M_BATT && x >= CTRL_X) return TO_BATTERY;
     if (r == M_OWNER) {

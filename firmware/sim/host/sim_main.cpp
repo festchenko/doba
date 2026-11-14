@@ -12,10 +12,6 @@
 #include "doba_battery.h"
 #include "board_power.h"
 #include "routes.h"
-#include "segments.h"
-#include "ble_sensors.h"
-#include "ble_server.h"
-#include "link.h"
 #include "ride_recorder.h"
 #include "ui_dashboard.h"
 #include "board_power.h"
@@ -24,7 +20,6 @@
 #include "sd_diagnostics.h"
 #include "usb_storage.h"
 #include "power_mgmt.h"
-#include "workout_service.h"
 #include "aux_sensors.h"
 #include "mesh_service.h"
 #include "diag.h"
@@ -60,7 +55,6 @@ void usage() {
             "otp-sim — the OpenTrailPaper firmware on the host (sim/README.md)\n"
             "  --dir DIR              device state: NVS, bonds, OTA image (default sim-device)\n"
             "  --sd DIR               the SD card's root (default DIR/sd)\n"
-            "  --ble-port N           simble, the phone's link (default 7878)\n"
             "  --ctl-port N           control channel (default 7879)\n"
             "  --speed F              device clock at F x real time\n"
             "  --gps-baud N           the GPS module's baud at power-on (default: as saved, else 9600)\n"
@@ -123,7 +117,6 @@ void setup() {
     sim::setBattery(100, false);   // the fuel gauge, set by the control channel from here
     settings::begin();
     g_state.with([](RideState& s) {
-        s.ftpW = (uint16_t)settings::ftpWatts();
         s.tzMin = (int16_t)settings::tzMinutes();
         s.useMiles = settings::useMiles();
         s.clock24h = settings::clock24h();
@@ -142,7 +135,6 @@ void setup() {
     ui_dashboard::bootStatus("SD card", sdOk);
     if (sdOk) {
         routes::begin();
-        segments::begin();
     }
     ui_dashboard::bootStep("RTC");
     ui_dashboard::bootDetailFor("RTC", "not found");
@@ -180,17 +172,8 @@ void setup() {
     ui_dashboard::bootDetailFor("Display", "sim 540x960");
     ui_dashboard::bootStatus("Display", uiOk);
     ui_dashboard::begin();
-    const bool btOn = settings::bluetooth();   // DOBA: as src/main.cpp
-    if (btOn) { ble_sensors::begin(); ble_server::begin(); }
-    else diag::log("ble: off in settings — not started");
     power_mgmt::begin();
-    workout_service::begin();
     xTaskCreatePinnedToCore(gps_service::task, "gps", 4096, nullptr, 3, nullptr, 0);
-    if (btOn) {
-        xTaskCreatePinnedToCore(ble_sensors::task, "ble", 6144, nullptr, 2, nullptr, 0);
-        xTaskCreatePinnedToCore(ble_server::task, "srv", 4096, nullptr, 1, nullptr, 0);
-        xTaskCreatePinnedToCore(phone_link::task, "link", phone_link::TASK_STACK, nullptr, 1, nullptr, 0);
-    }
     xTaskCreatePinnedToCore(ride_recorder::task, "rec", 6144, nullptr, 3, nullptr, 1);
     if (meshOk) xTaskCreatePinnedToCore(mesh_service::task, "mesh", 6144, nullptr, 2, nullptr, 0);
     xTaskCreatePinnedToCore(ui_dashboard::task, "ui", 12288, nullptr, 2, nullptr, 1);
@@ -217,8 +200,7 @@ void loop() {
     sd_diagnostics::tick();
     crash_report::tick();
     memfault_service::tick();
-    workout_service::tick();
-    workout_service::serviceFor(1000);
+    delay(1000);
 }
 
 }  // namespace
@@ -394,7 +376,6 @@ int main(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
 
     sim::controlBegin();
-    sim::bleBegin();
     sim::gpsBegin();
     if (readStdin)
         std::thread([] {

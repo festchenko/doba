@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include <ctime>
-#include "radar.h"
 
 // The SD card as the UI reports it (ride_recorder::sdCardState()). UNREADABLE
 // is a card that answered but would not mount: exFAT or unformatted, since the
@@ -100,8 +99,6 @@ struct RideState {
     uint32_t wheelDataMs = 0;
     float    wheelSpeedKmh = 0.0f;
     double   wheelDistM = 0.0;
-
-    RadarState radar;
 
     // Ride accumulation (owned by the recorder)
     bool     recording = false;

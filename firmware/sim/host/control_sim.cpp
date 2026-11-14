@@ -5,21 +5,21 @@
 #include <Arduino.h>
 #include <TouchDrvGT911.hpp>
 
-#include "ble_server.h"
-#include "ble_shared.h"
 #include "dash_config.h"
 #include "ride_state.h"
+#include "live_view.h"
 #include "routes.h"
+#include "mesh_service.h"
 #include "settings.h"
 #include "config.h"
-#include "workout_service.h"
 #include "json.h"
 #include "sim.h"
-#include "sim_ble.h"
 #include "sim_clock.h"
 
 #include <arpa/inet.h>
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <deque>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -30,11 +30,6 @@
 #include <unistd.h>
 
 extern SharedRideState g_state;
-namespace sim { std::string segmentsJson(); }   // host/tu/ui_dashboard.cpp
-std::string sensorCommand(const json::Value& r);   // sensors_sim.cpp
-// -- sensors / radar / media inspection (sensors_sim.cpp, media_sim.cpp) --
-std::string sensorStateCommand(const json::Value& r);
-std::string mediaStateCommand(const json::Value& r);
 std::string loraCommand(const json::Value& r);     // lora_sim.cpp (mesh radio)
 
 // ---- the log --------------------------------------------------------------------------
@@ -208,56 +203,17 @@ std::string sdJson(bool recount) {
     return o.str();
 }
 
-// ---- workouts, stopwatch, frontlight (cov/workouts) ------------------------------------
-// What the WORKOUT page and the STOPWATCH page are working from, and the
-// frontlight's PWM duty: so a test can follow a session without a phone.
-std::string workoutJson() {
-    WorkoutView w;
-    workout_service::view(w);
-    std::ostringstream o;
-    o << "{\"loaded\":" << (w.loaded ? "true" : "false") << ",\"running\":" << (w.running ? "true" : "false")
-      << ",\"paused\":" << (w.paused ? "true" : "false") << ",\"done\":" << (w.done ? "true" : "false")
-      << ",\"name\":" << json::esc(w.name) << ",\"segment\":" << w.segIdx << ",\"segments\":" << w.segCount
-      << ",\"elapsed_s\":" << w.elapsedSec << ",\"total_s\":" << w.totalSec
-      << ",\"segment_left_s\":" << w.segRemainSec << ",\"target_w\":" << w.targetW
-      << ",\"next_w\":" << w.nextW << ",\"ftp\":" << w.ftpW
-      << ",\"pause_each\":" << (settings::workoutPauseEachBlock() ? "true" : "false");
-    // The device-side picker's cached list, as its first page shows it.
-    static WorkoutPickPage p;   // control thread only; ~1.3 KB
-    workout_service::listPage(0, p);
-    static const char* const kStates[] = {"scanning", "ready", "no_card"};
-    o << ",\"picker\":{\"state\":\"" << (p.state < 3 ? kStates[p.state] : "?") << "\",\"total\":" << p.total
-      << ",\"loading\":" << json::esc(p.loading) << ",\"error\":" << json::esc(p.error) << ",\"rows\":[";
-    for (int i = 0; i < p.count; ++i)
-        o << (i ? "," : "") << "{\"file\":" << json::esc(p.rows[i].file) << ",\"title\":" << json::esc(p.rows[i].title)
-          << ",\"ok\":" << (p.rows[i].ok ? "true" : "false") << ",\"total_s\":" << p.rows[i].totalSec
-          << ",\"segments\":" << (int)p.rows[i].segCount << "}";
-    o << "]}}";
-    return o.str();
-}
-
-std::string stopwatchJson(const ble_server::LiveView& v) {
-    const uint32_t now = millis();
-    const uint32_t el = v.swAccumMs + (v.swRunning ? now - v.swStartMs : 0);
-    std::ostringstream o;
-    o << "{\"running\":" << (v.swRunning ? "true" : "false") << ",\"elapsed_ms\":" << el
-      << ",\"laps\":" << (int)v.swLaps << ",\"lap_ms\":" << (el - (v.swLaps ? v.swLastLapEndMs : 0)) << "}";
-    return o.str();
-}
-
 std::string statusJson() {
     RideState s = g_state.snapshot();
-    ble_server::LiveView v;
-    ble_shared::readLiveView(v);
+    LiveView v;
+    live_view::read(v);
     std::ostringstream o;
     o.precision(10);
     o << "{\"uptime_ms\":" << millis() << ",\"wall_unix\":" << (long)time(nullptr)
       << ",\"speed\":" << sim_clock::factor() << ",\"paints\":" << sim::paintCount()
       << ",\"scrubs\":" << sim::scrubCount() << ",\"clears\":" << sim::clearCount()
       << ",\"screen\":\"" << screenName(v.screen) << "\",\"page\":" << (v.page == 0xFF ? -1 : (int)v.page)
-      << ",\"page_count\":" << (int)v.pageCount << ",\"phone_connected\":" << (ble_server::isPhoneConnected() ? "true" : "false")
-      << ",\"phone_paired\":" << (ble_server::phonePaired() ? "true" : "false")
-      << ",\"phone_name\":" << json::esc(ble_server::pairedPhoneName())
+      << ",\"page_count\":" << (int)v.pageCount
       << ",\"ride\":{\"recording\":" << (s.recording ? "true" : "false") << ",\"paused\":" << (s.ridePaused ? "true" : "false")
       << ",\"distance_m\":" << s.distanceM << ",\"elapsed_s\":" << s.elapsedS << ",\"moving_s\":" << s.movingS
       << ",\"speed_kmh\":" << s.speedKmh << ",\"gps_fix\":" << (s.gpsFix ? "true" : "false")
@@ -270,51 +226,102 @@ std::string statusJson() {
       << ",\"power\":" << (s.powerConnected && s.powerW != 0xFFFF ? (int)s.powerW : -1)
       << ",\"cadence\":" << (s.cadenceConnected && s.cadenceRpm != 0xFF ? (int)s.cadenceRpm : -1)
       << ",\"battery\":" << (int)s.batteryPercent << ",\"route_active\":" << (s.routeActive ? "true" : "false")
-      << ",\"radar_connected\":" << (s.radar.connected ? "true" : "false") << ",\"radar_targets\":" << (int)s.radar.count
       << "},\"reset_reason\":" << sim::resetReason()
-      << ",\"settings\":{\"ftp\":" << settings::ftpWatts() << ",\"tz_min\":" << settings::tzMinutes()
+      << ",\"settings\":{\"tz_min\":" << settings::tzMinutes()
       << ",\"miles\":" << (settings::useMiles() ? "true" : "false") << ",\"clock24h\":" << (settings::clock24h() ? "true" : "false")
       << ",\"show_offline\":" << (settings::showOffline() ? "true" : "false") << ",\"auto_pause_s\":" << settings::autoPauseSec()
-      << ",\"wheel_mm\":" << settings::wheelCircMm() << ",\"backlight\":" << settings::backlight()
+      << ",\"backlight\":" << settings::backlight()
       << ",\"map_layers\":" << settings::mapLayers() << "}"
       << ",\"nav\":" << navJson()
       << ",\"dash\":" << json::esc(dashText())
       << ",\"sd_present\":" << (sim::sdPresent() ? "true" : "false")
       << ",\"sd\":" << sdJson(false)
       << ",\"gps\":" << sim::gpsStatusJson()
-      << ",\"ble\":" << sim::bleStatusJson()
-      << ",\"workout\":" << workoutJson() << ",\"stopwatch\":" << stopwatchJson(v)
       << ",\"backlight_pwm\":" << sim::pinDuty(BOARD_BL_EN) << "}";
     return o.str();
 }
 
-// The tiles (or .poi files) on the card, as the device lists them to a phone:
-// the TileList answer's own walk and version records (ble_shared::lockTileList,
-// link.cpp), so a test sees what any phone asking now would see.
-std::string tilesJson(bool poi) {
-    ble_shared::TileListing tl;
-    if (!ble_shared::lockTileList(poi, true, tl)) return "null";
+
+// ---- the mesh as the device holds it (tests): state, stats, nodes, history, channels;
+// and the actions Doba's own pages take (radio on/off, send, private channel, share) ----
+std::string meshJson() {
     std::ostringstream o;
-    o << "[";
-    for (int i = 0; i < tl.n; ++i) {
-        o << (i ? "," : "") << "{\"id\":" << json::esc(tl.ids[i])
-          << ",\"version\":" << json::esc(tl.vers ? tl.vers[i] : "") << "}";
+    const mesh_service::Stats st = mesh_service::stats();
+    o << "{\"state\":{\"enabled\":" << (mesh_service::enabled() ? "true" : "false")
+      << ",\"radio_ok\":" << (mesh_service::radioOk() ? "true" : "false")
+      << ",\"node_num\":" << mesh_service::nodeNum()
+      << ",\"freq_hz\":" << (uint32_t)(mesh_service::frequencyMHz() * 1e6f + 0.5f)
+      << ",\"psk_index\":" << (int)mesh_service::channelPskIndex()
+      << ",\"channel_name\":" << json::esc(mesh_service::channelName())
+      << ",\"short_name\":" << json::esc(mesh_service::shortName())
+      << ",\"long_name\":" << json::esc(mesh_service::longName())
+      << ",\"preset\":" << (int)mesh_service::presetIndex() << ",\"region\":" << (int)mesh_service::regionIndex()
+      << ",\"node_count\":" << mesh_service::nodeCount() << ",\"unread\":" << mesh_service::unreadCount() << "}";
+    o << ",\"stats\":{\"rx\":" << st.rx << ",\"rx_dropped\":" << st.rxDropped << ",\"rx_other_channel\":" << st.rxOtherChannel
+      << ",\"rx_duplicate\":" << st.rxDuplicate << ",\"tx\":" << st.tx << ",\"tx_failed\":" << st.txFailed
+      << ",\"acks_rx\":" << st.acksRx << "}";
+    o << ",\"nodes\":[";
+    for (int i = 0, k = 0; i < mesh_service::nodeCount(); ++i) {
+        mesh_service::Node nd;
+        if (!mesh_service::nodeAt(i, nd)) continue;
+        o << (k++ ? "," : "") << "{\"num\":" << nd.num << ",\"short_name\":" << json::esc(nd.shortName)
+          << ",\"long_name\":" << json::esc(nd.longName) << ",\"snr\":" << (int)nd.snr << ",\"rssi\":" << (int)nd.rssi
+          << ",\"hops\":" << (nd.hops == mesh_service::HOPS_UNKNOWN ? -1 : (int)nd.hops)
+          << ",\"has_position\":" << (nd.hasPosition ? "true" : "false");
+        if (nd.hasPosition)
+            o << ",\"position\":{\"lat_e7\":" << (int32_t)(nd.latitude * 1e7) << ",\"lon_e7\":" << (int32_t)(nd.longitude * 1e7)
+              << ",\"alt_m\":" << nd.altitudeM << ",\"sats\":" << (int)nd.satsInView << ",\"precision_bits\":" << (int)nd.precisionBits << "}";
+        o << "}";
     }
-    o << "]";
-    ble_shared::unlockTileList();
+    o << "],\"history\":[";
+    for (int i = 0, k = 0; i < mesh_service::messageCount(); ++i) {
+        mesh_service::Message m;
+        if (!mesh_service::messageAt(i, m)) continue;
+        o << (k++ ? "," : "") << "{\"id\":" << m.id << ",\"from\":" << m.from << ",\"to\":" << m.to
+          << ",\"text\":" << json::esc(m.text) << ",\"channel\":" << (int)m.channel
+          << ",\"outgoing\":" << (m.outgoing ? "true" : "false") << ",\"delivery\":" << (int)m.status
+          << ",\"hops\":" << (m.hops == mesh_service::HOPS_UNKNOWN ? -1 : (int)m.hops)
+          << ",\"rssi\":" << (int)m.rssi << ",\"snr\":" << (int)m.snr << "}";
+    }
+    o << "],\"channels\":[";
+    for (int i = 0, k = 0; i < mesh::MAX_CHANNELS; ++i) {
+        mesh_service::ChannelInfo ci;
+        if (!mesh_service::channelAt(i, ci)) continue;
+        o << (k++ ? "," : "") << "{\"index\":" << (int)ci.index << ",\"hash\":" << (int)ci.hash
+          << ",\"name\":" << json::esc(ci.name) << ",\"share_location\":" << (ci.sharesLocation ? "true" : "false") << ",\"psk\":\"";
+        static const char* hx = "0123456789abcdef";
+        for (int b = 0; b < ci.pskLen; ++b) o << hx[ci.psk[b] >> 4] << hx[ci.psk[b] & 15];
+        o << "\"}";
+    }
+    o << "]}";
     return o.str();
+}
+
+std::string meshCommand(const json::Value& r) {
+    const std::string op = r.str("op");
+    if (op == "radio") { mesh_service::setEnabled(r.boolean("on", true)); return "\"ok\":true"; }
+    if (op == "send") {
+        const uint32_t id = mesh_service::queueText((uint32_t)r.num("dest", 0xFFFFFFFF), r.str("text").c_str(),
+                                                    (uint8_t)r.num("channel", 0));
+        return "\"ok\":true,\"id\":" + std::to_string(id);
+    }
+    if (op == "set_channel") {
+        std::string hex = r.str("psk");
+        uint8_t psk[mesh::MAX_PSK_LEN] = {};
+        size_t n = 0;
+        for (size_t i = 0; i + 1 < hex.size() && n < sizeof psk; i += 2) psk[n++] = (uint8_t)strtoul(hex.substr(i, 2).c_str(), nullptr, 16);
+        const bool ok = mesh_service::setPrivateChannel((uint8_t)r.num("index"), r.str("name").c_str(), psk, n);
+        return std::string("\"ok\":") + (ok ? "true" : "false");
+    }
+    if (op == "share") { mesh_service::setSharesLocation((uint8_t)r.num("index"), r.boolean("on", true)); return "\"ok\":true"; }
+    if (op == "names") { mesh_service::setNames(r.str("long").c_str(), r.str("short").c_str()); return "\"ok\":true"; }
+    return "\"ok\":true,\"mesh\":" + meshJson();
 }
 
 std::string handle(const json::Value& r) {
     const std::string cmd = r.str("cmd");
     auto ok = [](const std::string& extra = "") { return std::string("\"ok\":true") + (extra.empty() ? "" : "," + extra); };
     if (cmd == "status") return ok("\"status\":" + statusJson());
-    if (cmd == "tiles") {
-        const bool poi = r.boolean("poi", false);
-        const std::string list = tilesJson(poi);
-        if (list == "null") return "\"ok\":false,\"error\":\"no memory for the tile list\"";
-        return ok("\"tiles\":" + list);
-    }
     if (cmd == "console") {
         uint64_t since = sim::logSeq();
         sim::feedConsole(r.str("line"));
@@ -382,7 +389,6 @@ std::string handle(const json::Value& r) {
     }
     if (cmd == "usb") { sim::setUsbHost(r.boolean("host", true)); return ok(); }
     if (cmd == "speed") { sim_clock::setFactor(r.num("factor", 1)); return ok(); }
-    if (cmd == "ble_drop") { simble::dropPhone((int)r.num("reason", 0x08)); return ok(); }
     if (cmd == "log") {
         std::string out = "[";
         bool first = true;
@@ -405,10 +411,6 @@ std::string handle(const json::Value& r) {
     if (cmd == "seq") return ok("\"seq\":" + std::to_string(sim::logSeq()));
     if (cmd == "reboot") { std::thread([] { sim_clock::sleepMs(50); sim::reboot("control"); }).detach(); return ok(); }
     if (cmd == "quit") { std::thread([] { std::this_thread::sleep_for(std::chrono::milliseconds(50)); _exit(0); }).detach(); return ok(); }
-    if (cmd == "sensor" || cmd == "sensor_remove") return sensorCommand(r);
-    // -- sensors / radar / media inspection --
-    if (cmd == "sensor_state") return sensorStateCommand(r);
-    if (cmd == "media_state") return mediaStateCommand(r);
     // ---- power and robustness ----------------------------------------------------------
     if (cmd == "reset") {   // a crash, a watchdog, a brownout: reset with that reason
         const int reason = sim::resetReasonByName(r.str("reason", "panic"));
@@ -421,26 +423,9 @@ std::string handle(const json::Value& r) {
     if (cmd == "gps_raw") { sim::gpsRaw(r.str("data")); return ok(); }
     if (cmd == "gps_paced") { sim::gpsPaced(r.boolean("on", true)); return ok(); }
 
-    // ---- the phone link's pace, live (app-flow tests) -----------------------------------
-    // What --conn-interval-ms / --packets-per-event / --notify-window set at
-    // start, changed mid-run: a link that turns slow (or fast again) under a
-    // connected app, e.g. to land a drop in the middle of a download. Each
-    // field is optional; 0 interval = unpaced. Answers the values now in force.
-    if (cmd == "link_pace") {
-        if (r.has("interval_ms")) sim::opts.connIntervalMs = (int)r.num("interval_ms");
-        if (r.has("packets")) sim::opts.packetsPerEvent = (int)r.num("packets");
-        if (r.has("window")) sim::opts.notifyWindow = (int)r.num("window", 32);
-        return ok("\"interval_ms\":" + std::to_string(sim::opts.connIntervalMs) +
-                  ",\"packets\":" + std::to_string(sim::opts.packetsPerEvent) +
-                  ",\"window\":" + std::to_string(sim::opts.notifyWindow));
-    }
-    // ---- end link pace ----
-
-    // ---- segments (cov/nav) ----
-    if (cmd == "segments") return ok("\"segments\":" + sim::segmentsJson());
-    // ---- end segments ----
     // ---- mesh / LoRa radio (lora_sim.cpp) ----
     if (cmd == "lora" || cmd == "lora_rx" || cmd == "lora_tx") return loraCommand(r);
+    if (cmd == "mesh") return meshCommand(r);
     return "\"ok\":false,\"error\":" + json::esc("unknown cmd '" + cmd + "'");
 }
 

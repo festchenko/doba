@@ -10,13 +10,9 @@ namespace settings {
 
 void begin();
 
-int ftpWatts();
 // Structured workout: hold at every block boundary until resumed.
 bool panelScan();
 void setPanelScan(bool on);
-bool workoutPauseEachBlock();
-void setWorkoutPauseEachBlock(bool on);
-void setFtpWatts(int w);
 
 // Auto-pause: seconds of no movement before the ride timer stops counting.
 // 0 = auto-pause off. Movement is judged by the recorder from power, cadence,
@@ -27,8 +23,6 @@ void setAutoPauseSec(int s);
 // Wheel circumference for a speed sensor, mm (default 2105, 700x25c). Speed
 // and sensor distance are revolutions x this. Out-of-range values
 // (wheel_speed::kMinCircMm..kMaxCircMm) are refused: returns false, unchanged.
-int wheelCircMm();
-bool setWheelCircMm(int mm);
 
 int tzMinutes();            // DOBA: from the GPS position when tzAuto()
 void setTzMinutes(int m);   // the manual offset
@@ -52,9 +46,6 @@ bool usbDrive();          // true = expose SD as a USB drive when plugged in
 void setUsbDrive(bool on);
 // DOBA: both radios default OFF. Bluetooth is brought up only at boot, so a
 // change takes effect after a restart; WiFi is never started unless allowed.
-bool bluetooth();
-void setBluetooth(bool on);
-bool wifi();
 // DOBA: the owner card on the power-off screen ("" = none).
 const char* owner();
 // The card as fields: 0 name, 1 born, 2 blood group, 3 allergies/illnesses, 4 contact.
@@ -63,42 +54,12 @@ const char* ownerField(int i);
 void setOwnerField(int i, const char* t);
 bool ownerSet();
 void setOwner(const char* t);
-void setWifi(bool on);
 
 // true = keep a field on the dashboard even when its sensor is not paired,
 // showing "no data" rather than removing it and re-packing the layout.
 bool showOffline();
 void setShowOffline(bool on);
 
-// kind: 0 HR, 1 Power, 2 Cadence, 3 Radar, 4 Speed (matches ble_sensors). Several sensors can be
-// paired per kind (a strap and a trainer's simulated strap, two bikes' power
-// meters): pairing ADDS, most recent first, up to SENSOR_MAX_PAIRED. The
-// scanner connects to whichever paired one is advertising. sensorAddr() is
-// the most recent — "" when none is saved.
-constexpr int SENSOR_MAX_PAIRED = 4;
-const char* sensorAddr(int kind);
-int sensorAddrCount(int kind);
-const char* sensorAddrAt(int kind, int i);        // "" past the end
-bool sensorPaired(int kind, const char* addr);
-void addSensorAddr(int kind, const char* addr);  // dedupes; moves to front
-void removeSensorAddr(int kind, const char* addr);
-void clearSensorAddrs(int kind);
-
-// Remembered display name (vendor/model) per paired kind, so a paired sensor
-// shows its identity even before it reconnects and across reboots.
-const char* sensorName(int kind);
-void setSensorName(int kind, const char* name);
-
-// The phone this device is paired with (fixed pairing, see ble_server.cpp).
-// The NimBLE bond store is what actually admits a phone; these only remember
-// WHO it is for the panel: the identity address of the last admitted phone and
-// the name it reports over GAP (ASCII-folded, "" until read). clearPhone() is
-// part of an unpair.
-const char* phoneName();
-const char* phoneId();
-void setPhoneId(const char* id);
-void setPhoneName(const char* name);
-void clearPhone();
 
 // Last known GPS position (map center across reboots). Returns false if
 // no position has ever been saved.

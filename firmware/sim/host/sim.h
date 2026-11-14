@@ -66,7 +66,6 @@ void gpsRaw(const std::string& bytes);
 // second's batch at once.
 void gpsPaced(bool on);
 void gpsPersist();   // the module's clock across an ESP32 reset (its backup supply)
-void bleBegin();
 std::string bleStatusJson();
 void controlBegin();
 void setBattery(int pct, bool charging);

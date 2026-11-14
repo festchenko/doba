@@ -84,7 +84,6 @@ void report(Report& r) {
     };
     add("GPS", GPS_MA);
     if (mesh_service::enabled() && !(stealth::active() && !stealth::listen())) add("Radio (LoRa)", RADIO_RX_MA);
-    if (settings::bluetooth()) add("Bluetooth", BT_MA);
     const int bl = settings::backlight();
     if (!stealth::active()) add("Front light", LIGHT_MA[bl < 0 ? 0 : bl > 3 ? 3 : bl]);
     add("Screen updates", g_paintsPerMin * PAINT_MAS / 60.0f);
