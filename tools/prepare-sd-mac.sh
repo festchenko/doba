@@ -1,15 +1,16 @@
 #!/bin/bash
-# Prepare a microSD card for Doba on a Mac: FAT32, then copy the map packs.
+# Prepare a microSD card for Doba on a Mac: exFAT, then everything onto it.
 #
 #   tools/prepare-sd-mac.sh list                         # find the card
-#   tools/prepare-sd-mac.sh format disk4                 # ERASES disk4 -> FAT32 "DOBA"
+#   tools/prepare-sd-mac.sh format disk4                 # ERASES disk4 -> exFAT "DOBA"
 #   tools/prepare-sd-mac.sh copy /path/to/tiles/groenlo  # copy packs to /Volumes/DOBA
 #   tools/prepare-sd-mac.sh copy-lib /path/to/lib        # copy library books
 #   tools/prepare-sd-mac.sh copy-dem /path/to/dem-pack   # copy ground heights
 #   tools/prepare-sd-mac.sh all /path/to/doba-build/data  # everything: maps of every
-#                                                          # region merged, books, heights
+#                                                          # region merged, books, heights,
+#                                                          # a manifest, then a check
 #
-# The device reads only FAT32 (not exFAT, which cards over 32 GB come with).
+# The device reads exFAT (big files seek straight to the place) and FAT32.
 set -euo pipefail
 
 case "${1:-}" in
@@ -20,9 +21,9 @@ case "${1:-}" in
     DISK="${2:?usage: format diskN (see: list)}"
     diskutil info "$DISK" | grep -E "Device / Media Name|Disk Size|Removable Media|Protocol"
     echo
-    read -r -p "ERASE everything on $DISK and format it FAT32? Type the disk name to confirm: " ok
+    read -r -p "ERASE everything on $DISK and format it exFAT? Type the disk name to confirm: " ok
     [ "$ok" = "$DISK" ] || { echo "cancelled"; exit 1; }
-    diskutil eraseDisk FAT32 DOBA MBRFormat "/dev/$DISK"
+    diskutil eraseDisk ExFAT DOBA MBRFormat "/dev/$DISK"
     sudo mdutil -i off /Volumes/DOBA >/dev/null 2>&1 || true   # no Spotlight index on the card
     diskutil info /Volumes/DOBA | grep -E "File System Personality|Volume Total Space|Allocation Block Size"
     ;;
@@ -59,18 +60,7 @@ case "${1:-}" in
     DST="${3:-/Volumes/DOBA}"
     HERE="$(cd "$(dirname "$0")/.." && pwd)"
     [ -d "$DST" ] || { echo "$DST not mounted"; exit 1; }
-    fs=$(diskutil info "$DST" | awk -F: '/File System Personality/{gsub(/^ +/,"",$2); print $2}')
-    case "$fs" in *FAT32*|*MS-DOS*) ;; *) echo "$DST is '$fs', not FAT32: format it first"; exit 1;; esac
-    # FAT32 holds files up to 4 GB: nothing we copy may be bigger
-    big=$(find "$DATA/lib" "$DATA/tiles" -type f -size +4000M 2>/dev/null | head -3)
-    [ -z "$big" ] || { echo "files over 4 GB (FAT32 can't hold them):"; echo "$big"; exit 1; }
-    regions=$(find "$DATA/tiles" -mindepth 1 -maxdepth 1 -type d ! -name '_*' ! -name '*.v3' ! -name '*.old' ! -name groenlo)
-    echo "== merging maps: $(echo $regions | xargs -n1 basename | tr '\n' ' ')"
-    python3 "$HERE/maps/mergepacks.py" --out "$DATA/tiles/_card" $regions
-    [ -f "$DATA/places.dgz" ] && cp "$DATA/places.dgz" "$DATA/tiles/_card/places.dgz"
-    "$0" copy "$DATA/tiles/_card" "$DST"
-    "$0" copy-dem "$DATA/dem-pack" "$DST"
-    "$0" copy-lib "$DATA/lib" "$DST"
+    python3 "$HERE/tools/doba_card.py" write "$DATA" "$DST" --jobs 3
     echo "== card: $(df -h "$DST" | awk 'NR==2{print $3" used, "$4" free"}')"
     ;;
   *)
