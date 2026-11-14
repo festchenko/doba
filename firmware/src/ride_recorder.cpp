@@ -510,6 +510,7 @@ SdProbe sdSpiForceIdle() {
     return probe;
 }
 
+uint32_t g_mountGen = 0;
 bool mountLocked(bool logFailures) {
     // settleMs is waited BEFORE the attempt. The old schedule (three tries, 50 ms
     // apart) gave the card ~100 ms to come up and then declared it absent, which
@@ -566,6 +567,7 @@ bool mountLocked(bool logFailures) {
                       attempt, (unsigned long)f, (unsigned long)(millis() - start),
                       SD.cardType(), SD.cardSize() / (1024ULL * 1024ULL));
             cardAnswered = true;
+            ++g_mountGen;
             return true;
         }
         if (logFailures) {
@@ -589,6 +591,8 @@ bool mountLocked(bool logFailures) {
 }
 
 }  // namespace
+
+uint32_t mountGeneration() { return g_mountGen; }
 
 bool begin() {
     sdLock();

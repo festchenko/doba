@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "epd_compat.h"
+#include "ride_recorder.h"
 #include "map_view.h"
 #include "sd_bus.h"
 
@@ -92,16 +93,84 @@ bool inflate(const uint8_t* src, uint32_t len, uint8_t* dst) {
 #endif
 }
 
+// DOBA: open packs stay open, and their index is read in 4 KB pages kept in
+// PSRAM. Opening a file on a 1 TB FAT32 card walks its folders, and every seek
+// in a 300 MB pack walks the cluster chain from the start: a binary search of
+// 17 seeks per tile made a new zoom level take seconds. Now the upper steps of
+// every search hit cached pages and a tile costs about one card read.
+struct OpenPack {
+    char path[48] = "";
+    File f;
+    uint8_t hdr[HEADER];
+    bool ok = false;
+    uint32_t lastUse = 0;
+};
+constexpr int OPEN_PACKS = 3;
+OpenPack g_packs[OPEN_PACKS];
+uint32_t g_packGen = 0xFFFFFFFF;
+constexpr int IDX_PAGE = 4096, IDX_PAGES = 96;          // 384 KB of PSRAM
+struct IdxPage { int8_t pack = -1; uint32_t page = 0, lastUse = 0; uint8_t* data = nullptr; };
+IdxPage g_idx[IDX_PAGES];
+
+OpenPack* packFor(const char* path) {
+    if (g_packGen != ride_recorder::mountGeneration()) {   // the card was remounted
+        for (OpenPack& p : g_packs) { if (p.path[0] && p.f) p.f.close(); p.path[0] = 0; p.ok = false; }
+        for (IdxPage& q : g_idx) q.pack = -1;
+        g_packGen = ride_recorder::mountGeneration();
+    }
+    OpenPack* victim = &g_packs[0];
+    for (OpenPack& p : g_packs) {
+        if (p.path[0] && !strcmp(p.path, path)) { p.lastUse = g_tick; return p.ok ? &p : nullptr; }
+        if (!p.path[0] || p.lastUse < victim->lastUse) victim = &p;
+    }
+    if (victim->path[0] && victim->f) victim->f.close();
+    const int vi = (int)(victim - g_packs);
+    for (IdxPage& q : g_idx) if (q.pack == vi) q.pack = -1;
+    snprintf(victim->path, sizeof victim->path, "%s", path);
+    victim->lastUse = g_tick;
+    victim->f = SD.open(path, FILE_READ);
+    victim->ok = victim->f && victim->f.read(victim->hdr, HEADER) == HEADER && memcmp(victim->hdr, kMagic, 8) == 0;
+    return victim->ok ? victim : nullptr;
+}
+
+// One 16-byte index entry, through the page cache.
+bool indexEntry(OpenPack& p, uint32_t i, uint8_t* e) {
+    const int pi = (int)(&p - g_packs);
+    const uint32_t byte = HEADER + i * ENTRY, page = byte / IDX_PAGE, at = byte % IDX_PAGE;
+    if (at + ENTRY > IDX_PAGE) {   // straddles two pages (not with 16-byte entries and a 32-byte header)
+        return p.f.seek(byte) && p.f.read(e, ENTRY) == ENTRY;
+    }
+    IdxPage* hit = nullptr; IdxPage* victim = &g_idx[0];
+    for (IdxPage& q : g_idx) {
+        if (q.pack == pi && q.page == page) { hit = &q; break; }
+        if (q.pack < 0 || q.lastUse < victim->lastUse) victim = &q;
+    }
+    if (!hit) {
+        if (!victim->data) victim->data = (uint8_t*)heap_caps_malloc(IDX_PAGE, MALLOC_CAP_SPIRAM);
+        if (!victim->data) return p.f.seek(byte) && p.f.read(e, ENTRY) == ENTRY;
+        victim->pack = -1;
+        if (!p.f.seek((uint32_t)page * IDX_PAGE)) return false;
+        const int n = p.f.read(victim->data, IDX_PAGE);
+        if (n < (int)(at + ENTRY)) return false;
+        victim->pack = (int8_t)pi; victim->page = page;
+        hit = victim;
+    }
+    hit->lastUse = g_tick;
+    memcpy(e, hit->data + at, ENTRY);
+    return true;
+}
+
 // Finds (z,x,y) in a pack and fills the slot. false = no such tile.
 bool readTile(int z, int x, int y, Slot& s) {
     char path[64];
     packPath(z, x, y, path, sizeof path);
     sdLock();
-    File f = SD.open(path, FILE_READ);
-    if (!f) { sdUnlock(); return false; }
-    uint8_t hdr[HEADER];
-    bool ok = f.read(hdr, HEADER) == HEADER && memcmp(hdr, kMagic, 8) == 0;
-    const uint32_t count = ok ? rd32(hdr + 24) : 0;
+    OpenPack* pk = packFor(path);
+    if (!pk) { sdUnlock(); return false; }
+    File& f = pk->f;
+    const uint8_t* hdr = pk->hdr;
+    bool ok = true;
+    const uint32_t count = rd32(hdr + 24);
     // Detail packs keep x, y relative to the cell (absolute z17 x, y overflow u16).
     if (ok && (rd16(hdr + 14) & PACK_RELATIVE)) {
         const int sh = z - CELL_Z;
@@ -115,17 +184,16 @@ bool readTile(int z, int x, int y, Slot& s) {
     bool found = false;
     while (ok && lo < hi) {
         const uint32_t mid = lo + (hi - lo) / 2;
-        if (!f.seek(HEADER + mid * ENTRY) || f.read(e, ENTRY) != ENTRY) { ok = false; break; }
+        if (!indexEntry(*pk, mid, e)) { ok = false; break; }
         const uint64_t key = (uint64_t)e[0] << 32 | (uint64_t)rd16(e + 2) << 16 | rd16(e + 4);
         if (key == want) { found = true; break; }
         if (key < want) lo = mid + 1; else hi = mid;
     }
-    if (!found) { f.close(); sdUnlock(); return false; }
+    if (!found) { sdUnlock(); return false; }
     const uint8_t flags = e[1];
     const uint16_t fill = rd16(e + 6);
     const uint32_t off = rd32(e + 8), len = rd32(e + 12);
     if (flags & FLAG_SOLID) {
-        f.close();
         sdUnlock();
         s.solid = true;
         s.fill = (uint8_t)(fill & 0x0F);
@@ -135,10 +203,9 @@ bool readTile(int z, int x, int y, Slot& s) {
         if (g_zbuf) heap_caps_free(g_zbuf);
         g_zbufLen = len < 48 * 1024 ? 48 * 1024 : len;
         g_zbuf = (uint8_t*)heap_caps_malloc(g_zbufLen, MALLOC_CAP_SPIRAM);
-        if (!g_zbuf) { g_zbufLen = 0; f.close(); sdUnlock(); return false; }
+        if (!g_zbuf) { g_zbufLen = 0; sdUnlock(); return false; }
     }
     ok = f.seek(off) && f.read(g_zbuf, len) == len;
-    f.close();
     sdUnlock();
     if (!ok) return false;
     if (!s.px) s.px = (uint8_t*)heap_caps_malloc(TILE_BYTES, MALLOC_CAP_SPIRAM);

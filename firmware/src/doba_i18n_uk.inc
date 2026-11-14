@@ -443,6 +443,7 @@ static const Entry kUk[] = {
     {"light", "світає"},
     {"light %s · sunrise %s · sunset %s · dark %s", "світає %s · схід %s · захід %s · темно %s"},
     {"list full", "список повний"},
+    {"loading...", "завантаження..."},
     {"map centre", "центр мапи"},
     {"measured total · split estimated from typical draws", "загальне виміряно · розподіл оцінено за типовим споживанням"},
     {"measuring...", "вимірюю..."},

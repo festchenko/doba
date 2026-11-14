@@ -9,6 +9,8 @@
 namespace ride_recorder {
 
 bool begin();  // mounts SD, ensures RIDE_DIR exists
+// DOBA: bumped on every successful mount: open File handles from before are dead.
+uint32_t mountGeneration();
 
 void startRide();
 

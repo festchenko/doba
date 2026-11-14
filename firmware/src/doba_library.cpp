@@ -2485,6 +2485,8 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
     return false;
 }
 
+bool typing() { return g_view == V_SEARCH; }
+
 bool libraryBack() {
     switch (g_view) {
         case V_SHELF: return false;

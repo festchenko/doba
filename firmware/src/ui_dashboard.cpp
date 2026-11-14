@@ -302,7 +302,23 @@ inline void IRAM_ATTR uiWakeFromIsr() {
     if (hpw) portYIELD_FROM_ISR();
 }
 
-void IRAM_ATTR onTouchIrq() { touchIrq = true; uiWakeFromIsr(); }
+// DOBA: touch is sampled by a task of its own (touchTask), not by the UI loop.
+// The UI loop is busy for half a second at a time while the panel repaints,
+// and a quick tap that went down and up inside that window was simply never
+// seen: the next read found no finger. The task catches the whole tap and
+// queues it; the loop takes taps off the queue whenever it gets round to them.
+struct TouchEv { int16_t x0, y0, x1, y1; uint32_t downMs, upMs; };
+QueueHandle_t g_touchQ = nullptr;
+TaskHandle_t g_touchTask = nullptr;
+void IRAM_ATTR onTouchIrq() {
+    touchIrq = true;
+    if (g_touchTask) {
+        BaseType_t hpw = pdFALSE;
+        vTaskNotifyGiveFromISR(g_touchTask, &hpw);
+        if (hpw) portYIELD_FROM_ISR();
+    }
+    uiWakeFromIsr();
+}
 void IRAM_ATTR onBoardBtnIrq() { boardBtnIrq = true; uiWakeFromIsr(); }
 
 // Bottom-sheet overlay. Named for its first user, the power/shutdown dialog
@@ -630,7 +646,32 @@ int listPinned = 0;
 
 // Long-press tracking
 uint32_t touchDownAt = 0;
-bool touchWasDown = false;
+volatile bool touchWasDown = false;   // DOBA: written by touchTask
+void touchTask(void*) {
+    int16_t x0 = 0, y0 = 0, lx = 0, ly = 0;
+    uint32_t downAt = 0;
+    bool down = false;
+    for (;;) {
+        // While a finger is on the glass: every 15 ms. Otherwise wait for the
+        // GT911's interrupt, with a slow poll in case one is missed.
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(down ? 15 : 250));
+        int16_t x[1], y[1];
+        i2cLock();
+        const bool now = touch.getPoint(x, y, 1) > 0;
+        i2cUnlock();
+        touchIrq = false;
+        if (now) {
+            lx = x[0]; ly = y[0];
+            if (!down) { x0 = lx; y0 = ly; downAt = millis(); }
+        } else if (down) {
+            const TouchEv ev = {x0, y0, lx, ly, downAt, millis()};
+            xQueueSend(g_touchQ, &ev, 0);
+            if (uiWake) xSemaphoreGive(uiWake);
+        }
+        down = now;
+        touchWasDown = now;
+    }
+}
 
 // Inactivity auto-sleep: any input refreshes this; the task deep-sleeps after
 // a quiet period (unless riding / navigating / phone connected).
@@ -972,6 +1013,27 @@ void ackPagerTap(const EpdRect& r) {
     refresh(false, true, false);
 }
 
+// DOBA: "heard you, working on it". A tap that opens a book, a page of the
+// shelf or the map reads the card before anything new can be drawn, and on
+// e-paper a second of nothing reads as a missed tap. A small black pill with
+// an hourglass goes up in the status bar at once; the redraw that follows
+// paints over it.
+void ackBusy() {
+    // A ring of dots in the middle of the screen, graded from faint to black
+    // like a spinner caught mid-turn, on a white disc so it reads on any page.
+    uint8_t* fb = epdc_framebuffer();
+    const int cx = 540 / 2, cy = 960 / 2;
+    epd_fill_circle(cx, cy, 62, ui::INK, fb);
+    epd_fill_circle(cx, cy, 59, ui::PAPER, fb);
+    static const uint8_t kGrey[10] = {0xE0, 0xD0, 0xC0, 0xB0, 0x98, 0x80, 0x60, 0x40, 0x20, 0x00};
+    for (int k = 0; k < 10; ++k) {
+        const float a = -1.5708f + k * 0.6283f;          // 36 degrees apart, from the top
+        const int x = cx + (int)lroundf(36 * cosf(a)), y = cy + (int)lroundf(36 * sinf(a));
+        epd_fill_circle(x, y, 3 + k / 3, kGrey[k], fb);
+    }
+    refresh(false, true, false);
+}
+
 // DOBA: a finger drawn across the map body moves the map with it. Released,
 // not live: e-paper redraws once, where the finger let go.
 bool mapDrag(int x0, int y0, int x1, int y1) {
@@ -982,6 +1044,7 @@ bool mapDrag(int x0, int y0, int x1, int y1) {
     mapPanE -= dx * mapMpp;
     mapPanN += dy * mapMpp;
     Serial.printf("[map] drag %d,%d -> %.0f m E %.0f m N\n", dx, dy, mapPanE, mapPanN);
+    ackBusy();   // the new tiles come off the card
     return true;
 }
 
@@ -1257,7 +1320,7 @@ void handleTap(int x, int y) {
                     break;
                 }
                 if (y >= kMapZoom.zoomInY && y < kMapZoom.zoomInY + kMapZoom.size) {
-                    if (mapMpp > (mapTopoActive ? 0.3f : 1.0f)) mapMpp /= 2.0f;
+                    if (mapMpp > 1.0f) mapMpp /= 2.0f;
                     Serial.printf("[map] zoom in -> %.2f m/px\n", mapMpp);
                     ackZoomTap(true);
                     break;
@@ -1383,6 +1446,10 @@ void handleTap(int x, int y) {
         case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE: case SCREEN_BATTERY:
         case SCREEN_ARTICLE: {  // DOBA
             const int bl = settings::backlight();
+            // The pages whose taps read the card: home (into the library or the
+            // map), the library (books, shelves, letters) and an article (links).
+            if (screen == SCREEN_HOME || (screen == SCREEN_LIBRARY && !doba_lib::typing()))
+                ackBusy();
             {   // DOBA: what a tap cost before the redraw (opening a book page reads the card)
                 const uint32_t t0 = micros();
                 const int pg = (int)dobaPage();
@@ -1772,8 +1839,11 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
         // Down to ~0.4 m/px (z18): drawn from z17 detail tiles where the card
         // has them, else from z16, the last steps by enlarging the tiles.
         const int zmax = topo::maxZoomAt(lat, lon);
-        const float nMax = topo::nativeMpp(zmax, lat), floorMpp = topo::nativeMpp(18, lat);
-        if (mapMpp < nMax * 0.75f) mapMpp = (mapMpp < nMax * 0.375f || zmax == 17) ? floorMpp : nMax / 2;
+        // DOBA: no enlarging past the deepest tiles. A z17 tile blown up 2x
+        // turns its fine anti-aliased lines into dotted ones on four greys
+        // (seen on the device at 1:3 500), and costs a second per screen.
+        const float nMax = topo::nativeMpp(zmax, lat);
+        if (mapMpp < nMax * 0.75f) mapMpp = nMax;
         else mapMpp = topo::nativeMpp(std::min(topo::zoomFor(lat, mapMpp), zmax), lat);
         map.metersPerPixel = mapMpp;
         rot = 0.0f;
@@ -2480,6 +2550,10 @@ bool beginPanel() {
     // blocks on it immediately).
     uiWake = xSemaphoreCreateBinary();
 
+    if (touchOk) {
+        g_touchQ = xQueueCreate(8, sizeof(TouchEv));
+        xTaskCreatePinnedToCore(touchTask, "touch", 3072, nullptr, 3, &g_touchTask, 0);
+    }
     attachInterrupt(digitalPinToInterrupt(BOARD_TOUCH_INT), onTouchIrq, FALLING);
     attachInterrupt(digitalPinToInterrupt(BOARD_BOOT_BTN), onBoardBtnIrq, CHANGE);
     pinMode(BOARD_PCA9535_INT, INPUT_PULLUP);
@@ -3551,7 +3625,7 @@ static void runConsoleLine(char* line) {
         else { Serial.printf("[cmd] unknown screen '%s'\n", arg); return; }
         noteActivity();
     } else if (!strcasecmp(cmd, "zoom")) {
-        if (arg && !strcasecmp(arg, "in") && mapMpp > (mapTopoActive ? 0.3f : 1.0f)) mapMpp /= 2.0f;
+        if (arg && !strcasecmp(arg, "in") && mapMpp > 1.0f) mapMpp /= 2.0f;
         else if (arg && !strcasecmp(arg, "out") && mapMpp < mapMaxMpp()) mapMpp *= 2.0f;
         screen = SCREEN_MAP; noteActivity();
     } else if (!strcasecmp(cmd, "greytest")) {   // DOBA: panel grey levels card
@@ -4043,40 +4117,24 @@ TRC("dobatick");             if (doba_ui::tick(g_state.snapshot())) forceDraw = 
         // Touch: interrupt-driven. getPoint() (an I2C read) runs when the
         // GT911 INT fired, while a touch is ongoing (to catch the release),
         // or on a slow fallback tick so input is never dropped.
-TRC("touch");         if (touchOk) {
-            static int16_t lastX = 0, lastY = 0, downX = 0, downY = 0;
-            static uint32_t lastTouchPoll = 0;
-            if (touchIrq || touchWasDown || millis() - lastTouchPoll > 200) {
-                touchIrq = false;
-                lastTouchPoll = millis();
-                int16_t x[1], y[1];
-                i2cLock();
-                bool down = touch.getPoint(x, y, 1) > 0;
-                i2cUnlock();
-                if (down) {
-                    lastX = x[0];
-                    lastY = y[0];
-                }
-                static uint32_t lastTapMs = 0;
-                if (down && !touchWasDown) {
-                    touchDownAt = millis();
-                    downX = lastX;
-                    downY = lastY;
-                } else if (!down && touchWasDown && mapDrag(downX, downY, lastX, lastY)) {
+TRC("touch");         if (touchOk && g_touchQ) {
+            TouchEv ev;
+            static uint32_t lastTapMs = 0;
+            while (xQueueReceive(g_touchQ, &ev, 0) == pdTRUE) {
+                touchDownAt = ev.downMs;
+                if (mapDrag(ev.x0, ev.y0, ev.x1, ev.y1)) {
                     noteActivity();   // DOBA: a finger drawn across the map moves it
-                } else if (!down && touchWasDown) {
-                    // One tap per release, debounced so a flickery touch read
-                    // can't fire twice and toggle the screen back.
-                    if (millis() - lastTapMs > 350) {
-                        lastTapMs = millis();
-                        noteActivity();
-                        doba_ui::setPressMs(millis() - touchDownAt);
-                        if (powerOverlay) handlePowerTap(lastX, lastY);
-                        else if (millis() - touchDownAt >= 800 && mapLongPress(lastX, lastY)) {}   // DOBA
-                        else handleTap(lastX, lastY);
-                    }
+                    continue;
                 }
-                touchWasDown = down;
+                // Real releases now, so only a double read of one tap is filtered.
+                if (millis() - lastTapMs < 120) continue;
+                lastTapMs = millis();
+                noteActivity();
+                const uint32_t held = ev.upMs - ev.downMs;
+                doba_ui::setPressMs(held);
+                if (powerOverlay) handlePowerTap(ev.x1, ev.y1);
+                else if (held >= 800 && mapLongPress(ev.x1, ev.y1)) {}   // DOBA
+                else handleTap(ev.x1, ev.y1);
             }
         }
 
@@ -4376,7 +4434,12 @@ TRC("predraw");         const bool modalHoldsStill = powerOverlay || navPrompt;
                     drawMeshNotice(fb);
                     break;
                 }
-                case SCREEN_MAP: renderMapScreen(s, fb); break;
+                case SCREEN_MAP: {
+                    const uint32_t t0 = micros();
+                    renderMapScreen(s, fb);
+                    Serial.printf("[perf] map drawn in %lu ms at %.2f m/px\n", (unsigned long)((micros() - t0) / 1000), mapMpp);
+                    break;
+                }
                 case SCREEN_SUMMARY:
                     // Modal: the ride screen stays behind the sheet, scrimmed.
                     ui_render_dashboard(s, routes::navActive(),

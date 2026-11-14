@@ -32,6 +32,7 @@ bool tapArticle(int x, int y);       // a link opens its article; else pages. tr
 bool articleBack();                  // back along followed links; false at the first
 void leaveArticle();
 bool libraryBack();
+bool typing();                       // the search keyboard is up (taps are keys: no "busy" mark)
 // Open an article by its title, in the first book that has it (a console command for tests).
 bool openTitle(const char* title);                  // section/search view -> library home; false at home
 const char* libraryTitle();          // status-bar title for the current library view                 // forget the link history
