@@ -398,15 +398,18 @@ def pretty_title(t):
     return t[:1].upper() + t[1:] if t else t
 
 
-SHIFTED = False     # the PDF's Cyrillic sits 0x17A above its cp1251 codes ("ɉɭɥɢ" = "Пули")
+SHIFTED = 0     # a broken font map, undone: 0x17A ("ɉɭɥɢ" = "Пули") or 0xFF (cp1251 read as Latin-1)
 
 
-def unshift(t):
-    """Undo a broken font map that put each cp1251 byte at U+017A + byte."""
+def unshift(t, mode=None):
+    """Undo a broken font map: each cp1251 byte put at U+017A + byte, or at
+    U+0000 + byte (cp1251 text read as Latin-1: "êіëüêіñòü" = "кількість")."""
+    mode = SHIFTED if mode is None else mode
+    base = 0x17A if mode == 0x17A else 0
     out = []
     for c in t:
-        o = ord(c) - 0x17A
-        if 0x80 <= o <= 0xFF:
+        o = ord(c) - base
+        if 0xA8 <= o <= 0xFF or (base and 0x80 <= o <= 0xFF):
             try:
                 c = bytes([o]).decode("cp1251")
             except UnicodeDecodeError:
@@ -635,11 +638,14 @@ def read_pdf(path, title):
     doc = pymupdf.open(path)
     sample = " ".join(doc[i].get_text() for i in range(min(len(doc), 40)))
     global SHIFTED
-    SHIFTED = False
-    if unreadable(sample) and not unreadable(unshift(sample)):
-        SHIFTED = True
-        print(f"   {os.path.basename(path)}: shifted cp1251 font map, decoded", file=sys.stderr)
-    elif unreadable(sample):
+    SHIFTED = 0
+    if unreadable(sample):
+        for mode in (0x17A, 0xFF):
+            if not unreadable(unshift(sample, mode)):
+                SHIFTED = mode
+                print(f"   {os.path.basename(path)}: broken cp1251 font map, decoded", file=sys.stderr)
+                break
+    if unreadable(sample) and not SHIFTED:
         print(f"!! {os.path.basename(path)}: its text layer is in a broken encoding; skipped "
               "(find another copy, or OCR it)", file=sys.stderr)
         return []
