@@ -438,9 +438,9 @@ Compass az	Аз. компаса
 NO MAP HERE	ТУТ НЕМАЄ МАПИ
 This area is not on the card	Цієї місцевості немає на карті
 NO SD CARD	НЕМАЄ SD-КАРТИ
-Insert a FAT32 card for maps	Вставте карту FAT32 для мап
+Insert an exFAT card for maps	Вставте карту exFAT для мап
 SD CARD UNREADABLE	SD-КАРТА НЕ ЧИТАЄТЬСЯ
-Reformat it as FAT32 (not exFAT)	Відформатуйте її у FAT32 (не exFAT)
+Reformat it as exFAT	Відформатуйте її в exFAT
 PHONE GPS	GPS ТЕЛЕФОНА
 grid 1 km	сітка 1 км
 grid 10 km	сітка 10 км
@@ -543,3 +543,4 @@ blood %s	кров %s
 contact: %s	контакт: %s
 loading...	завантаження...
 no translation of this article	цієї статті немає в перекладі
+on: allowed when something needs it	увімкнено: коли щось знадобиться

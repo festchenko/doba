@@ -23,6 +23,8 @@ int bl = 0;  // backlight level 0-3; OFF until the rider turns it on — e-paper
 bool miles = false;  // false = km, true = miles
 bool clk24 = true;   // true = 24-hour clock, false = 12-hour
 bool usbDrv = true;
+bool btOn = false;    // DOBA: Bluetooth switch (nothing uses it yet)
+bool wifiOn = false;  // DOBA: Wi-Fi switch (nothing uses it yet)
 char ownerText[128] = "";
 char ownerF[5][64] = {};    // DOBA: name, born, blood, medical, contact   // DOBA: "if found" card on the power-off screen  // true = expose SD as USB drive when plugged into a host
 // false = a field whose sensor is unpaired is dropped from the dashboard and
@@ -79,6 +81,8 @@ void begin() {
     // that had the old (default-ON) "usbdrv" value stored. OFF = the device
     // keeps the SD (logs/recording) when plugged in.
     usbDrv = prefs.getBool("usbdrv2", false);
+    btOn = prefs.getBool("bt", false);
+    wifiOn = prefs.getBool("wifi", false);
     prefs.getString("owner", ownerText, sizeof ownerText);
     for (int i = 0; i < 5; ++i) {
         char k[8]; snprintf(k, sizeof k, "own%d", i);
@@ -179,6 +183,10 @@ void setUsbDrive(bool on) {
     prefs.putBool("usbdrv2", usbDrv);
 }
 
+bool bluetooth() { return btOn; }
+void setBluetooth(bool on) { btOn = on; prefs.putBool("bt", on); }
+bool wifi() { return wifiOn; }
+void setWifi(bool on) { wifiOn = on; prefs.putBool("wifi", on); }
 const char* owner() { return ownerText; }
 const char* ownerField(int i) { return i >= 0 && i < 5 ? ownerF[i] : ""; }
 void setOwnerField(int i, const char* t) {

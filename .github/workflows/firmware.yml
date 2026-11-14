@@ -30,6 +30,7 @@ jobs:
         run: |
           pio pkg install -e t5s3-painter
           tools/apply-pm-framework.sh
+          tools/apply-exfat.sh
       - name: Build
         run: pio run -e t5s3-painter
       - name: Merged image

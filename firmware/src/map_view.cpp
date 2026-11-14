@@ -967,10 +967,10 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
         const char* sub = "This area is not on the card";
         if (s.sdCard == SD_CARD_NONE) {
             head = "NO SD CARD";
-            sub = "Insert a FAT32 card for maps";
+            sub = "Insert an exFAT card for maps";
         } else if (s.sdCard == SD_CARD_UNREADABLE) {
             head = "SD CARD UNREADABLE";
-            sub = "Reformat it as FAT32 (not exFAT)";
+            sub = "Reformat it as exFAT";
         }
         ui::text(&Arial_B, bx + bw / 2, by + 38, TR(head), fb, EPD_DRAW_ALIGN_CENTER,
                  0x00);

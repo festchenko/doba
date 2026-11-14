@@ -6,8 +6,9 @@
 #include <ctime>
 
 // The SD card as the UI reports it (ride_recorder::sdCardState()). UNREADABLE
-// is a card that answered but would not mount: exFAT or unformatted, since the
-// FAT driver is built without exFAT — the fix is reformatting it as FAT32.
+// is a card that answered but would not mount: unformatted, or NTFS/APFS. The
+// FAT driver reads FAT32 and exFAT (tools/apply-exfat.sh); exFAT is the one
+// for big cards.
 enum SdCardState : uint8_t {
     SD_CARD_OK = 0,           // mounted (or lent to a USB host)
     SD_CARD_NONE = 1,         // nothing answered: no card in the slot

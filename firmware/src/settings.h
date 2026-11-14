@@ -47,6 +47,12 @@ void setUsbDrive(bool on);
 // DOBA: both radios default OFF. Bluetooth is brought up only at boot, so a
 // change takes effect after a restart; WiFi is never started unless allowed.
 // DOBA: the owner card on the power-off screen ("" = none).
+// Bluetooth and Wi-Fi: switches kept for features to come (nothing uses
+// either radio yet). Off by default.
+bool bluetooth();
+void setBluetooth(bool on);
+bool wifi();
+void setWifi(bool on);
 const char* owner();
 // The card as fields: 0 name, 1 born, 2 blood group, 3 allergies/illnesses, 4 contact.
 constexpr int OWNER_FIELDS = 5;

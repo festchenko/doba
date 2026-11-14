@@ -459,7 +459,7 @@ void setup() {
                                     (unsigned long)ride_recorder::sdFreeMB(),
                                     ride_recorder::rideCount());
     else if (ride_recorder::sdCardState() == SD_CARD_UNREADABLE)
-        ui_dashboard::bootDetailFor("SD card", "unreadable · FAT32?");
+        ui_dashboard::bootDetailFor("SD card", "unreadable · exFAT/FAT32?");
     else
         ui_dashboard::bootDetailFor("SD card", "No SD card");
     ui_dashboard::bootStatus("SD card", sdOk);
