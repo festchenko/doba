@@ -35,7 +35,8 @@ constexpr int W = 540, H = 960, TOP = ui::STATUS_H;
 constexpr uint8_t INK = 0x00, PAPER = 0xFF;
 constexpr int REC = 128, KEY = 56, HDR = 32;
 constexpr size_t MAX_TEXT = 1536 * 1024;      // inflated article cap (PSRAM)
-constexpr int MAX_BOOKS = 32;   // one bit each in a uint32 mask
+constexpr int MAX_BOOKS = 64;   // one bit each in a uint64 mask (BookMask)
+typedef uint64_t BookMask;
 constexpr int RESULTS = 6;
 const char* kRoot = "/doba/lib";
 
@@ -258,10 +259,10 @@ void searchBook(int bi, const char* key) {
 }
 
 // Prefix search over the books in `mask` (bit per book), in book order.
-void search(const char* key, uint32_t mask) {
+void search(const char* key, BookMask mask) {
     g_resultCount = 0;
     for (int bi = 0; bi < g_bookCount && g_resultCount < RESULTS; ++bi)
-        if (mask & (1u << bi)) searchBook(bi, key);
+        if (mask & ((BookMask)1 << bi)) searchBook(bi, key);
 }
 
 bool inflateTo(const uint8_t* src, size_t len, char* dst, size_t cap, size_t* outLen) {
@@ -799,7 +800,7 @@ void savePlace() {
 // Without the file the sections are still there, searching every book.
 
 constexpr int MAX_SECTIONS = 15, MAX_ENTRIES = 480, MAX_EMERGENCY = 3;
-struct Section { char id[16]; char name[24]; doba_icons::Icon icon; uint32_t books; int first, n, starts; };
+struct Section { char id[16]; char name[24]; doba_icons::Icon icon; BookMask books; int first, n, starts; };
 struct Entry { int8_t sec, book; bool start; char label[48]; char desc[80]; char title[KEY + 1]; };
 struct Emergency { char label[20]; doba_icons::Icon icon; int8_t book; char title[KEY + 1]; };
 Section g_secs[MAX_SECTIONS];
@@ -829,7 +830,7 @@ void defaultSections() {
         snprintf(x.id, sizeof x.id, "%s", d.id);
         snprintf(x.name, sizeof x.name, "%s", d.name);
         x.icon = doba_icons::byName(d.icon);
-        x.books = 0xFFFFFFFFu;
+        x.books = ~(BookMask)0;
         x.first = x.n = x.starts = 0;
     }
 }
@@ -871,9 +872,9 @@ void loadSections() {
             x.books = 0;
             for (char* t = strtok(fl[4], ","); t; t = strtok(nullptr, ",")) {
                 const int bi = bookIndex(t);
-                if (bi >= 0) x.books |= 1u << bi;
+                if (bi >= 0) x.books |= (BookMask)1 << bi;
             }
-            if (!x.books) x.books = 0xFFFFFFFFu;
+            if (!x.books) x.books = ~(BookMask)0;
             x.first = g_entryCount;
             x.n = x.starts = 0;
         } else if (fl[0][0] == 'E' && n >= 7 && g_entries && g_entryCount < MAX_ENTRIES) {
@@ -1889,7 +1890,7 @@ void renderSection(uint8_t* fb) {
     ui::text(ui::font(ui::F_TITLE), 124, TOP + 58, TR(x.name), fb, EPD_DRAW_ALIGN_LEFT, INK);
     char sub[64];
     int nb = 0;
-    for (int i = 0; i < g_bookCount; ++i) if (x.books & (1u << i)) ++nb;
+    for (int i = 0; i < g_bookCount; ++i) if (x.books & ((BookMask)1 << i)) ++nb;
     if (x.n) {
         char a[48], bk[48];
         snprintf(a, sizeof a, TRN(x.n, "%d guide", "%d guides"), x.n);
@@ -1999,7 +2000,7 @@ const EpdRect kScope = {24, TOP + 4, W - 48, 50};
 const EpdRect kQuery = {24, TOP + 60, W - 48, 64};
 constexpr int RES_TOP = TOP + 142, RES_H = 60;
 
-uint32_t scopeMask() { return g_scopeBook >= 0 ? 1u << g_scopeBook : g_scope < 0 ? 0xFFFFFFFFu : g_secs[g_scope].books; }
+BookMask scopeMask() { return g_scopeBook >= 0 ? (BookMask)1 << g_scopeBook : g_scope < 0 ? ~(BookMask)0 : g_secs[g_scope].books; }
 
 void renderSearchView(kbd::Keyboard& k, uint8_t* fb) {
     k.top = H - k.height();
