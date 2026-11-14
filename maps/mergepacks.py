@@ -53,9 +53,16 @@ def merge(paths, dst):
     w.close()
 
 
+def _merge_job(args):
+    rel, ps, dst = args
+    merge(ps, dst)
+    return rel
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--jobs", type=int, default=1, help="border packs merged in parallel")
     ap.add_argument("regions", nargs="+")
     a = ap.parse_args()
     by_rel = {}
@@ -63,13 +70,17 @@ def main():
         for rel, p in files_of(root).items():
             by_rel.setdefault(rel, []).append(p)
     merged = linked = kept = 0
+    todo = []
+    # Single-region packs first: plain copies, most of the bytes, quick. The
+    # border packs (rebuilt tile by tile, CPU-bound) after, several at a time.
     for rel, ps in sorted(by_rel.items()):
         dst = os.path.join(a.out, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         newest = max(os.path.getmtime(p) for p in ps)
-        if os.path.exists(dst) and os.path.getmtime(dst) >= newest:
+        if os.path.exists(dst) and os.path.getmtime(dst) >= newest and \
+                (len(ps) > 1 or os.path.getsize(dst) == os.path.getsize(ps[0])):
             kept += 1
-            continue                      # done on an earlier run
+            continue                      # done on an earlier run (a copy cut short has the wrong size)
         if len(ps) == 1:
             if os.path.exists(dst):
                 os.remove(dst)
@@ -79,9 +90,19 @@ def main():
                 shutil.copy2(ps[0], dst)
             linked += 1
         else:
-            merge(ps, dst)
+            todo.append((rel, ps, dst))
+    print(f"{linked} copied, {kept} unchanged; {len(todo)} border packs to merge", flush=True)
+    if a.jobs > 1 and len(todo) > 1:
+        from multiprocessing import Pool
+        with Pool(a.jobs) as pool:
+            for rel in pool.imap_unordered(_merge_job, todo):
+                merged += 1
+                print(f"  merged {rel} ({merged}/{len(todo)})", flush=True)
+    else:
+        for job in todo:
+            _merge_job(job)
             merged += 1
-            print(f"  merged {rel} from {len(ps)} regions", flush=True)
+            print(f"  merged {job[0]} ({merged}/{len(todo)})", flush=True)
     print(f"{linked} copied, {merged} merged, {kept} unchanged -> {a.out}")
     return 0
 
