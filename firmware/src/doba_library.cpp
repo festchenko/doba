@@ -13,6 +13,7 @@
 #include "doba_fold_table.h"
 #include "epd_compat.h"
 #include "sd_bus.h"
+#include "ride_recorder.h"   // mountGeneration: cached files die with a remount
 #include "ui_render.h"
 #include <Preferences.h>
 #ifdef VFONT
@@ -146,9 +147,37 @@ uint32_t foldCp(uint32_t cp) {
 
 // --- books ---------------------------------------------------------------------
 
+// Open index.dti files, kept between searches: a search runs on every key and
+// walks the books in turn, and opening /doba/lib/<book>/index.dti (three
+// directory lookups) was most of what each book cost. A few stay open, least
+// recently used goes; all of them go with a remount, a rescan or a delete.
+struct IdxCache { int8_t book = -1; uint32_t gen = 0, used = 0; File f; };
+IdxCache g_idx[6];
+uint32_t g_idxTick = 0;
+void closeIndexes() {   // under sdLock
+    for (IdxCache& c : g_idx) { if (c.f) c.f.close(); c.book = -1; }
+}
+File* openIndex(int bi) {   // under sdLock
+    const uint32_t gen = ride_recorder::mountGeneration();
+    IdxCache* lru = &g_idx[0];
+    for (IdxCache& c : g_idx) {
+        if (c.book == bi && c.gen == gen && c.f) { c.used = ++g_idxTick; return &c.f; }
+        if (c.used < lru->used) lru = &c;
+    }
+    if (lru->f) lru->f.close();
+    char path[96];
+    snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
+    lru->f = SD.open(path, FILE_READ);
+    lru->book = (int8_t)bi;
+    lru->gen = gen;
+    lru->used = ++g_idxTick;
+    return lru->f ? &lru->f : nullptr;
+}
+
 void scan() {
     g_bookCount = 0;
     sdLock();
+    closeIndexes();   // book numbers are about to change
     File root = SD.open(kRoot);
     if (root && root.isDirectory()) {
         File d;
@@ -226,14 +255,13 @@ void searchBook(int bi, const char* key) {
     const uint32_t t0 = millis();
     struct Took { uint32_t t; ~Took() { if (millis() - t > 50) Serial.printf("[perf] search %lu ms\n", (unsigned long)(millis() - t)); } } took{t0};
     const Book& b = g_books[bi];
-    char path[96];
-    snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, b.dir);
     const size_t klen = strlen(key);
     uint8_t want[KEY] = {};
     memcpy(want, key, klen < KEY ? klen : KEY);
     sdLock();
-    File f = SD.open(path, FILE_READ);
-    if (!f) { sdUnlock(); return; }
+    File* fp = openIndex(bi);
+    if (!fp) { sdUnlock(); return; }
+    File& f = *fp;
     uint8_t rec[REC];
     uint32_t lo = 0, hi = b.count;
     while (lo < hi) {   // lower bound
@@ -260,7 +288,7 @@ void searchBook(int bi, const char* key) {
             if (g_results[k].book == bi && g_results[k].chunk == r.chunk && g_results[k].off == r.off) dup = true;
         if (!dup) ++g_resultCount;
     }
-    f.close();
+    // f stays open: openIndex() keeps it for the next key
     sdUnlock();
 }
 
@@ -2429,6 +2457,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
                     Serial.printf("[lib] delete book %s (%.1f GB)\n", g_books[bi].dir, g_delBytes / 1e9);
                     const uint32_t t0 = millis();
                     sdLock();
+                    closeIndexes();   // no open file inside what is being deleted
                     const bool ok = rmTree(path);
                     sdUnlock();
                     Serial.printf("[lib] delete %s %s in %lu ms\n", path, ok ? "ok" : "FAILED",
