@@ -7,20 +7,20 @@ emergency BLEEDING     | bleed  | med_en:Bleeding ; gov:ATP 4-02.11 — Chapter 
 emergency NOT BREATHING| breath | med_en:Cardiopulmonary resuscitation ; wiki_en:Cardiopulmonary resuscitation ; gov:ATP 4-02.11 — Chapter 5*
 emergency FREEZING     | cold   | med_en:Hypothermia ; gov:ATP 4-02.11 — Chapter 8* ; wiki_en:Hypothermia
 
-section firstaid | FIRST AID | firstaid | med_en,medicine,gov,manuals,mine,wiki_en
-  * Stop the bleeding     | pressure, packing, tourniquet         | gov:ATP 4-02.11 — Chapter 4* ; med_en:Bleeding ; wiki_en:Bleeding
+section firstaid | FIRST AID | firstaid | med_en,medicine,tccc_uk,gov,manuals,mine,wiki_en
+  * Stop the bleeding     | pressure, packing, tourniquet         | gov:ATP 4-02.11 — Chapter 4* ; med_en:Bleeding ; tccc_uk:Контроль кровотечі ; wiki_en:Bleeding
   * CPR                   | 30 pushes, 2 breaths, don't stop      | med_en:Cardiopulmonary resuscitation ; wiki_en:Cardiopulmonary resuscitation
-  - Recovery position     | unconscious but breathing             | med_en:Recovery position ; wiki_en:Recovery position
+  - Recovery position     | unconscious but breathing             | med_en:Recovery position ; tccc_uk:7.6 Стабільне бокове положення ; wiki_en:Recovery position
   - Choking               | back blows, abdominal thrusts         | med_en:Choking ; wiki_en:Choking
-  - Shock                 | pale, fast pulse: lay flat, keep warm | med_en:Shock (circulatory) ; wiki_en:Shock (circulatory)
-  - Burns                 | cool 20 min, cover, no ointment       | med_en:Burn ; gov:ATP 4-02.11 — Chapter 12* ; wiki_en:Burn
-  - Broken bones          | splint above and below                | gov:ATP 4-02.11 — Chapter 13* ; med_en:Bone fracture ; wiki_en:Bone fracture
+  - Shock                 | pale, fast pulse: lay flat, keep warm | med_en:Shock (circulatory) ; tccc_uk:Модуль 10: Розпізнавання шоку ; wiki_en:Shock (circulatory)
+  - Burns                 | cool 20 min, cover, no ointment       | med_en:Burn ; gov:ATP 4-02.11 — Chapter 12* ; tccc_uk:16. Надання допомоги при опіках ; wiki_en:Burn
+  - Broken bones          | splint above and below                | gov:ATP 4-02.11 — Chapter 13* ; med_en:Bone fracture ; tccc_uk:17. Іммобілізація (шинування) ; wiki_en:Bone fracture
   - Splint                | improvise from sticks and cloth       | wiki_en:Splint (medicine) ; med_en:Splint (medicine)
-  - Tourniquet            | high and tight, note the time         | med_en:Tourniquet ; wiki_en:Tourniquet
-  - Wound care            | clean, close, watch for infection     | med_en:Wound ; wiki_en:Wound
+  - Tourniquet            | high and tight, note the time         | med_en:Tourniquet ; tccc_uk:Техніка накладання турнікету ; wiki_en:Tourniquet
+  - Wound care            | clean, close, watch for infection     | med_en:Wound ; tccc_uk:Тампонування рани гемостатичним бинтом ; wiki_en:Wound
   - Sprain                | rest, ice, compress, raise            | med_en:Sprain ; wiki_en:Sprain
   - Head injury           | warning signs after a blow            | med_en:Head injury ; wiki_en:Head injury
-  - Hypothermia           | cold, shivering, confused             | med_en:Hypothermia ; wiki_en:Hypothermia
+  - Hypothermia           | cold, shivering, confused             | med_en:Hypothermia ; tccc_uk:11. Профілактика та лікування гіпотермії ; wiki_en:Hypothermia
   - Heat stroke           | hot, dry, confused: cool now          | med_en:Heat stroke ; wiki_en:Heat stroke
   - Frostbite             | rewarm only if it stays warm          | med_en:Frostbite ; wiki_en:Frostbite
   - Bites and stings      | snakes, spiders, ticks                | gov:ATP 4-02.11 — Chapter 16* ; med_en:Snakebite ; wiki_en:Snakebite
@@ -30,6 +30,7 @@ section firstaid | FIRST AID | firstaid | med_en,medicine,gov,manuals,mine,wiki_
   - Drowning              | rescue breaths first                  | med_en:Drowning ; wiki_en:Drowning
   - Army first aid manual | casualty care, step by step           | gov:ATP 4-02.11 Casualty* ; gov:FM 4-25.11 First Aid* ; manuals:First aid*
   - Heat and cold injuries| heat stroke to frostbite              | gov:ATP 4-02.11 — Chapter 17* ; med_en:Heat illness
+  - Tactical medicine     | TCCC course, in Ukrainian             | tccc_uk:Skill Card: 5 навичок, що рятують життя ; tccc_uk:Вступ до тактичної медицини*
 
 section water | WATER | water | water,gov,med_en,disaster,manuals,mine,wiki_en
   * Make water safe       | boil, filter, disinfect               | gov:Making Water Safe* ; water:Water purification ; wiki_en:Portable water purification
@@ -136,19 +137,20 @@ section nav | NAVIGATION | nav | gov,manuals,mine,wiki_en
   - Contour lines         | reading the shape of the ground       | wiki_en:Contour line
   - Mountaineering        | the army mountain manual              | gov:FM 3-97.61* ; gov:TC 3-97.61* ; wiki_en:Mountaineering
 
-section hazards | HAZARDS | hazard | gov,disaster,med_en,manuals,mine,wiki_en
+section hazards | HAZARDS | hazard | gov,disaster,dsns_uk,med_en,manuals,mine,wiki_en
   * Floods                | what to do before and during          | gov:Flood Safety* ; gov:Floods* ; wiki_en:Flood
   - Earthquake            | drop, cover, hold on                  | gov:Earthquakes* ; wiki_en:Earthquake preparedness
   - Wildfire              | leave early                           | gov:Wildfires* ; wiki_en:Wildfire
-  - Nuclear explosion     | get in, stay in, stay tuned           | gov:Nuclear Explosion* ; wiki_en:Nuclear explosion*
+  - Nuclear explosion     | get in, stay in, stay tuned           | gov:Nuclear Explosion* ; dsns_uk:Дії при радіаційній небезпеці ; wiki_en:Nuclear explosion*
   - Radiation             | shielding, distance, time             | gov:Radiation* ; med_en:Acute radiation syndrome ; wiki_en:Acute radiation syndrome
   - Potassium iodide      | when it helps and when not            | med_en:Potassium iodide ; wiki_en:Potassium iodide
-  - Chemical spill        | upwind, uphill, indoors               | gov:What to Do in a Chemical* ; gov:Chemicals* ; wiki_en:Chemical accident
+  - Chemical spill        | upwind, uphill, indoors               | gov:What to Do in a Chemical* ; gov:Chemicals* ; dsns_uk:Хімічні аварії - як діяти ; wiki_en:Chemical accident
   - Landmines             | if you find one, don't move           | wiki_en:Land mine ; wiki_en:Unexploded ordnance
   - Unexploded ordnance   | mark, back off, report                | wiki_en:Unexploded ordnance
   - Tsunami               | strong quake at the coast: go high    | gov:Tsunamis* ; wiki_en:Tsunami
   - Mold                  | cleaning up after water               | gov:Mold* ; wiki_en:Mold health issues
   - Avalanche             | rescue in the first 15 minutes        | wiki_en:Avalanche rescue ; wiki_en:Avalanche
+  - Shelling, air raids   | DSNS memos, in Ukrainian              | dsns_uk:Дії при надзвичайних ситуаціях, артобстріл ; dsns_uk:Інструкції для захисту населення*
 
 section weather | WEATHER | weather | gov,manuals,mine,wiki_en
   * Lightning             | no safe place outside                 | gov:Lightning Safety (NOAA* ; wiki_en:Lightning safety*
@@ -195,7 +197,7 @@ section comms | COMMS | comms | gov,manuals,mine,wiki_en
   - Meshtastic            | the radio Doba speaks                 | wiki_en:Meshtastic
   - Amateur radio         | emergency nets                        | wiki_en:Amateur radio emergency communications
 
-section reference | REFERENCE | books | my_books,wiki_en,wiki_uk,shelf_en,shelf_uk,books_uk,school_uk,dsns_uk,voyage_en,voyage_uk,dict_en,dict_uk,manuals,mine,gov
+section reference | REFERENCE | books | my_books,wiki_en,wiki_uk,shelf_en,shelf_uk,books_uk,school_uk,dsns_uk,tccc_uk,voyage_en,voyage_uk,dict_en,dict_uk,manuals,mine,gov
   * Survival skills       | the overview                          | wiki_en:Survival skills
   - Wilderness medicine   | care far from help                    | med_en:Wilderness medical emergency ; wiki_en:Wilderness medical emergency
   - Disaster preparedness | getting ready at home                 | gov:Are You Ready* ; wiki_en:Emergency management

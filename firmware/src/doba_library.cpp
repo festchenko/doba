@@ -957,6 +957,8 @@ const BookLook kLooks[] = {
     {"my_books", "Кн", "Мої книги"},      {"books_uk", "Пд", "Вікіпідручник"},
     {"voyage_uk", "Мн", "Вікімандри"},    {"voyage_en", "Vy", "Wikivoyage"},
     {"dict_uk", "Сл", "Вікісловник"},     {"dict_en", "Dic", "Wiktionary"},
+    {"tccc_uk", "ТМ", "Тактична медицина"}, {"dsns_uk", "ДСНС", "Пам'ятки ДСНС"},
+    {"school_uk", "Шк", "Підручники"},
 };
 constexpr int N_LOOKS = sizeof(kLooks) / sizeof(kLooks[0]);
 
