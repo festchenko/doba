@@ -13,7 +13,7 @@ namespace {
 
 // RadioLib drives CS/RST itself; IRQ is DIO1 and BUSY is the SX1262's handshake
 // line. The SPI instance is the global one the SD card already opened in
-// ride_recorder::begin() — deliberately shared, since it is one physical bus.
+// sd_card::begin() — deliberately shared, since it is one physical bus.
 SX1262 radio = new Module(BOARD_LORA_CS, BOARD_LORA_IRQ, BOARD_LORA_RST,
                           BOARD_LORA_BUSY);
 
@@ -48,7 +48,7 @@ bool begin(const Config& c) {
     // share it, so it is already on by the time anything gets here.
     //
     // CS high before anything else: SD and LoRa share MISO/MOSI/SCK, and a
-    // floating LoRa CS corrupts SD traffic. ride_recorder::begin() does the same
+    // floating LoRa CS corrupts SD traffic. sd_card::begin() does the same
     // for its own card, and SPI.begin() has already run there. Calling it twice
     // is harmless, and this covers a build where the SD never mounted.
     pinMode(BOARD_LORA_CS, OUTPUT);

@@ -16,7 +16,6 @@
 
 #include "config.h"
 #include "ride_state.h"
-#include "routes.h"
 #include "speed_source.h"
 #include "settings.h"
 #include "rtc_clock.h"
@@ -774,7 +773,6 @@ void task(void*) {
 
         if (gps.location.isUpdated() && gps.location.isValid()) {
             const double la = gps.location.lat(), lo = gps.location.lng();
-            routes::updateProgress(la, lo);
             // DOBA: ground height from the card's DEM (outside the state lock:
             // it may read the card). Feeds mapElevation, which the altitude
             // field prefers and the barometer, if fitted, calibrates from.

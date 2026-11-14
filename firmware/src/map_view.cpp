@@ -11,7 +11,6 @@
 #include "epdiy.h"
 #include "epd_compat.h"
 #include "ride_state.h"
-#include "routes.h"
 #include "map_store.h"
 #include "ui_render.h"
 #include "vfont_faces.h"
@@ -715,83 +714,6 @@ static void drawLayersButton(uint8_t* fb) {
     ui::fillRound({cx - 17, cy - 4, 26, 22}, 4, 0x00, fb);
 }
 
-// ---- MAP LAYERS screen -------------------------------------------------------
-
-namespace {
-struct LayerRow { uint16_t bit; const char* label; };
-const LayerRow kLayerRows[kMapLayerCount] = {
-    {MAP_LAYER_BIKE_ROUTES, "BIKE ROUTES"},
-    {MAP_LAYER_CYCLEWAYS, "CYCLEWAYS & LANES"},
-    {MAP_LAYER_WATER, "DRINKING WATER"},
-    {MAP_LAYER_TOILETS, "TOILETS"},
-    {MAP_LAYER_REPAIR, "REPAIR STATIONS"},
-    {MAP_LAYER_BIKE_SHOPS, "BIKE SHOPS"},
-};
-constexpr int kSampleCx = 24 + 16 + 30;   // CONTENT_X + CELL_PAD + half a sample
-constexpr int kLabelX = 24 + 16 + 76;     // text starts right of the sample
-
-// A sample of what the row's layer draws, in the map's own styles.
-void drawLayerSample(int row, int cx, int cy, uint8_t* fb) {
-    switch (row) {
-        case 0: {   // route band under a residential street
-            int16_t pts[4] = {(int16_t)(cx - 28), (int16_t)cy, (int16_t)(cx + 28), (int16_t)cy};
-            drawBikeBand(pts, 2, 14, fb);
-            thickSegment(cx - 28, cy, cx + 28, cy, 2, ROAD_INK, fb);
-            break;
-        }
-        case 1: {   // dashed cycleway above a road with bike lanes
-            drawSegmentStyled(cx - 28, cy - 12, cx + 28, cy - 12, {2, ROAD_INK, 7, 4, false}, fb);
-            int16_t road[4] = {(int16_t)(cx - 28), (int16_t)(cy + 9), (int16_t)(cx + 28), (int16_t)(cy + 9)};
-            drawBikeLanes(road, 2, 2, fb);
-            thickSegment(cx - 28, cy + 9, cx + 28, cy + 9, 2, ROAD_INK, fb);
-            break;
-        }
-        default: {
-            static const uint8_t types[] = {MAP_POI_WATER, MAP_POI_TOILETS,
-                                            MAP_POI_REPAIR, MAP_POI_BIKE_SHOP};
-            MapPoi p = {(int16_t)cx, (int16_t)cy, types[row - 2], 0};
-            drawPoiIcon(p, fb);
-            break;
-        }
-    }
-}
-}  // namespace
-
-void ui_render_map_layers(uint16_t mask, uint8_t* fb) {
-    const int W = epd_rotated_display_width();
-    for (int i = 0; i < kMapLayerCount; ++i) {
-        const int y = kMapLayersRowTop + i * kMapLayersRowH;
-        const int midY = y + kMapLayersRowH / 2;
-        drawLayerSample(i, kSampleCx, midY, fb);
-        ui::text(&Arial_B, kLabelX, midY + 8, kLayerRows[i].label, fb,
-                 EPD_DRAW_ALIGN_LEFT, 0x00);
-        ui_settings_toggle(kSettingsToggleX, midY - kSettingsToggleH / 2,
-                           kSettingsToggleW, kSettingsToggleH,
-                           (mask & kLayerRows[i].bit) != 0, fb);
-        epd_fill_rect({0, y + kMapLayersRowH - 3, W, 3}, 0x00, fb);
-    }
-    // What the switches do and do not do — so a rider who turns everything on
-    // and sees nothing knows the tiles are the missing piece, not the setting.
-    const int fy = kMapLayersRowTop + kMapLayerCount * kMapLayersRowH + 44;
-    ui::text(&Arial_L, W / 2, fy, TR("Shown on the map when the downloaded"), fb,
-             EPD_DRAW_ALIGN_CENTER, 0x00);
-    ui::text(&Arial_L, W / 2, fy + 30, TR("tiles include them. Home to go back."), fb,
-             EPD_DRAW_ALIGN_CENTER, 0x00);
-}
-
-int ui_map_layers_hit(int x, int y) {
-    if (y < kMapLayersRowTop) return -1;
-    const int row = (y - kMapLayersRowTop) / kMapLayersRowH;
-    if (row < 0 || row >= kMapLayerCount) return -1;
-    // The whole row toggles: the switch is the visual, the row the target —
-    // a gloved thumb on the label should not do nothing.
-    (void)x;
-    return row;
-}
-
-uint16_t ui_map_layer_bit(int row) {
-    return (row >= 0 && row < kMapLayerCount) ? kLayerRows[row].bit : 0;
-}
 
 // Native-fb-aligned mask of the current frame's water/park fills (1 = covered).
 // Null until the first map render. Used by the ghost settle-clean.
@@ -902,21 +824,6 @@ bool ui_render_map_base(const MapScreenData& map, uint8_t* fb, bool (*keepGoing)
 namespace {
 // What goes over the base layer, redrawn on every frame.
 void renderMapTop(const MapScreenData& map, uint8_t* fb) {
-    // Route: 14 px black; ridden part solid, ahead dashed (design 1f)
-    if (map.route && map.routePointCount > 1) {
-        int ridden = map.riddenPointCount;
-        if (ridden < 1) ridden = 1;
-        if (ridden > map.routePointCount) ridden = map.routePointCount;
-        drawPolyline(map.route, ridden, {14, 0x00, 0, 0}, fb);
-        if (ridden < map.routePointCount) {
-            drawPolyline(map.route + (ridden - 1) * 2,
-                         map.routePointCount - ridden + 1,
-                         {14, 0x00, 26, 16}, fb);
-        }
-    }
-
-    // POIs over the route: a water stop next to the line being ridden is
-    // exactly the one that must not disappear under it.
     drawPois(map, fb);
 
     if (map.riderX > -30 && map.riderX < 570 && map.riderY > ui::STATUS_H - 30 && map.riderY < 990)
@@ -940,11 +847,11 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
         ui_render_map_base(map, fb);
         if (onBase) onBase(fb);
     }
-    if (map.topo && milspec::gridOn()) milspec::drawGrid(map, fb);   // DOBA: km grid under route + rider
+    if (milspec::gridOn()) milspec::drawGrid(map, fb);   // DOBA: km grid under route + rider
     renderMapTop(map, fb);
     if (map.topo) milspec::drawPois(map, fb);   // DOBA: hospitals, water, food...
     milspec::drawTarget(map, s, fb);   // DOBA: the active waypoint
-    if (map.topo && map.panned) milspec::drawMeasure(map, fb);   // DOBA: A -> the cross
+    if (map.panned) milspec::drawMeasure(map, fb);   // DOBA: A -> the cross
     drawScaleBar(map.metersPerPixel, s.useMiles, fb);
     // The turn banner occupies the top of the map, exactly where the compass
     // lives (compass spans y 78..146; the banner runs to y 202), so the north
@@ -981,13 +888,6 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
     // Over the NO MAP box: where the group is matters most when there is no
     // map to read, and the edge arrows sit in the box's rows.
     drawPeers(map, fb);
-
-    // Label when the map is centered on the phone's position (device GPS cold).
-    // No background box by request — just the text.
-    if (map.phonePosition) {
-        ui::text(&Arial_L, 21, ui::STATUS_H + 28, TR("PHONE GPS"), fb,
-                 EPD_DRAW_ALIGN_LEFT, 0x00);
-    }
 
     // Zoom buttons (design 1f, right edge). At the end of its range a button
     // goes grey: a tap that cannot do anything should look like it.
@@ -1054,212 +954,9 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
         }
     }
 
-    if (map.topo && map.panned) milspec::drawCross(fb);
-    // DOBA: on the topo map the footer is the position readout instead.
-    if (map.topo) {
-        milspec::drawStrip(map, s, fb);
-        return;
-    }
-
-    // Footer: three cells drawn with the SAME primitive as the dashboard, so a
-    // rider glancing down sees the same object in both places — caption top-left
-    // at the shared size, value+unit centred as a pair.
-    epd_fill_rect({0, STRIP_TOP, W, H - STRIP_TOP}, ui::PAPER, fb);
-    epd_fill_rect({0, STRIP_TOP, W, ui::RULE_HEAVY}, ui::INK, fb);
-
-    // Dash-page spacing, not flush thirds: the same 24 px screen margin and
-    // 12 px gutters the data pages use, so the strip reads as three cells with
-    // air rather than one wall-to-wall box.
-    const int fy = STRIP_TOP + ui::RULE_HEAVY + ui::GUTTER;
-    const int fh = H - fy - ui::GUTTER;
-    const int colW = (ui::CONTENT_W - 2 * ui::GUTTER) / 3;
-
-    // Fields come from the rider's config (`map` line in dashboard.cfg).
-    // One override stays: while navigating, if no cell already shows ROUTE
-    // LEFT, it replaces the third — the strip's oldest behaviour, and the one
-    // number a rider on a route actually wants.
-    uint8_t f3[3] = {map.stripFields[0], map.stripFields[1], map.stripFields[2]};
-    if (map.showRemaining) {
-        bool has = f3[0] == DF_ROUTE_LEFT || f3[1] == DF_ROUTE_LEFT ||
-                   f3[2] == DF_ROUTE_LEFT;
-        if (!has) f3[2] = DF_ROUTE_LEFT;
-    }
-
-    char vals[3][24];
-    const char* units3[3];
-    const char* labels[3];
-    for (int c = 0; c < 3; ++c) {
-        if (f3[c] >= DF_COUNT) f3[c] = DF_SPEED;
-        units3[c] = "";
-        dashFieldValue(f3[c], s, vals[c], sizeof(vals[c]), &units3[c]);
-        // Time fields render compact H:MM here, as the strip always did before
-        // it was configurable. The full H:MM:SS is a dash-cell luxury: in a
-        // 156 px strip cell its worst case ("88:88:88") drags the WHOLE row's
-        // shared face down to the smallest sizes — seconds nobody reads at a
-        // glance costing half the type size of all three cells.
-        if (f3[c] == DF_RIDE_TIME || f3[c] == DF_MOVING_TIME) {
-            uint32_t sec = f3[c] == DF_RIDE_TIME ? s.elapsedS : s.movingS;
-            snprintf(vals[c], sizeof(vals[c]), "%lu:%02lu",
-                     (unsigned long)(sec / 3600), (unsigned long)((sec / 60) % 60));
-        }
-        labels[c] = dashFieldLabel(f3[c]);
-    }
-
-
-    // The strip's own worst-case sizing strings: dashSizingHint's, except the
-    // compact time format above.
-    auto stripHint = [](uint8_t f) {
-        return (f == DF_RIDE_TIME || f == DF_MOVING_TIME) ? "88:88"
-                                                          : dashSizingHint(f);
-    };
-
-    // One caption size across the strip, as on the data page.
-    const EpdFont* lf = ui::kLabelLadder[ui::LABEL_LADDER_N - 1];
-    for (int k = 0; k < ui::LABEL_LADDER_N; ++k) {
-        bool fits = true;
-        for (int c = 0; c < 3; ++c)
-            if (ui::labelWidth(ui::kLabelLadder[k], labels[c]) >
-                colW - 2 * ui::CELL_PAD) fits = false;
-        if (fits) { lf = ui::kLabelLadder[k]; break; }
-    }
-
-    // Common value face across the three, so the strip reads as one row —
-    // sized against each field's WORST-CASE string, not the live value, so a
-    // number crossing a digit boundary can never resize the strip mid-ride.
-    // The unit no longer sits beside the value (in a 124 px inner cell it
-    // cost two ladder steps of type size); the cell is a three-band column:
-    // caption high, big bare number, small unit on the bottom edge.
-    const int capBand = 34;    // caption band, from the cell top
-    const int unitBand = 26;   // unit band, from the cell bottom
-    // The value's side padding is 6, not CELL_PAD's 16: nothing sits beside
-    // the number, and those 20 px are exactly one ladder step of type size.
-    const int valuePad = 6;
-    int vi = 0;
-    for (int c = 0; c < 3; ++c) {
-        const int idx = ui::valueFontIndex(ui::kValueLadder,
-                                           stripHint(f3[c]),
-                                           colW - 2 * valuePad,
-                                           fh - capBand - unitBand, 0);
-        if (idx > vi) vi = idx;
-    }
-    const EpdFont* vf = ui::kValueLadder[vi];
-    for (int c = 0; c < 3; ++c) {
-        EpdRect r = {ui::CONTENT_X + c * (colW + ui::GUTTER), fy, colW, fh};
-        epd_draw_rect(r, ui::INK, fb);
-        epd_draw_rect({r.x + 1, r.y + 1, r.width - 2, r.height - 2}, ui::INK,
-                      fb);
-        const int cx = r.x + r.width / 2;
-        // Left-aligned caption, the dash cells' own idiom: label() centres on
-        // a point, so hand it the tracked width's midpoint.
-        const int lw = ui::labelWidth(lf, labels[c]);
-        ui::label(r.x + ui::CELL_PAD + lw / 2, r.y + 24, labels[c], fb,
-                  ui::INK, lf);
-        // Value centred in the band between caption and unit. Impact digit
-        // faces carry cap height in ascender, so baseline = centre + asc/2
-        // is optical centre.
-        const int bandTop = r.y + capBand;
-        const int bandBot = r.y + fh - unitBand;
-        const int base = (bandTop + bandBot) / 2 + vf->ascender / 2;
-        ui::text(vf, cx, base, vals[c], fb, EPD_DRAW_ALIGN_CENTER);
-        if (units3[c][0])
-            ui::text(&Arial_L, cx, r.y + fh - 10, units3[c], fb,
-                     EPD_DRAW_ALIGN_CENTER, ui::DARK);
-        // Greyed like a dash cell when the source is gone — a strip cell must
-        // never show a live-looking number from a dead sensor either.
-        if (!dashFieldAvailable(f3[c], s) && !s.showOffline)
-            ui::fillTone({r.x + 3, bandTop, r.width - 6, bandBot - bandTop},
-                         ui::TONE_33, fb);
-    }
+    if (map.panned) milspec::drawCross(fb);
+    // DOBA: the footer is the position readout, on every kind of map (the
+    // vector map drew the bike strip: speed, distance, ride time).
+    milspec::drawStrip(map, s, fb);
 }
 
-// Whole-route preview for the "Start navigation?" accept page: fits the entire
-// route into the area above the prompt sheet so the rider can recognize it
-// before accepting. Independent of the live map zoom/center.
-void ui_render_route_preview(uint8_t* fb) {
-    const int n = routes::pointCount();
-    if (n < 2) return;
-    const int W = epd_rotated_display_width();
-
-
-    // Viewport: below the status bar, above the accept sheet. The sheet is 520 px
-    // tall now, so fitting to 600 put the lower third of the route behind it —
-    // the rider was asked to accept a route they could only half see.
-    const int H = epd_rotated_display_height();
-    const int top = ui::STATUS_H + 8, bot = (H - 520) - 16;
-    const int left = 20, right = W - 20;
-    const int vw = right - left, vh = bot - top;
-
-    double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
-    for (int i = 0; i < n; ++i) {
-        double la, lo;
-        routes::point(i, la, lo);
-        if (la < minLat) minLat = la;
-        if (la > maxLat) maxLat = la;
-        if (lo < minLon) minLon = lo;
-        if (lo > maxLon) maxLon = lo;
-    }
-    const double clat = (minLat + maxLat) / 2, clon = (minLon + maxLon) / 2;
-    const double cosc = cos(clat * M_PI / 180.0);
-    double mLat = (maxLat - minLat) * 111320.0;
-    double mLon = (maxLon - minLon) * 111320.0 * cosc;
-    if (mLat < 1) mLat = 1;
-    if (mLon < 1) mLon = 1;
-    double mpp = fmax(mLon / vw, mLat / vh) * 1.12;   // fit + 12% margin
-    if (mpp < 0.5) mpp = 0.5;
-
-    const int cx = left + vw / 2, cy = top + vh / 2;
-    auto toScreen = [&](double la, double lo, int16_t& sx, int16_t& sy) {
-        sx = (int16_t)(cx + (lo - clon) * 111320.0 * cosc / mpp);
-        sy = (int16_t)(cy - (la - clat) * 111320.0 / mpp);
-    };
-
-    // Major-road context behind the route so the shape is recognizable. The
-    // status bar + accept sheet are drawn AFTER this, covering any roads that
-    // spill above/below the preview viewport (see ui_dashboard draw order).
-    static MapScreenData ctx;
-    ctx.route = nullptr;
-    ctx.routePointCount = 0;
-    map_store::renderInto(clat, clon, (float)mpp, cx, cy, 0.0f, ctx);
-    // Parks (hatch) + water (dots) under the roads, so the coast/bay + green
-    // areas read — matches the map screen. Spill above/below the viewport is
-    // masked by the status bar + accept sheet drawn afterwards.
-    for (int i = 0; i < ctx.parkCount; ++i) {
-        fillDitheredPolygon(ctx.parks[i].pts, ctx.parks[i].pointCount, fb, FILL_HATCH);
-    }
-    for (int i = 0; i < ctx.waterCount; ++i) {
-        fillDitheredPolygon(ctx.water[i].pts, ctx.water[i].pointCount, fb);
-    }
-    for (int i = 0; i < ctx.featureCount; ++i) {
-        if (ctx.features[i].cls != MAP_ROAD_MAJOR) continue;
-        drawPolyline(ctx.features[i].pts, ctx.features[i].pointCount,
-                     {3, 0x00, 0, 0}, fb);
-    }
-
-    // Subsample into a fixed buffer so any route length fits.
-    static int16_t pts[1024 * 2];
-    const int cap = 1024;
-    const int stride = (n + cap - 1) / cap;
-    int m = 0;
-    for (int i = 0; i < n && m < cap; i += stride) {
-        double la, lo;
-        routes::point(i, la, lo);
-        toScreen(la, lo, pts[m * 2], pts[m * 2 + 1]);
-        m++;
-    }
-    // Always include the final point so the end marker lands on the route end.
-    {
-        double la, lo;
-        routes::point(n - 1, la, lo);
-        if (m < cap) { toScreen(la, lo, pts[m * 2], pts[m * 2 + 1]); m++; }
-    }
-
-    drawPolyline(pts, m, {8, 0x00, 0, 0}, fb);
-
-    // Start (filled dot) and end (ring) markers.
-    int16_t sx, sy, ex, ey;
-    { double la, lo; routes::point(0, la, lo); toScreen(la, lo, sx, sy); }
-    { double la, lo; routes::point(n - 1, la, lo); toScreen(la, lo, ex, ey); }
-    epd_fill_circle(sx, sy, 10, 0x00, fb);
-    epd_fill_circle(ex, ey, 11, 0xFF, fb);
-    for (int r = 7; r <= 11; ++r) epd_draw_circle(ex, ey, r, 0x00, fb);
-}

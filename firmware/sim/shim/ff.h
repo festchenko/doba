@@ -1,5 +1,5 @@
 // FatFs's directory API over the sim card's host directory: drive "0:" is
-// the card. Only what ride_recorder's fast directory scan uses.
+// the card. Only what the firmware's FatFs calls use.
 #pragma once
 #include <stdint.h>
 #define FF_VOLUMES 1

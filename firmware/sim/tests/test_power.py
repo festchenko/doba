@@ -12,9 +12,9 @@ import time
 import pytest
 
 
-from power_util import (FAST, IDLE_S, card_logs, check_finished_fit, console_text, fit_records, only_ride,
+from power_util import (FAST, IDLE_S, card_logs, console_text,
                         run_to, uptime_s)
-from test_rides import SAVE_BUTTON, line_track
+from power_util import line_track
 
 LAT, LON = 37.77, -122.45
 SHUT_DOWN = (24 + 246, 700 + 48)     # ui_render.cpp kPowerShutdown centre
@@ -50,7 +50,7 @@ def test_an_idle_device_switches_itself_off_after_ten_minutes(device):
     device.power_on()
     st = device.status()
     assert st["reset_reason"] == 8          # ESP_RST_DEEPSLEEP
-    assert st["screen"] == "dash"
+    assert st["screen"] == "other"   # HOME
     assert not [n for n in os.listdir(os.path.join(device.sd, "logs")) if n.startswith("crash-")]
     # A fresh countdown on the new boot.
     assert run_to(device, IDLE_S - 30) is None
@@ -85,28 +85,6 @@ def test_autosleep_off_on_the_console_keeps_it_on_until_switched_back(device):
 
 # ---- what holds it off -----------------------------------------------------------------------
 
-def test_a_ride_in_progress_is_never_switched_off(device):
-    """Stopped at a café with the ride recording (auto-paused, nobody
-    touching it): the device must stay on, however long. Once the rider saves
-    the ride, the countdown runs from the save."""
-    device.gps(LAT, LON, speed_kmh=0)
-    device.wait_status(lambda s: s["ride"]["gps_fix"] and s["ride"]["time_valid"], timeout=15)
-    device.button("boot")
-    device.wait_status(lambda s: s["ride"]["recording"], timeout=10)
-    stays_on(device, 25)
-    assert device.status()["ride"]["recording"]
-
-    device.button("boot")                     # stop: the save/discard sheet
-    device.wait_status(lambda s: s["screen"] == "other", timeout=10)
-    device.tap(*SAVE_BUTTON)
-    device.wait_status(lambda s: not s["ride"]["recording"], timeout=20)
-    t = uptime_s(device)
-    off = run_to(device, t + IDLE_S + 120, fine_from=t + IDLE_S - 30)
-    assert_switched_off_after_idle(off, t)
-    _, data = only_ride(device)
-    check_finished_fit(data)
-
-
 def test_riding_without_recording_keeps_it_on_and_stopping_starts_the_countdown(device):
     """Riding along with the dashboard up but no ride recording: speed is
     activity, so it stays on; once the bike stops, ten minutes later it
@@ -139,68 +117,8 @@ def test_cancel_on_the_power_dialog_keeps_it_on(device):
     device.tap(*CANCEL)
     time.sleep(1.5)
     assert device.running
-    assert not device.status()["ride"]["recording"]
     assert "shutdown:" not in console_text(device)
-
-
-def test_shut_down_mid_ride_keeps_the_ride_and_boots_clean(device):
-    """SHUT DOWN with a ride recording finishes and keeps the ride: a valid
-    FIT holding the ride's records, and the next boot has nothing to recover
-    and no crash to report. It also leaves the last position for the next
-    boot's GPS warm start."""
-    device.gps_track(line_track(LAT, LON, 5), speed_kmh=30)
-    device.wait_status(lambda s: s["ride"]["gps_fix"] and s["ride"]["time_valid"], timeout=15)
-    device.set_speed(6)
-    device.button("boot")
-    device.wait_status(lambda s: s["ride"]["recording"], timeout=10)
-    st = device.wait_status(lambda s: s["ride"]["elapsed_s"] >= 60, timeout=40)
-    device.set_speed(1)
-    device.button("boot", ms=2200)
-    time.sleep(1.5)
-    device.tap(*SHUT_DOWN)
-    device.wait_powered_off(30)
-    log = console_text(device)
-    assert "shutdown: user power-off (dialog)" in log
-    assert "ride saved:" in log
-
-    name, data = only_ride(device)
-    check_finished_fit(data)
-    recs = fit_records(data)
-    assert len(recs) >= 55, "%d records for a ride of %d s" % (len(recs), st["ride"]["elapsed_s"])
-    last = recs[-1]
-    assert abs(last["lat"] - LAT) < 0.01 and last["lon"] > LON
-
-    device.power_on()
-    assert device.status()["reset_reason"] == 8
-    time.sleep(2)
-    log = "\n".join(device.log())
-    assert "ride interrupted" not in log and "ride recovered" not in log
-    assert device.status()["screen"] == "dash"
-    seed = device.wait_log(r"gps warm-start seed: ", since=0, timeout=5)
-    lat, lon = (float(v) for v in seed.split("seed: ")[1].split(" ")[0].split(","))
-    assert abs(lat - last["lat"]) < 0.001 and abs(lon - last["lon"]) < 0.001, seed
-    assert open(os.path.join(device.sd, "rides", name), "rb").read() == data
 
 
 # ---- the battery -------------------------------------------------------------------------------
 
-
-def test_a_flat_battery_mid_ride_is_recovered_on_the_next_boot(device):
-    """The firmware has no low-battery save: a battery that runs flat mid-ride
-    browns the device out. The next boot must still offer the ride back, and
-    SAVE must leave a valid FIT holding the ride up to its last checkpoint."""
-    device.gps_track(line_track(LAT, LON, 5), speed_kmh=30)
-    device.wait_status(lambda s: s["ride"]["gps_fix"] and s["ride"]["time_valid"], timeout=15)
-    device.set_speed(6)
-    device.button("boot")
-    device.wait_status(lambda s: s["ride"]["recording"], timeout=10)
-    device.battery(1)
-    device.wait_status(lambda s: s["ride"]["elapsed_s"] >= 50, timeout=40)
-    device.reset("brownout")
-    device.wait_log(r"ride interrupted: /rides/", since=0, timeout=20)
-    device.wait_status(lambda s: s["screen"] == "other", timeout=10)
-    device.tap(*SAVE_BUTTON)
-    device.wait_log(r"interrupted ride saved: .* \(ok\)", since=0, timeout=20)
-    _, data = only_ride(device)
-    check_finished_fit(data)
-    assert len(fit_records(data)) >= 30      # every 15 s checkpointed; 50 s ridden

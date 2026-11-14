@@ -10,7 +10,7 @@
 #include <cstring>
 
 #include "epd_compat.h"
-#include "ride_recorder.h"
+#include "sd_card.h"
 #include "map_view.h"
 #include "sd_bus.h"
 
@@ -113,10 +113,10 @@ struct IdxPage { int8_t pack = -1; uint32_t page = 0, lastUse = 0; uint8_t* data
 IdxPage g_idx[IDX_PAGES];
 
 OpenPack* packFor(const char* path) {
-    if (g_packGen != ride_recorder::mountGeneration()) {   // the card was remounted
+    if (g_packGen != sd_card::mountGeneration()) {   // the card was remounted
         for (OpenPack& p : g_packs) { if (p.path[0] && p.f) p.f.close(); p.path[0] = 0; p.ok = false; }
         for (IdxPage& q : g_idx) q.pack = -1;
-        g_packGen = ride_recorder::mountGeneration();
+        g_packGen = sd_card::mountGeneration();
     }
     OpenPack* victim = &g_packs[0];
     for (OpenPack& p : g_packs) {

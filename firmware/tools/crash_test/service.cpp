@@ -49,7 +49,7 @@ bool mounted=false,host=false,nvsOK=true,writeOK=true,removeOK=true,renameOK=tru
 size_t sdLimit=SIZE_MAX;
 int sdDepth=0,powerDepth=0;
 namespace power_mgmt {void busyAcquire(){++powerDepth;}void busyRelease(){assert(powerDepth>0);--powerDepth;}}
-namespace ride_recorder {bool sdMounted(){return mounted;}bool isRecording(){return recording;}}
+namespace sd_card {bool sdMounted(){return mounted;}bool isRecording(){return recording;}}
 namespace usb_storage {bool hostActive(){return host;}}
 void sdLock(){++sdDepth;}void sdUnlock(){assert(sdDepth>0);--sdDepth;}
 std::map<std::string,std::string> nvs,files;

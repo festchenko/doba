@@ -9,7 +9,7 @@
 #include <Preferences.h>
 #include "diag_buffer.h"
 
-#include "ride_recorder.h"
+#include "sd_card.h"
 #include "sd_bus.h"
 #include "settings.h"
 
@@ -208,14 +208,13 @@ void dumpToSerial() {
 
 void flushToSD() {
     drainDriverLogs();
-    if (!buf || !mtx || !ride_recorder::sdMounted()) return;
+    if (!buf || !mtx || !sd_card::sdMounted()) return;
     // All flush callers serialize through SD -> diag, matching log callers.
     sdLock();
-    if (!ride_recorder::sdMounted()) { sdUnlock(); return; }
+    if (!sd_card::sdMounted()) { sdUnlock(); return; }
     xSemaphoreTake(mtx, portMAX_DELAY);
     if ((retryWaiting && (int32_t)(millis() - retryAfterMs) < 0) ||
-        (pending.size == 0 && previousLen == 0) ||
-        (ride_recorder::isRecording() && pending.size < pending.capacity / 2 && millis()-lastFlushMs < 30000)) {
+        (pending.size == 0 && previousLen == 0)) {
         xSemaphoreGive(mtx); sdUnlock(); return;
     }
     // If a long outage evicted boot lines, replay the protected boot copy once.

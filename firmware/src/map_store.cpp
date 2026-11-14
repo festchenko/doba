@@ -846,7 +846,7 @@ float elevationAt(double lat, double lon) {
 // tiles the walk ran for seconds on core 0 and the task watchdog reset the
 // device (Memfault dumps, Oct 2026: link task in SPI transfers inside
 // sendTileList, every time an app connected). Same drive lookup as
-// ride_recorder's listRides. And not under MapGuard: nothing here touches the
+// a single directory pass. And not under MapGuard: nothing here touches the
 // tile cache.
 int listTileIds(char out[][24], int maxOut, const char* ext, uint32_t* sizes) {
     int n = 0;

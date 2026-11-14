@@ -13,7 +13,7 @@
 #include <atomic>
 
 #include "diag.h"
-#include "ride_recorder.h"
+#include "sd_card.h"
 #include "usb_storage.h"
 #include "board_power.h"
 
@@ -231,7 +231,7 @@ void tick() {
                   (unsigned long)(now - lastReportMs), (unsigned long)(ok - lastOk),
                   (unsigned long)(rejected - lastRejected), (us - lastSleepUs) / 1000,
                   (unsigned long)maxMs, (unsigned long)longCalls,
-                  state, ride_recorder::sdMounted(), usb_storage::hostActive());
+                  state, sd_card::sdMounted(), usb_storage::hostActive());
         lastReportMs = now; lastOk = ok; lastRejected = rejected; lastSleepUs = us;
     }
 

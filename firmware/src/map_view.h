@@ -119,26 +119,11 @@ struct MapScreenData {
     // Which cycling layers to draw (MAP_LAYER_* bits).
     uint16_t layers = MAP_LAYERS_ALL;
 
-    // Route polyline; the first riddenPointCount points render solid
-    // (already ridden), the rest dashed (ahead) per the design.
-    const int16_t* route;
-    int routePointCount;
-    int riddenPointCount;
-
     int riderX, riderY;    // rider marker, screen px
     float headingDeg;      // 0 = up/north, clockwise
 
     float metersPerPixel;  // for the scale bar
 
-    // When a route is loaded the footer's TIME cell becomes LEFT KM.
-    bool showRemaining;
-    float remainingKm;
-
-    // The 3-cell data strip's fields (DashField), from the rider's config
-    // (`map` line). Filled by ui_dashboard from dash_config; the preview tool
-    // sets its own. Defaults match the strip as it always was.
-    uint8_t stripFields[3] = {0 /*DF_SPEED*/, 5 /*DF_DISTANCE*/,
-                              6 /*DF_RIDE_TIME*/};
 
     // Screen direction of true north (0 = up; track-up sets -heading).
     float northDeg;
@@ -154,8 +139,6 @@ struct MapScreenData {
     char place[32] = "";
     char placeSub[32] = "";
 
-    // Position is coming from the connected phone (device GPS has no fix).
-    bool phonePosition = false;
 
     // A map actually covers the current position. When false the map screen
     // shows a "no map here — download it in the app" prompt.
@@ -226,16 +209,10 @@ bool ui_render_map_base(const MapScreenData& map, uint8_t* fb,
 void ui_render_map_features(const MapScreenData& map, const RideState& s,
                             uint8_t* fb);
 
-// Whole active route fitted into the area above the accept sheet, for the
-// "Start navigation?" preview.
-void ui_render_route_preview(uint8_t* fb);
 
 // MAP LAYERS screen (from the layers button on the map): one switch row per
 // cycling layer, each with a small sample of what it draws.
 constexpr int kMapLayersRowTop = 64;     // ui::STATUS_H
 constexpr int kMapLayersRowH = 108;      // ui::DENSE_ROW_H
-void ui_render_map_layers(uint16_t mask, uint8_t* fb);
 // Row index (0..kMapLayerCount-1) under a tap on the switch, or -1.
-int ui_map_layers_hit(int x, int y);
 // The MAP_LAYER_* bit a row toggles.
-uint16_t ui_map_layer_bit(int row);

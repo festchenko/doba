@@ -237,23 +237,6 @@ Go tapHome(int x, int y) {
 
 // --- shared bits for the pages below -------------------------------------------
 
-const char* onOff(bool b) { return b ? TR("ON") : TR("OFF"); }
-
-// A page row: caption on the left, value on the right, ruled underneath.
-void row(int y, int h, const char* caption, const char* value, uint8_t* fb, bool hint = true) {
-    char cap[96];
-    ui::text(ui::font(ui::F_LABEL), 24, y + h / 2 + 10, ui::sentence(TR(caption), cap, sizeof cap), fb, EPD_DRAW_ALIGN_LEFT, INK);
-    char v[96];
-    snprintf(v, sizeof v, hint ? "%s  >" : "%s", TR(value));
-    // The value takes what the caption leaves; a long one steps down a size.
-    const int room = W - 36 - ui::textWidth(ui::font(ui::F_LABEL), TR(caption)) - 24;
-    const EpdFont* f = ui::font(ui::F_KEY);
-    if (ui::textWidth(f, v) > room) f = ui::font(ui::F_LABEL);
-    if (ui::textWidth(f, v) > room) f = ui::font(ui::F_SMALL);
-    ui::text(f, W - 24, y + h / 2 + 12, v, fb, EPD_DRAW_ALIGN_RIGHT, INK);
-    epd_fill_rect({24, y + h - 1, W - 48, 1}, ui::HAIR, fb);
-}
-
 // The current position, if there is one worth using.
 bool here(const RideState& s, double& lat, double& lon) {
     if (!s.gpsFix && !s.everHadFix) return false;

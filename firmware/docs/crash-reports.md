@@ -27,7 +27,7 @@ Only after the final file verifies does it remove the NVS copy.
 Delivery runs as soon as the card mounts, synchronously on the main task and
 before the card can be offered to a USB host:
 
-1. boot: `ride_recorder::begin()` mounts the card in `setup()`;
+1. boot: `sd_card::begin()` mounts the card in `setup()`;
 2. `crash_report::onSdMounted("boot mount")` delivers queued/RAM reports, then
    exports and clears the pending Memfault dump;
 3. only later does the UI task run `usb_storage::begin()` and expose the card.

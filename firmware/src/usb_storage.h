@@ -6,7 +6,7 @@
 //
 // CRITICAL: the firmware and the computer must never write the SD concurrently
 // (FAT corruption). While a host has the drive mounted, hostActive() is true and
-// the firmware suspends its own SD use (recording, logging, map/ota commits).
+// the firmware suspends its own SD use (logging, map/ota commits).
 
 namespace usb_storage {
 

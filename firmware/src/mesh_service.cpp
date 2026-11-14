@@ -617,11 +617,6 @@ bool ownPosition(mesh::Position& p) {
         p.longitude = s.longitude;
         p.altitudeM = (int32_t)s.altitudeM;
         p.satsInView = s.satellites;
-    } else if (s.phoneFixValid && millis() - s.phoneFixMs < MESH_POS_PHONE_MAX_AGE_MS) {
-        p.latitude = s.phoneLat;
-        p.longitude = s.phoneLon;
-        p.altitudeM = (int32_t)s.phoneAltM;
-        p.satsInView = 0;
     } else {
         return false;
     }

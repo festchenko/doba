@@ -5,10 +5,8 @@
 #include <Arduino.h>
 #include <TouchDrvGT911.hpp>
 
-#include "dash_config.h"
 #include "ride_state.h"
 #include "live_view.h"
-#include "routes.h"
 #include "mesh_service.h"
 #include "settings.h"
 #include "config.h"
@@ -168,30 +166,7 @@ bool TouchDrvGT911::isPressed() {
 
 namespace {
 
-std::string dashText() {
-    std::string t(8192, 0);
-    t.resize(dash_config::currentText(&t[0], t.size()));
-    return t;
-}
-
-const char* screenName(int s) { return s == 0 ? "dash" : s == 1 ? "map" : "other"; }
-
-// Turn-by-turn as the banner would show it: the next maneuver and the distance
-// to it, from routes:: (the same calls the renderer makes).
-std::string navJson() {
-    char text[routes::MANEUVER_TEXT] = "";
-    float m = -1;
-    const bool next = routes::nextTurn(text, sizeof text, m);
-    std::ostringstream o;
-    o << "{\"route\":" << (routes::active() ? "true" : "false")
-      << ",\"pending\":" << (routes::navPending() ? "true" : "false")
-      << ",\"active\":" << (routes::navActive() ? "true" : "false")
-      << ",\"maneuvers\":" << routes::maneuverCount()
-      << ",\"next\":" << (next ? json::esc(text) : "null")
-      << ",\"next_m\":" << (next ? m : -1)
-      << ",\"remaining_km\":" << routes::remainingKm() << "}";
-    return o.str();
-}
+const char* screenName(int s) { return s == 1 ? "map" : "other"; }
 
 // The card's size and usage, as SD.cardSize/totalBytes/usedBytes report them.
 std::string sdJson(bool recount) {
@@ -214,26 +189,17 @@ std::string statusJson() {
       << ",\"scrubs\":" << sim::scrubCount() << ",\"clears\":" << sim::clearCount()
       << ",\"screen\":\"" << screenName(v.screen) << "\",\"page\":" << (v.page == 0xFF ? -1 : (int)v.page)
       << ",\"page_count\":" << (int)v.pageCount
-      << ",\"ride\":{\"recording\":" << (s.recording ? "true" : "false") << ",\"paused\":" << (s.ridePaused ? "true" : "false")
-      << ",\"distance_m\":" << s.distanceM << ",\"elapsed_s\":" << s.elapsedS << ",\"moving_s\":" << s.movingS
-      << ",\"speed_kmh\":" << s.speedKmh << ",\"gps_fix\":" << (s.gpsFix ? "true" : "false")
+      << ",\"ride\":{\"speed_kmh\":" << s.speedKmh << ",\"gps_fix\":" << (s.gpsFix ? "true" : "false")
       << ",\"lat\":" << s.latitude << ",\"lon\":" << s.longitude << ",\"sats\":" << (int)s.satellites
       << ",\"ground_m\":" << (s.mapElevationValid ? s.mapElevationM : -99999.0f)   // DOBA: DEM
       << ",\"time_valid\":" << (s.timeValid ? "true" : "false")
       << ",\"utc\":" << (long long)s.utc
-      << ",\"card_full\":" << (s.cardFull ? "true" : "false")
-      << ",\"hr\":" << (s.hrConnected ? (int)s.heartRateBpm : -1)
-      << ",\"power\":" << (s.powerConnected && s.powerW != 0xFFFF ? (int)s.powerW : -1)
-      << ",\"cadence\":" << (s.cadenceConnected && s.cadenceRpm != 0xFF ? (int)s.cadenceRpm : -1)
-      << ",\"battery\":" << (int)s.batteryPercent << ",\"route_active\":" << (s.routeActive ? "true" : "false")
+      << ",\"battery\":" << (int)s.batteryPercent
       << "},\"reset_reason\":" << sim::resetReason()
       << ",\"settings\":{\"tz_min\":" << settings::tzMinutes()
       << ",\"miles\":" << (settings::useMiles() ? "true" : "false") << ",\"clock24h\":" << (settings::clock24h() ? "true" : "false")
-      << ",\"show_offline\":" << (settings::showOffline() ? "true" : "false") << ",\"auto_pause_s\":" << settings::autoPauseSec()
       << ",\"backlight\":" << settings::backlight()
       << ",\"map_layers\":" << settings::mapLayers() << "}"
-      << ",\"nav\":" << navJson()
-      << ",\"dash\":" << json::esc(dashText())
       << ",\"sd_present\":" << (sim::sdPresent() ? "true" : "false")
       << ",\"sd\":" << sdJson(false)
       << ",\"gps\":" << sim::gpsStatusJson()

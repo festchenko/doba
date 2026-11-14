@@ -100,7 +100,7 @@ namespace ble_sensors { bool anyConnected(){return sensorUp;} bool radioBusy(){r
  bool sleepAllowed(){return sensorAllowed;} }
 namespace ble_server { bool isPhoneConnected(){return phoneUp;} bool linkRelaxed(){return phoneLong;}
  bool relaxedSleepAllowed(){return sleepAllowed;} }
-namespace ride_recorder { bool longAutoPaused(){return false;} bool sdMounted(){return true;} }
+namespace sd_card { bool longAutoPaused(){return false;} bool sdMounted(){return true;} }
 namespace usb_storage { bool hostActive(){return false;} }
 bool board_usb_power_present(bool& value) { if(vbusKnown) value=vbus; return vbusKnown; }
 void power_mgmt::sleepStats(uint32_t& ok,uint32_t& rejected,uint64_t& us){ok=rejected=0;us=0;}
@@ -180,7 +180,7 @@ SemaphoreHandle_t xSemaphoreCreateMutex(){return new Mutex;}
 void xSemaphoreTake(Mutex* m,int){assert(!m->held);m->held=true;}
 void xSemaphoreGive(Mutex* m){assert(m->held);m->held=false;}
 bool cardMounted=false, recording=false;
-namespace ride_recorder { bool sdMounted(){return cardMounted;} bool isRecording(){return recording;} }
+namespace sd_card { bool sdMounted(){return cardMounted;} bool isRecording(){return recording;} }
 namespace settings { int tzMinutes(){return 0;} }
 namespace power_mgmt { void busyAcquire(){} void busyRelease(){} }
 int sdDepth=0, opens=0, flashWrites=0;

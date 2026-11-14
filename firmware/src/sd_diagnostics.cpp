@@ -4,7 +4,7 @@
 #include "sd_diagnostics.h"
 #include "sd_bus.h"
 #include "diag.h"
-#include "ride_recorder.h"
+#include "sd_card.h"
 #include "usb_storage.h"
 
 namespace {
@@ -66,10 +66,10 @@ void sd_diagnostics::tick() {
     }
     if ((int32_t)(now - nextMs) < 0) return;
     nextMs = now + 5000;
-    if (!ride_recorder::sdMounted() || ride_recorder::isRecording() || usb_storage::hostActive()) {
+    if (!sd_card::sdMounted() || usb_storage::hostActive()) {
         ++skipped;
-        diag::log("sdtest: skipped (mounted=%d recording=%d host=%d)",
-                  ride_recorder::sdMounted(), ride_recorder::isRecording(), usb_storage::hostActive());
+        diag::log("sdtest: skipped (mounted=%d host=%d)",
+                  sd_card::sdMounted(), usb_storage::hostActive());
         return;
     }
     uint32_t sleepCalls, rejected; uint64_t sleepUs;
@@ -81,8 +81,8 @@ void sd_diagnostics::tick() {
     bool samePhone = previousPhoneUp && phoneUp && phoneId == previousPhoneId;
     previousPhoneId = phoneId; previousPhoneUp = phoneUp;
     sdLock();
-    // Recheck after acquiring the bus; never disturb recording or USB ownership.
-    if (!ride_recorder::sdMounted() || ride_recorder::isRecording()) { sdUnlock(); ++skipped; return; }
+    // Recheck after acquiring the bus; never disturb USB ownership.
+    if (!sd_card::sdMounted()) { sdUnlock(); ++skipped; return; }
     char path[64];
     snprintf(path, sizeof(path), "/logs/sdtest-%08lx-%08lx.tmp",
              (unsigned long)now, (unsigned long)++sequence);

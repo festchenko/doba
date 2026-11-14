@@ -102,17 +102,13 @@ white on the real panel: check with `greytest` on day one.
 - `sim/` builds and runs on Linux as well as macOS (`sim/linux/linux_compat.h`,
   `fopencookie`, `/proc/self/exe`, ELF section for RTC memory).
 - `otpsim/mesh.py` falls back to `cryptography` for AES off macOS.
-- The inherited OTP suites start the sim on the dashboard (`DOBA_START=dash`)
-  and the US band plan (`DOBA_MESH_REGION=US`, both
-  set in `sim/tests/conftest.py`); `test_boot.py` checks the real HOME boot.
-  Tests that encoded OTP's Home-key carousel were rewritten for Doba's.
+- The inherited OTP mesh suites use the US band plan (`DOBA_MESH_REGION=US`,
+  set in `sim/tests/conftest.py`); every suite boots to HOME, as the device does.
 - `sim/tests/test_topo.py` — grey levels, orientation and centring checked on
   the simulated panel, with packs written by `maps/tilepack.py`.
 
 ## Not changed (yet)
-- BLE name, FIT product name and the version string are still OpenTrailPaper's,
-  so the OpenTrailPaper phone app keeps working with the device (mesh chat,
-  settings). Mesh chat now also works on the device itself (COMMS).
+- The version string is still OpenTrailPaper's.
 - Links, images and tables inside library articles are dropped.
 
 ## Bike-computer features removed (November 2026)
@@ -122,7 +118,14 @@ control, the bike radar, Bluetooth sensors (heart rate, power, cadence, wheel
 speed), the Bluetooth companion link (pairing, protobuf link, firmware over
 Bluetooth) and the NimBLE stack itself, with their screens, settings, tools
 and sim suites. The firmware is ~400 KB smaller and has no Bluetooth or Wi-Fi
-at all: the LoRa radio is the only transmitter. Track recording (FIT), routes,
-the ride page and the mesh stay. The sim reads the mesh through its `mesh`
+at all: the LoRa radio is the only transmitter. The sim reads the mesh through its `mesh`
 control command, and Doba's console gained `mesh tx|preset|share|chan`.
 Auto-sleep is held while the mesh is on (a listening radio is a pager).
+
+Then the rest (also November 2026): track recording (FIT files, auto-pause,
+the interrupted-ride prompt, ride history), GPX routes with turn-by-turn, the
+ride dashboard and its configurable pages (`dashboard.cfg`), the bike menu and
+settings pages, and their sim suites. The SD card's mounting, retries and USB
+lending moved from the recorder into `src/sd_card.cpp`. The vector map's
+footer is the position readout, as on the topo map (it showed speed, distance
+and ride time), and the MGRS grid and measuring work on both.

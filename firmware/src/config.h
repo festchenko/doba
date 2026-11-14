@@ -185,9 +185,6 @@
 // Re-send even when parked, so somebody who has just joined the channel can see
 // where you are without waiting for you to move.
 #define MESH_POS_HEARTBEAT_MS    (60UL * 60UL * 1000UL)
-// Without a fix of its own the device shares the phone's position instead, if
-// the phone sent one this recently.
-#define MESH_POS_PHONE_MAX_AGE_MS (2UL * 60UL * 1000UL)
 // Where the rest of a private channel's riders are, on the device map. Their
 // positions come at the same 10 minute / hourly pace as ours, so a dot stays
 // solid for two update intervals, then turns hollow (still where they were last
@@ -203,11 +200,3 @@
 // How many mesh neighbours we remember names for.
 #define MESH_NODE_MAX       32
 
-// Ride recording
-#define RIDE_DIR            "/rides"
-#define RECORD_INTERVAL_MS  1000
-#define FIT_FLUSH_EVERY_S   15
-// Rides smaller than this are stubs (an accidental start/stop with under a
-// minute of data) and are hidden from the history list — a FIT file is ~284
-// fixed bytes plus ~25 per 1 Hz record (see fit_writer.cpp).
-#define RIDE_MIN_USEFUL_BYTES 1500

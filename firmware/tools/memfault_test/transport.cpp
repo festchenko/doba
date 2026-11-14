@@ -38,7 +38,7 @@ struct Console {
 } Serial;
 namespace power_mgmt {void busyAcquire(){++powerDepth;} void busyRelease(){assert(powerDepth>0);--powerDepth;}}
 bool recording=false;
-namespace ride_recorder {bool sdMounted(){return mounted;}bool isRecording(){return recording;}}
+namespace sd_card {bool sdMounted(){return mounted;}bool isRecording(){return recording;}}
 namespace usb_storage {bool hostActive(){return host;}}
 void sdLock(){assert(!sdDepth);++sdDepth;} void sdUnlock(){assert(sdDepth);--sdDepth;}
 struct File {

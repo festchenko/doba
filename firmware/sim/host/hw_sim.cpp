@@ -1,4 +1,4 @@
-#include "ride_recorder.h"
+#include "sd_card.h"
 // Stand-ins for the board's hardware modules. Each keeps the module's
 // interface and reports the hardware as the sim has it: no
 // Qwiic sensors, no RTC chip, no USB stack (a host mounting the card is the
@@ -59,8 +59,8 @@ bool hostActive() { return g_usbHost; }
 // card and mounts it again once the host lets go.
 void poll() {
     static bool lent = false;
-    if (g_usbHost && !lent) lent = ride_recorder::lendToHost();
-    else if (!g_usbHost && lent) { ride_recorder::remount("usb host released"); lent = false; }
+    if (g_usbHost && !lent) lent = sd_card::lendToHost();
+    else if (!g_usbHost && lent) { sd_card::remount("usb host released"); lent = false; }
 }
 }  // namespace usb_storage
 

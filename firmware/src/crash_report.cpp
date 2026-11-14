@@ -3,7 +3,7 @@
 #include "crash_record.h"
 #include "diag.h"
 #include "sd_bus.h"
-#include "ride_recorder.h"
+#include "sd_card.h"
 #include "usb_storage.h"
 #include "power_mgmt.h"
 #include <Arduino.h>
@@ -130,7 +130,7 @@ bool saveSD(const crash_record::Record& record) {
     char temporary[64];snprintf(temporary,sizeof(temporary),"/logs/crash-%08lx.tmp",(unsigned long)record.id);
     bool ok=false;
     sdLock();
-    if(ride_recorder::sdMounted() && !usb_storage::hostActive()){
+    if(sd_card::sdMounted() && !usb_storage::hostActive()){
         if(SD.exists(path))ok=fileMatches(path,record); // interrupted NVS acknowledgement: idempotent
         else {
             SD.mkdir("/logs");
@@ -225,7 +225,7 @@ bool deliver(bool status,const char* why) {
     power_mgmt::busyAcquire();
     persistCurrent();
     Preferences prefs;int queued=0,delivered=0;
-    bool sd=ride_recorder::sdMounted() && !usb_storage::hostActive();
+    bool sd=sd_card::sdMounted() && !usb_storage::hostActive();
     bool nvsAvailable=prefs.begin("crashdiag",false);
     if(nvsAvailable){
         for(int i=0;i<SLOTS;++i){
@@ -262,10 +262,10 @@ bool deliver(bool status,const char* why) {
     bool remaining=queued>0 || (currentPending && !currentDurable);
     if(why && (delivered || remaining))
         diag::log("crash report: %s: delivered=%d still_queued_NVS=%d current_RAM=%d SD=%d host=%d",
-            why,delivered,queued,currentPending && !currentDurable,ride_recorder::sdMounted(),usb_storage::hostActive());
+            why,delivered,queued,currentPending && !currentDurable,sd_card::sdMounted(),usb_storage::hostActive());
     if(status && current.valid() && !currentPending)Serial.print(current.text);
     if(status)diag::log("crash report: NVS_available=%d queued_NVS=%d current_RAM=%d SD=%d (crash-*.log appears in phone log list)",
-        nvsAvailable,queued,currentPending,ride_recorder::sdMounted());
+        nvsAvailable,queued,currentPending,sd_card::sdMounted());
     return !remaining;
 }
 void schedule(bool clear) {
@@ -285,8 +285,7 @@ void crash_report::onSdMounted(const char* why) {
 void crash_report::tick() {
     int action=statusRequested.exchange(0);
     if(action==2){
-        if(ride_recorder::isRecording()){diag::log("crash report test refused: a ride is recording");return;}
-        diag::log("CRASH TEST: deliberate panic requested from serial; no ride is recording");
+        diag::log("CRASH TEST: deliberate panic requested from serial");
         abort();
     }
     bool status=action==1;

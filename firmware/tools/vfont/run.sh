@@ -8,7 +8,7 @@ PREVIEW=$ROOT/tools/preview
 CXXFLAGS="-std=c++17 -O2 -I $PREVIEW/shim -I $EPDIY -I $ROOT/src"
 mkdir -p out
 for f in specimen.cpp "$ROOT/src/epd_compat.cpp" "$ROOT/src/ui_render.cpp" "$ROOT/src/vfont.cpp" \
-         "$ROOT/src/map_view.cpp" "$ROOT/src/map_tiles.cpp" "$ROOT/src/dash_layout.cpp" "$ROOT/src/workout.cpp"; do
+         "$ROOT/src/map_view.cpp" "$ROOT/src/map_tiles.cpp"; do
     clang++ $CXXFLAGS -c "$f" -o "out/$(basename "$f" .cpp).o"
 done
 clang++ out/*.o -lz -o out/specimen

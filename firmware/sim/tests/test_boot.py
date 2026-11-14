@@ -4,13 +4,6 @@ import pytest
 from otpsim import SimDevice
 
 
-def test_boots_to_the_dashboard(device, tmp_path):
-    st = device.wait_status(lambda s: s["screen"] == "dash" and s["paints"] > 0)
-    assert st["page"] == 0
-    shot = device.screenshot(str(tmp_path / "dash.png"))
-    assert open(shot, "rb").read(8) == b"\x89PNG\r\n\x1a\n"
-
-
 def test_doba_boots_to_home_and_the_home_key_toggles_the_map(monkeypatch, tmp_path):
     """DOBA: the device boots to the HOME launcher (the other suites ask the
     sim for OTP's dashboard boot). Home from HOME opens the map, Home from the
@@ -57,9 +50,3 @@ def test_gps_sets_the_clock_on_the_first_fix(device):
     device.wait_status(lambda s: s["ride"]["gps_fix"], timeout=10)
     device.wait_status(lambda s: s["wall_unix"] > 1_700_000_000, timeout=5)
 
-
-def test_settings_survive_a_reboot(device):
-    device.console("autopause 25")
-    assert device.status()["settings"]["auto_pause_s"] == 25
-    device.reboot()
-    assert device.status()["settings"]["auto_pause_s"] == 25

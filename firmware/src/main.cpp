@@ -18,8 +18,7 @@
 #include "rtc_clock.h"
 #include "settings.h"
 #include "doba_battery.h"
-#include "routes.h"
-#include "ride_recorder.h"
+#include "sd_card.h"
 #include "ui_dashboard.h"
 #include "board_power.h"
 #include "i2c_bus.h"
@@ -447,7 +446,7 @@ void setup() {
     // and until this repaint landed the glass sat on "Display" with nothing to
     // say the device was busy — which is what read as a freeze.
     ui_dashboard::bootStep("SD card");
-    bool sdOk = ride_recorder::begin();
+    bool sdOk = sd_card::begin();
     // Crash evidence first: queued crash reports and the pending Memfault dump
     // go to the card NOW, synchronously, before the UI task exists — and so
     // before usb_storage::begin() can hand the card to a host. A device that
@@ -455,17 +454,13 @@ void setup() {
     // Bounded work: at most four short reports and one <=64 KiB dump.
     if (sdOk) crash_report::onSdMounted("boot mount");
     if (sdOk)
-        ui_dashboard::bootDetailFor("SD card", "%lu MB free · %d rides",
-                                    (unsigned long)ride_recorder::sdFreeMB(),
-                                    ride_recorder::rideCount());
-    else if (ride_recorder::sdCardState() == SD_CARD_UNREADABLE)
+        ui_dashboard::bootDetailFor("SD card", "%lu MB free",
+                                    (unsigned long)sd_card::sdFreeMB());
+    else if (sd_card::sdCardState() == SD_CARD_UNREADABLE)
         ui_dashboard::bootDetailFor("SD card", "unreadable · exFAT/FAT32?");
     else
         ui_dashboard::bootDetailFor("SD card", "No SD card");
     ui_dashboard::bootStatus("SD card", sdOk);
-    if (sdOk) {
-        routes::begin();
-    }
     // Restore the wall clock from the coin-cell RTC (which, unlike the ESP32's
     // internal clock, survives a full power-off). Must happen before the GPS
     // warm-start seed below so time-aiding fires on a cold boot too — a cold
@@ -507,7 +502,7 @@ void setup() {
 
     // Mesh messaging. Sits here because the SX1262 needs two things that are now
     // true and were not earlier: the shared 3V3 rail (raised with the GPS above)
-    // and the SPI bus (opened by ride_recorder::begin()).
+    // and the SPI bus (opened by sd_card::begin()).
     ui_dashboard::bootStep("Mesh");
     const bool meshOk = mesh_service::begin();
     if (!mesh_service::enabled())
@@ -645,7 +640,6 @@ void setup() {
     BOOT_STEP("power_mgmt done -> creating tasks");
 
     xTaskCreatePinnedToCore(gps_service::task, "gps", 4096, nullptr, 3, nullptr, 0);
-    xTaskCreatePinnedToCore(ride_recorder::task, "rec", 6144, nullptr, 3, nullptr, 1);
     xTaskCreatePinnedToCore(batteryTask, "bat", 3072, nullptr, 1, nullptr, 1);
     // No task at all when nothing is fitted — the whole feature costs an absent
     // device exactly one bus probe at boot.
@@ -708,7 +702,7 @@ void loop() {
                   (unsigned)uxTaskGetStackHighWaterMark(g_uiTask));
     }
     usb_storage::poll();   // reclaim the SD when the host disconnects
-    ride_recorder::retryMountIfNeeded();   // pick a dropped card back up
+    sd_card::retryMountIfNeeded();   // pick a dropped card back up
     power_mgmt::tick();    // hold light sleep off while the USB console is open
     sd_diagnostics::tick();
     crash_report::tick();

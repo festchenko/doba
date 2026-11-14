@@ -174,9 +174,9 @@ def test_forgetting_the_channel_takes_its_riders_off_the_map(mesh, tmp_path):
 
 # ---- message popups ----------------------------------------------------------------------
 
-def test_a_group_message_pops_up_over_the_ride_screen_then_goes(mesh, tmp_path):
+def test_a_group_message_pops_up_over_the_map_then_goes(mesh, tmp_path):
     group = join_group(mesh)
-    ride(mesh, "dash")
+    ride(mesh, "map")
     assert glass(mesh, tmp_path, "before").ink(*BAND) < 0.5
     introduce(mesh, alex(channel=group))
     seq = mesh.dev.log_seq()
@@ -203,7 +203,7 @@ def test_tapping_the_message_dismisses_it(mesh, tmp_path):
 
 def test_public_channel_messages_do_not_pop_up(mesh, tmp_path):
     join_group(mesh)
-    ride(mesh, "dash")
+    ride(mesh, "map")
     seq = mesh.dev.log_seq()
     mesh.hear(bea().text("anyone out today?"))
     mesh.drain()

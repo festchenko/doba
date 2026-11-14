@@ -11,8 +11,7 @@
 #include "settings.h"
 #include "doba_battery.h"
 #include "board_power.h"
-#include "routes.h"
-#include "ride_recorder.h"
+#include "sd_card.h"
 #include "ui_dashboard.h"
 #include "board_power.h"
 #include "i2c_bus.h"
@@ -67,7 +66,7 @@ void usage() {
             "  --sd-latency-ms N      every card open/read/write costs N ms of device time (a slow card)\n"
             "  --sd-size-mb N         the card's capacity (default 32 GB); writes fail when it is full\n"
             "  --sd-cluster-kb N      its FAT cluster size (default 32 KB from 2 GB up, else 16 KB)\n"
-            "otp-sim card-tool h3|fit ...   build card contents (sim/host/cardtool_sim.cpp)\n"
+            "otp-sim card-tool h3 ...      build card contents (sim/host/cardtool_sim.cpp)\n"
             "  --lora                 an SX1262 LoRa radio is fitted (the mesh); its air is the control channel\n"
             "  --mac AA:BB:CC:DD:EE:FF  the board's MAC (the mesh node number is bytes 2-5)\n"
             "  --quiet                don't echo the console to stdout\n"
@@ -123,19 +122,16 @@ void setup() {
     });
     bool uiOk = ui_dashboard::beginPanel();
     ui_dashboard::bootStep("SD card");
-    bool sdOk = ride_recorder::begin();
+    bool sdOk = sd_card::begin();
     if (sdOk) crash_report::onSdMounted("boot mount");
     if (sdOk)
-        ui_dashboard::bootDetailFor("SD card", "%lu MB free · %d rides",
-                                    (unsigned long)ride_recorder::sdFreeMB(), ride_recorder::rideCount());
-    else if (ride_recorder::sdCardState() == SD_CARD_UNREADABLE)
+        ui_dashboard::bootDetailFor("SD card", "%lu MB free",
+                                    (unsigned long)sd_card::sdFreeMB());
+    else if (sd_card::sdCardState() == SD_CARD_UNREADABLE)
         ui_dashboard::bootDetailFor("SD card", "unreadable · exFAT/FAT32?");
     else
         ui_dashboard::bootDetailFor("SD card", "No SD card");
     ui_dashboard::bootStatus("SD card", sdOk);
-    if (sdOk) {
-        routes::begin();
-    }
     ui_dashboard::bootStep("RTC");
     ui_dashboard::bootDetailFor("RTC", "not found");
     ui_dashboard::bootStatus("RTC", false);
@@ -174,7 +170,6 @@ void setup() {
     ui_dashboard::begin();
     power_mgmt::begin();
     xTaskCreatePinnedToCore(gps_service::task, "gps", 4096, nullptr, 3, nullptr, 0);
-    xTaskCreatePinnedToCore(ride_recorder::task, "rec", 6144, nullptr, 3, nullptr, 1);
     if (meshOk) xTaskCreatePinnedToCore(mesh_service::task, "mesh", 6144, nullptr, 2, nullptr, 0);
     xTaskCreatePinnedToCore(ui_dashboard::task, "ui", 12288, nullptr, 2, nullptr, 1);
     diag::log("boot: all tasks started");
@@ -195,7 +190,7 @@ void loop() {
         }
     }
     usb_storage::poll();
-    ride_recorder::retryMountIfNeeded();
+    sd_card::retryMountIfNeeded();
     power_mgmt::tick();
     sd_diagnostics::tick();
     crash_report::tick();

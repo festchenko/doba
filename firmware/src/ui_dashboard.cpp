@@ -13,7 +13,7 @@
 
 #include "config.h"
 #include "ride_state.h"
-#include "ride_recorder.h"
+#include "sd_card.h"
 #include "sd_bus.h"
 #include "sd_diagnostics.h"
 #include "gps_service.h"
@@ -43,7 +43,6 @@
 
 #include "lora_radio.h"
 #include "mesh_service.h"
-#include "routes.h"
 #include "settings.h"
 #include "speed_source.h"
 #include "aux_sensors.h"
@@ -52,7 +51,6 @@
 #include "memfault_service.h"
 #include "smooth_epd.h"
 #include "power_mgmt.h"
-#include "dash_config.h"
 #include "live_view.h"
 
 namespace {
@@ -67,49 +65,12 @@ int refreshCount = 0;
 uint8_t* shadowFb = nullptr;
 size_t fbSize = 0;
 
-enum Screen { SCREEN_DASH, SCREEN_MAP, SCREEN_SUMMARY, SCREEN_MENU,
-              SCREEN_ROUTES, SCREEN_HISTORY,
-              SCREEN_SETTINGS, SCREEN_GPSDEBUG, SCREEN_DIRECTIONS,
-              SCREEN_MAPLAYERS,
+enum Screen { SCREEN_MAP, SCREEN_GPSDEBUG,
               // DOBA: the launcher, comms and library (doba_ui.h).
               SCREEN_HOME, SCREEN_COMMS, SCREEN_COMPOSE, SCREEN_LIBRARY,
               SCREEN_ARTICLE, SCREEN_SETUP, SCREEN_SETUP_NAME, SCREEN_POINTS,
               SCREEN_POINT, SCREEN_POINT_NEW, SCREEN_MAPOPTS, SCREEN_SOS, SCREEN_SUN, SCREEN_MORE, SCREEN_BATTERY };
-#ifdef OTP_SIM
-// DOBA: the inherited OTP sim suites were written for a dashboard boot; they set
-// DOBA_START=dash (sim/tests/conftest.py). The device always boots to HOME.
-static Screen dobaStartScreen() {
-    const char* s = getenv("DOBA_START");
-    return (s && strcmp(s, "dash") == 0) ? SCREEN_DASH : SCREEN_HOME;
-}
-Screen screen = dobaStartScreen();
-#else
 Screen screen = SCREEN_HOME;   // DOBA: boot lands on the main screen
-#endif
-// Which cycle slot the rider is on (indexes dash_config::pages, which now
-// includes the MAP as a movable page). Deliberately NOT reset by navigation:
-// leaving for the menu or settings and coming back lands on the page the
-// rider was on — the page is a place, not a mode.
-int dashPage = 0;
-
-// First slot that is an actual dashboard (not the map) — where "back to the
-// data page" lands when the current slot is the map.
-int firstContentPage() {
-    for (int i = 0; i < dash_config::pageCount(); ++i)
-        if (dash_config::page(i).kind != DP_MAP) return i;
-    return 0;
-}
-
-int mapSlot() {
-    for (int i = 0; i < dash_config::pageCount(); ++i)
-        if (dash_config::page(i).kind == DP_MAP) return i;
-    return dash_config::pageCount() - 1;
-}
-RideSummary pendingSummary;
-// The summary sheet is doing boot-recovery duty: it shows the ride a reset cut
-// short, and its buttons resolve that ride (CONTINUE / SAVE / DISCARD) instead
-// of stopping a live one.
-bool recoveryPrompt = false;
 
 float mapMpp = 2.0f;  // map zoom: 1/2/4/8/16/32 m per px (wide levels show tiles)
 // DOBA: the last map frame was a topo one. Topo packs carry zooms 9-16, so the
@@ -162,17 +123,11 @@ uint8_t* mapLayerBeingKept = nullptr;
 // injected in the task loop mirror button presses. See pollSerialCommands().
 bool dbgTiming = false;
 
-// When the "Start navigation?" prompt appeared (for the accept settle guard).
-uint32_t navPromptShownAt = 0;
 
 // Turn-by-turn banner rect (top of map/dashboard); tapping it ends nav.
 const EpdRect kNavBanner = {0, ui::STATUS_H, 540, 138};
-// onlyWithinM > 0 limits the banner to an APPROACHING turn — pages whose
-// content the band would bury (music, workout) get it as a popup instead of
-// a fixture. bandDrawnThisFrame feeds the dismissal scrub: any top-band
-// overlay leaving the glass needs its ghost cleared.
-void drawNavBanner(uint8_t* fb, float onlyWithinM = 0);
-void drawPauseBanner(const RideState& s, uint8_t* fb);
+// bandDrawnThisFrame feeds the dismissal scrub: a popup leaving the glass
+// needs its ghost cleared.
 void drawMeshNotice(uint8_t* fb);
 bool bandDrawnThisFrame = false;
 
@@ -183,27 +138,10 @@ mesh_service::Notice notice;
 uint32_t noticeSeq = 0;
 bool noticeUp = false;
 uint32_t noticeUntilMs = 0;
-// A turn this close keeps the band: the message can wait ten seconds, the
-// turn cannot.
-constexpr float kNoticeYieldsToTurnM = 200.0f;
-bool meshNoticeShown() {
-    if (!noticeUp) return false;
-    if (routes::navActive()) {
-        char instr[routes::MANEUVER_TEXT];
-        float dist = 0;
-        if (routes::nextTurn(instr, sizeof(instr), dist) &&
-            dist <= kNoticeYieldsToTurnM)
-            return false;
-    }
-    return true;
-}
+bool meshNoticeShown() { return noticeUp; }
 void buildMapScreenData(const RideState& s, MapScreenData& map,
                         bool finalFrame = false);
 
-// Which screen the Sensors page was opened from, so back returns there.
-
-// Same for the upcoming-directions list, reached by tapping the turn banner.
-Screen directionsFrom = SCREEN_MAP;
 
 // Set from the GT911 home-button callback (fires inside touch.getPoint()).
 volatile bool homeKeyPressed = false;
@@ -406,16 +344,13 @@ void shutdownDevice(uint8_t* fb, const char* reason) {
     // that window the press read as a miss (and got pressed again). The paint
     // is asynchronous on this backend, so the band is drawing while the ride
     // saves — acknowledgment costs no extra wall-clock.
-    ui_render_shutdown_ack(ride_recorder::isRecording(), fb);
+    ui_render_shutdown_ack(false, fb);
     epdc_paint();
 
     // Log WHY we're powering off and flush it to SD before deep sleep, so the
     // next boot's log distinguishes a user shutdown / auto-sleep from a reset
     // or a power loss (which leave no such line).
     diag::log("shutdown: %s", reason);
-    if (ride_recorder::isRecording()) {
-        ride_recorder::stopRide(true);  // never lose a ride to power-off
-    }
     diag::flushToSD();
 
     // Leave a static farewell on the glass — e-paper keeps it for free.
@@ -477,7 +412,7 @@ void shutdownDevice(uint8_t* fb, const char* reason) {
     // whether the GPS is still talking on RX afterwards.
     radioRailOffProbe();
     diag::log("sleep: final SD flush; mounted=%d host=%d CS=%d/%d bl=%d",
-              ride_recorder::sdMounted(), usb_storage::hostActive(),
+              sd_card::sdMounted(), usb_storage::hostActive(),
               digitalRead(BOARD_SD_CS), digitalRead(BOARD_LORA_CS),
               digitalRead(BOARD_BL_EN));
     diag::flushToSD();
@@ -553,28 +488,7 @@ void shutdownDevice(uint8_t* fb, const char* reason) {
     esp_deep_sleep_start();
 }
 
-// Screen-space route overlay (rebuilt each map render)
-constexpr int MAX_ROUTE_SCREEN_PTS = 4096;
-int16_t* routeScreenPts = nullptr;
 
-// Navigate and Ride History page through a listing read from the card once —
-// when the screen opens, on REFRESH, or when the card or the ride being
-// recorded changes — never on the 1 Hz redraw: the card runs at 4 MHz under
-// sdLock, and touch is only read between loop passes. Paging just indexes the
-// copy. Both arrays live in PSRAM, allocated on first use.
-constexpr int kRouteListMax = 128;
-constexpr int kRideListMax = 256;
-char (*routeFiles)[routes::MAX_NAME] = nullptr;
-int routeFileCount = 0;
-ride_recorder::RideFile* rideFiles = nullptr;
-int rideFileCount = 0;
-bool listStale = true;    // re-read the card on the next render
-int listPage = 0;         // which page of kMenuRowCount rows is showing
-// What the last frame showed, so a tap maps to the row the rider saw: the
-// whole list's length, and how many pinned rows ("Clear route", "Recording in
-// progress") sit ahead of the files.
-int listTotal = 0;
-int listPinned = 0;
 
 // Long-press tracking
 uint32_t touchDownAt = 0;
@@ -634,8 +548,8 @@ void noteActivity() {
 // the minute turns, and every 30 s at the latest — a full render a second for
 // nothing was most of the UI task's CPU on a page being read.
 bool liveScreen(Screen sc) {
-    return sc == SCREEN_MAP || sc == SCREEN_DASH || sc == SCREEN_SOS || sc == SCREEN_GPSDEBUG ||
-           sc == SCREEN_SUN || sc == SCREEN_SUMMARY || sc == SCREEN_HOME || sc == SCREEN_DIRECTIONS;
+    return sc == SCREEN_MAP || sc == SCREEN_SOS || sc == SCREEN_GPSDEBUG ||
+           sc == SCREEN_SUN || sc == SCREEN_HOME;
 }
 bool tickDue(Screen sc, uint32_t lastDraw) {
     const uint32_t since = millis() - lastDraw;
@@ -672,8 +586,6 @@ bool tickDue(Screen sc, uint32_t lastDraw) {
 // still leaving an unchanged half-screen alone.
 constexpr int kDirtyClearTolerance = 24 * 960;
 
-// Set for one refresh() when greyed-out cells are arriving on the glass.
-bool hardClearToned = false;
 // Set for one refresh() when a zoom needs its water scrubbed: where that water is.
 const uint8_t* scrubBits = nullptr;
 
@@ -716,12 +628,6 @@ bool refresh(bool screenChanged, bool fastInPage, bool listFast,
     // on the way out, not when the power sheet opens over it, and not on the
     // 1 Hz map redraws.
     if (fullFlash) epdc_clear_dirty(kDirtyClearTolerance);
-    if (hardClearToned) {
-        const EpdRect* rects = nullptr;
-        const int count = ui_render_dashboard_toned_rects(&rects);
-        epdc_clear_rects(rects, count);
-        hardClearToned = false;
-    }
     if (scrubBits) {
         epdc_scrub_bits(scrubBits);
         scrubBits = nullptr;
@@ -740,16 +646,7 @@ bool refresh(bool screenChanged, bool fastInPage, bool listFast,
 // DU path between frames. Screens with gray tones must take GL16.
 bool screenIsFast(Screen s, bool overlay) {
     if (overlay) return false;  // power sheet has gray subtitle
-    return s == SCREEN_DASH || s == SCREEN_MAP || s == SCREEN_GPSDEBUG;
-}
-
-// The menu / list / settings screens are pure black/white, so both their page
-// changes and any in-place updates can take the fast DU path instead of the
-// slower GL16 — this is what makes "switching menu state" feel snappy.
-bool screenListFast(Screen s) {
-    return s == SCREEN_MENU || s == SCREEN_ROUTES ||
-           s == SCREEN_HISTORY || s == SCREEN_SETTINGS ||
-           s == SCREEN_DIRECTIONS || s == SCREEN_MAPLAYERS;
+    return s == SCREEN_MAP || s == SCREEN_GPSDEBUG;
 }
 
 bool inRect(const EpdRect& r, int x, int y) {
@@ -757,37 +654,6 @@ bool inRect(const EpdRect& r, int x, int y) {
 }
 
 void handlePowerTap(int x, int y);
-void ackPagerTap(const EpdRect& r);
-
-// Open Navigate or Ride History on its first page, with a fresh read of the
-// card.
-void enterPagedList(Screen s) {
-    screen = s;
-    listPage = 0;
-    listStale = true;
-}
-
-// The pager footer of Navigate / Ride History (ui_render_pager). True when the
-// tap landed in the footer band, whether or not it hit a button, so a missed
-// arrow never falls through to "back to the menu".
-bool listPagerTap(int x, int y) {
-    if (y < kPagerTop) return false;
-    if (inRect(kPagerUp, x, y)) {
-        if (listPage > 0) { --listPage; ackPagerTap(kPagerUp); }
-    } else if (inRect(kPagerDown, x, y)) {
-        if ((listPage + 1) * kMenuRowCount < listTotal) {
-            ++listPage;
-            ackPagerTap(kPagerDown);
-        }
-    } else if (inRect(kPagerAction, x, y)) {
-        listStale = true;   // REFRESH: re-read the card
-        ackPagerTap(kPagerAction);
-    }
-    // The new page draws now, not at the next 1 Hz tick: the screen itself
-    // doesn't change, so nothing else would hurry it.
-    forceDraw = true;
-    return true;
-}
 
 // DOBA: which doba_ui page a screen is, and acting on where a page leads.
 doba_ui::Page dobaPage() {
@@ -809,8 +675,6 @@ doba_ui::Page dobaPage() {
         default:             return doba_ui::HOME;
     }
 }
-void enterPagedList(Screen s);
-void startOrStopTrack();
 void dobaGo(doba_ui::Go g) {
     switch (g) {
         case doba_ui::STAY:        break;
@@ -821,10 +685,6 @@ void dobaGo(doba_ui::Go g) {
         case doba_ui::TO_ARTICLE:  screen = SCREEN_ARTICLE; break;
         case doba_ui::TO_COMMS:    screen = SCREEN_COMMS; break;
         case doba_ui::TO_COMPOSE:  screen = SCREEN_COMPOSE; break;
-        case doba_ui::TO_TRACKS:   enterPagedList(SCREEN_HISTORY); break;
-        case doba_ui::TO_ROUTES:   enterPagedList(SCREEN_ROUTES); break;
-        case doba_ui::TO_SETTINGS: screen = SCREEN_SETTINGS; break;
-        case doba_ui::TO_RECORD:   startOrStopTrack(); break;
         case doba_ui::TO_SETUP:    screen = SCREEN_SETUP; break;
         case doba_ui::TO_SETUP_NAME: screen = SCREEN_SETUP_NAME; break;
         case doba_ui::TO_POINTS:   screen = SCREEN_POINTS; break;
@@ -842,21 +702,12 @@ void dobaGo(doba_ui::Go g) {
 
 // Navigate up one level in the screen hierarchy (front button, short press).
 void goBack() {
-    if (routes::navPending()) {
-        routes::dismissNav();
-        return;
-    }
     if (powerOverlay) {
         powerOverlay = false;
         return;
     }
     switch (screen) {
         case SCREEN_GPSDEBUG: screen = SCREEN_MORE; break;   // DOBA
-        case SCREEN_MAPLAYERS: screen = SCREEN_MAP; break;
-        case SCREEN_DIRECTIONS: screen = directionsFrom; break;
-        case SCREEN_SETTINGS: screen = SCREEN_SETUP; break;  // DOBA: OTP's settings are "MORE"
-        case SCREEN_ROUTES:
-        case SCREEN_HISTORY:  screen = SCREEN_HOME; break;   // DOBA: was the menu
         case SCREEN_HOME:
         case SCREEN_COMMS:
         case SCREEN_COMPOSE:
@@ -864,54 +715,7 @@ void goBack() {
         case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
         case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE: case SCREEN_BATTERY:
         case SCREEN_ARTICLE:  dobaGo(doba_ui::back(dobaPage())); break;
-        case SCREEN_MENU:     screen = SCREEN_DASH; break;
         case SCREEN_MAP:      screen = SCREEN_HOME; break;   // DOBA: the map is a page of Doba's home
-        // Back on the summary resumes the ride (non-destructive); SAVE / DISCARD
-        // must be tapped explicitly.
-        case SCREEN_SUMMARY:
-            // Backing out of the recovery prompt settles it the safe way:
-            // finalize and keep the ride. Same philosophy as power-off.
-            if (recoveryPrompt) {
-                recoveryPrompt = false;
-                ride_recorder::resolveRecovery(ride_recorder::RECOVERY_SAVE);
-            }
-            screen = SCREEN_DASH;
-            break;
-        case SCREEN_DASH:     break;  // already home
-    }
-}
-
-// DOBA: the menu's old row 0, shared with the main screen's RECORD tile.
-void startOrStopTrack() {
-    if (ride_recorder::isRecording()) {
-        pendingSummary = ride_recorder::summary();
-        screen = SCREEN_SUMMARY;
-    } else {
-        ride_recorder::startRide();
-        dashPage = firstContentPage();
-        screen = SCREEN_DASH;
-    }
-}
-
-// Paint the acknowledgment band NOW, before a tap handler runs seconds of SD
-// work (finalizing or discarding a FIT). The paint is asynchronous, so the
-// band draws while the work runs; the next frame repaints over it.
-void paintBusyBand(const char* title) {
-    // 440/180: start at the summary sheet's top edge and cover its label and
-    // hero line whole — a half-clipped hero read as a rendering glitch.
-    ui_render_busy_band(title, "one moment...", epdc_framebuffer(), 440, 180);
-    epdc_paint();
-}
-
-// BOOT short-press: start a ride, or stop it (via the save/discard summary).
-void toggleRide() {
-    if (ride_recorder::isRecording()) {
-        pendingSummary = ride_recorder::summary();
-        screen = SCREEN_SUMMARY;
-    } else {
-        recoveryPrompt = false;   // startRide() saves any still-pending ride
-        ride_recorder::startRide();
-        screen = SCREEN_DASH;
     }
 }
 
@@ -947,18 +751,6 @@ void ackZoomTap(bool zoomIn) {
     // on a cold zoom the outer tiles can take a moment to arrive. Held down, the
     // button is doing the job a spinner would.
     zoomHeld = zoomIn ? 1 : 2;
-}
-
-// Answer a pager tap (arrow or the action button) NOW, the way ackZoomTap
-// answers a zoom: fill the button black on the glass before the page is
-// rebuilt. The next page only changes a few rows of text, which on e-paper is
-// easy to miss, so without this a tap that registered looked like one that
-// hadn't. The redraw that follows draws the button normally again. Through
-// refresh() so the shadow buffer matches the glass.
-void ackPagerTap(const EpdRect& r) {
-    uint8_t* fb = epdc_framebuffer();
-    epd_fill_rect(r, ui::INK, fb);
-    refresh(false, true, false);
 }
 
 // DOBA: "heard you, working on it". A tap that opens a book, a page of the
@@ -1016,7 +808,7 @@ bool isDobaSubPage(Screen sc) {
         case SCREEN_COMMS: case SCREEN_COMPOSE: case SCREEN_LIBRARY: case SCREEN_ARTICLE:
         case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS: case SCREEN_POINT:
         case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE: case SCREEN_BATTERY:
-        case SCREEN_MAP: case SCREEN_SETTINGS: case SCREEN_GPSDEBUG: case SCREEN_MAPLAYERS:
+        case SCREEN_MAP: case SCREEN_GPSDEBUG:
             return true;
         default:
             return false;
@@ -1024,26 +816,6 @@ bool isDobaSubPage(Screen sc) {
 }
 
 void handleTap(int x, int y) {
-    // The "Start navigation?" prompt owns every tap while it is up. START
-    // begins navigation; any other tap dismisses it, so it can never trap
-    // the UI.
-    if (routes::navPending()) {
-        // Ignore taps for a moment after the prompt appears so a touch that
-        // was already in progress when the route arrived can't auto-accept
-        // it. The user must deliberately tap START.
-        if (millis() - navPromptShownAt < 700) return;
-        if (inRect(kPowerShutdown, x, y)) {
-            routes::startNav();
-            screen = SCREEN_MAP;
-        } else {
-            // LATER: don't just stop navigating — fully unload the route so it
-            // isn't drawn on the map. It's still saved on the SD card, so it can
-            // be started later from Saved Routes.
-            routes::clearRoute();
-        }
-        return;
-    }
-
     // DOBA: Doba's sub-pages carry a BACK chevron at the left of the band (the
     // Home key still goes back too; this is the one a new user finds).
     if (y < ui::STATUS_H && x < ui::BACK_W + 20 && isDobaSubPage(screen)) {
@@ -1051,57 +823,24 @@ void handleTap(int x, int y) {
         return;
     }
 
-    // No BACK strip to hit-test: the Home button below the glass goes back from
-    // every sub-screen, so the strip was a full-width control duplicating a key
-    // the rider's thumb is already on, for 96 px of every page.
-
-    // Tapping the turn banner opens the rest of the route's directions. It used
-    // to end navigation, which is a destructive action on the one control a
-    // rider is most likely to hit by accident — and it threw away the thing they
-    // probably wanted, which is to see what is coming up. Navigation is ended
-    // from the menu instead.
-    // A message popup over the band is dismissed by tapping it, ahead of what
-    // the band would otherwise do underneath (directions, resume).
-    if (meshNoticeShown() && inRect(kNavBanner, x, y) &&
-        (screen == SCREEN_DASH || screen == SCREEN_MAP)) {
+    // A message popup is dismissed by tapping it.
+    if (meshNoticeShown() && inRect(kNavBanner, x, y) && screen == SCREEN_MAP) {
         noticeUp = false;
         noteActivity();
         return;
     }
 
-    if (routes::navActive() && inRect(kNavBanner, x, y) &&
-        (screen == SCREEN_DASH || screen == SCREEN_MAP)) {
-        directionsFrom = screen;
-        screen = SCREEN_DIRECTIONS;
-        noteActivity();
-        return;
-    }
-
-    // Tapping the AUTO-PAUSED banner (same band, shown when nav isn't) resumes
-    // the ride by hand. Clearing the pause is also what restarts the sensor
-    // hunt — its gate is "recording and not parked" — so a rider tapping at
-    // the end of a coffee stop gets their meter and strap reconnecting while
-    // they clip in, instead of waiting for GPS to notice they're rolling.
-    if (!routes::navActive() && inRect(kNavBanner, x, y) &&
-        (screen == SCREEN_DASH || screen == SCREEN_MAP) &&
-        g_state.snapshot().ridePaused) {
-        ride_recorder::manualResume();
-        noteActivity();
-        return;
-    }
-
     switch (screen) {
-        case SCREEN_DASH:
         case SCREEN_MAP:
-            if (screen == SCREEN_MAP) {
+            {
                 int dx = x - kMapCompass.cx,
-                    dy = y - mapCompassCy(routes::navActive()) - (mapTopoActive ? 56 : 0);
+                    dy = y - mapCompassCy(false) - (mapTopoActive ? 56 : 0);
                 if (dx * dx + dy * dy <= kMapCompass.r * kMapCompass.r) {
                     mapTrackUp = !mapTrackUp;
                     break;
                 }
             }
-            if (screen == SCREEN_MAP && x >= kMapZoom.zoomX &&
+            if (x >= kMapZoom.zoomX &&
                 x < kMapZoom.zoomX + kMapZoom.size) {
                 // DOBA: the layers button opens Doba's map options (OTP's were
                 // cycling layers: bike routes, toilets, bike shops).
@@ -1128,98 +867,18 @@ void handleTap(int x, int y) {
                     break;
                 }
             }
-            // Status bar opens the menu. On the map, the DATA STRIP along the
-            // bottom (below MAP_STRIP_TOP, clear of the zoom buttons at y 560
-            // and 640) goes to the dashboard. The body of either screen does
-            // nothing.
-            //
-            // Tapping anywhere used to flip, which made the map hostile to use:
-            // every miss of the compass or a zoom button threw the rider off the
-            // map, and on the dashboard a stray glove brush did the same. The
-            // flip now has deliberate targets — that strip, and the Home key,
-            // which is the only way back to the map.
             // DOBA: a tap on the cross of a dragged map sets A there (or clears
             // it); the strip then measures from A to wherever the cross goes.
-            if (screen == SCREEN_MAP && mapTopoActive && mapPanned() &&
+            if (mapPanned() &&
                 abs(x - 270) < 56 && abs(y - milspec::kCrossY) < 56) {
                 milspec::measureToggleAtCross();
                 Serial.printf("[map] measure %s\n", milspec::measureOn() ? "A set" : "off");
                 break;
             }
             if (y < ui::STATUS_H) screen = SCREEN_HOME;   // DOBA: was the menu
-            else if (screen == SCREEN_MAP && y >= ui::MAP_STRIP_TOP) {
+            else if (y >= ui::MAP_STRIP_TOP) {
                 screen = SCREEN_POINTS;   // DOBA: the strip opens POSITION (no ride dashboard)
             }
-            break;
-        case SCREEN_SUMMARY:
-            if (inRect(kResumeButton, x, y)) {
-                if (recoveryPrompt) {
-                    // CONTINUE: reopen the interrupted file and keep recording.
-                    // Resuming replays the whole record stream first.
-                    paintBusyBand("RESUMING TRACK");
-                    recoveryPrompt = false;
-                    ride_recorder::resolveRecovery(ride_recorder::RECOVERY_CONTINUE);
-                }
-                // Live ride: it never stopped recording — just go back to the
-                // dashboard and keep going.
-                screen = SCREEN_DASH;
-            } else if (inRect(kSaveButton, x, y)) {
-                paintBusyBand("SAVING TRACK");
-                if (recoveryPrompt) {
-                    recoveryPrompt = false;
-                    ride_recorder::resolveRecovery(ride_recorder::RECOVERY_SAVE);
-                } else {
-                    ride_recorder::stopRide(true);
-                }
-                screen = SCREEN_DASH;
-            } else if (inRect(kDiscardButton, x, y)) {
-                paintBusyBand("DISCARDING TRACK");
-                if (recoveryPrompt) {
-                    recoveryPrompt = false;
-                    ride_recorder::resolveRecovery(ride_recorder::RECOVERY_DISCARD);
-                } else {
-                    ride_recorder::stopRide(false);
-                }
-                screen = SCREEN_DASH;
-            }
-            break;
-        case SCREEN_MENU: {
-            int row = (y - kMenuRowTop) / kMenuRowH;
-            if (y >= kMenuRowTop && row >= 0 && row < kMenuRowCount) {
-                switch (row) {
-                    case 0: startOrStopTrack(); break;
-                    case 1: enterPagedList(SCREEN_ROUTES); break;
-                    case 3: enterPagedList(SCREEN_HISTORY); break;
-                    case 4: screen = SCREEN_SETTINGS; break;
-                }
-            } else {
-                screen = SCREEN_DASH;  // header or footer: back to ride
-            }
-            break;
-        }
-        case SCREEN_DIRECTIONS:   // a tap anywhere goes back to where it came from
-            screen = directionsFrom;
-            break;
-        case SCREEN_ROUTES: {
-            if (listPagerTap(x, y)) break;
-            int row = (y - kMenuRowTop) / kMenuRowH;
-            if (y >= kMenuRowTop && row >= 0 && row < kMenuRowCount) {
-                int idx = listPage * kMenuRowCount + row;
-                if (idx < listPinned) {
-                    routes::clearRoute();
-                } else if (idx < listTotal && idx - listPinned < routeFileCount) {
-                    if (routes::load(routeFiles[idx - listPinned])) {
-                        screen = SCREEN_MAP;
-                    }
-                }
-            } else {
-                screen = SCREEN_HOME;   // DOBA
-            }
-            break;
-        }
-        case SCREEN_HISTORY:
-            // Rows aren't actions (yet): any tap outside the pager goes back.
-            if (!listPagerTap(x, y)) screen = SCREEN_HOME;   // DOBA
             break;
         case SCREEN_HOME:
         case SCREEN_COMMS:
@@ -1243,92 +902,10 @@ void handleTap(int x, int y) {
             if (settings::backlight() != bl) applyBacklight(settings::backlight());
             break;
         }
-        case SCREEN_SETTINGS: {
-            int row = (y - kMenuRowTop) / kSettingsRowH;
-            bool inRows = y >= kMenuRowTop && row >= 0 && row < kSettingsRowCount;
-            // BACKLIGHT is NOT a toggle row: ui_render_settings draws it with the
-            // -/+ stepper (four levels don't fit a switch), so it must be hit-
-            // tested like one. It used to be listed here, which meant only the
-            // toggle band — overlapping the + button — did anything: "-" fell
-            // through to the "tap anywhere else" branch and bounced the rider
-            // out to the menu instead of dimming the light.
-            bool toggleRow = row == kSettingsUnitsRow || row == kSettingsUsbRow ||
-                             row == kSettingsOfflineRow || row == kSettingsMeshRow;
-            bool minus = x >= kSettingsMinusX && x < kSettingsMinusX + kSettingsBtn;
-            bool plus = x >= kSettingsPlusX && x < kSettingsPlusX + kSettingsBtn;
-            // Per-row, because UNITS draws a wider switch: a fixed rect would
-            // leave its left third dead, and a stray tap there falls through to
-            // the do-nothing branch with no feedback.
-            const int togX = inRows ? settingsToggleX(row) : kSettingsToggleX;
-            const int togW = inRows ? settingsToggleW(row) : kSettingsToggleW;
-            bool toggleHit = x >= togX && x < togX + togW;
-            bool edited = false;
-            if (inRows && !toggleRow && (minus || plus)) {
-                int dir = plus ? 1 : -1;
-                // DOBA: row 0 is the mils system: either button flips it.
-                if (row == 0) milspec::setMilsSystem(milspec::milsSystem() == 6400 ? 6000 : 6400);
-                if (row == 1) settings::setTzMinutes(settings::tzMinutes() + dir * 30);
-                if (row == kSettingsBacklightRow) {
-                    // Clamped, not wrapped: with a visible -/+ pair, "+" at
-                    // Bright wrapping round to Off would read as a fault. (The
-                    // side key still cycles — that one has nowhere else to go.)
-                    int bl = settings::backlight() + dir;
-                    if (bl < 0) bl = 0;
-                    if (bl > 3) bl = 3;
-                    settings::setBacklight(bl);
-                    applyBacklight(bl);
-                }
-                edited = true;
-            } else if (inRows && toggleRow && toggleHit) {
-                if (row == kSettingsUnitsRow) {
-                    settings::setUseMiles(!settings::useMiles());
-                } else if (row == kSettingsUsbRow) {
-                    bool on = !settings::usbDrive();
-                    settings::setUsbDrive(on);
-                    usb_storage::setDriveEnabled(on);
-                } else if (row == kSettingsMeshRow) {
-                    // REQUEST, not apply: setEnabled() stages the change for the
-                    // mesh task, which owns the radio. Doing the bring-up from
-                    // the touch handler would drive SPI from a second task and
-                    // is exactly what sd_bus.h warns about. Persisting is the
-                    // task's job too (applyEnabled -> settings::setMeshEnabled),
-                    // so nothing is written here.
-                    mesh_service::setEnabled(!mesh_service::enabled());
-                } else {   // show offline sensor fields
-                    settings::setShowOffline(!settings::showOffline());
-                }
-                edited = true;
-            }
-            if (edited) {
-                g_state.with([](RideState& st) {
-                    st.tzMin = (int16_t)settings::tzMinutes();
-                    st.useMiles = settings::useMiles();
-                    st.clock24h = settings::clock24h();
-                    st.showOffline = settings::showOffline();
-                });
-            } else if (y >= kMenuRowTop && row == kSettingsGpsRow) {
-                screen = SCREEN_GPSDEBUG;
-            }
-            // Anything else on this screen does NOTHING. Settings is the one
-            // place where a stray touch used to navigate away mid-edit — reach
-            // for a stepper, miss it by a few pixels, and you were back on the
-            // menu with the change unmade. The capacitive Home key (goBack())
-            // is the only way out.
-            break;
-        }
-        case SCREEN_MAPLAYERS: {
-            // A row flips its layer; the map picks the mask up on its next
-            // frame. Anything else does nothing — Home goes back to the map,
-            // as on Settings, so a near-miss never navigates away mid-edit.
-            const int row = ui_map_layers_hit(x, y);
-            if (row >= 0) {
-                settings::setMapLayers(settings::mapLayers() ^ ui_map_layer_bit(row));
-            }
-            break;
-        }
         case SCREEN_GPSDEBUG:
             // Experimental: a tap in the top band runs the smooth-drive
-            // pipeline self-test; anywhere else navigates back to Settings.
+            // pipeline self-test; anywhere else goes back to More, where it
+            // was opened from (it went to the old bike Settings page).
             if (y < 150) {
                 smooth_epd::selfTest();
                 // The self-test drove the panel directly, behind the driver's
@@ -1338,7 +915,7 @@ void handleTap(int x, int y) {
                 epdc_clear();
                 if (shadowFb) memset(shadowFb, 0, fbSize);
             } else {
-                screen = SCREEN_SETTINGS;
+                screen = SCREEN_MORE;
             }
             break;
     }
@@ -1566,24 +1143,16 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
     // Tell the map renderer to drop the compass below the turn banner when one
     // is drawn over the top of the viewport. The pause banner sits in the same
     // band, so it displaces the compass the same way.
-    map.navBannerVisible = routes::navActive() || s.ridePaused ||
-                           meshNoticeShown();
+    map.navBannerVisible = meshNoticeShown();
     map.metersPerPixel = mapMpp;
     map.layers = settings::mapLayers();
 
-    // Position priority: the device's own current GPS fix; else the connected
-    // phone's recent location (fallback when our receiver is cold); else the
-    // last known device position; else the persisted/default. Never jump to the
-    // default mid-ride.
+    // Position priority: the current GPS fix; else the last known position;
+    // else the persisted/default.
     double lat = DEFAULT_MAP_LAT, lon = DEFAULT_MAP_LON;
-    bool phoneRecent = s.phoneFixValid && (millis() - s.phoneFixMs) < 15000;
-    map.phonePosition = phoneRecent && !s.gpsFix;
     if (s.gpsFix) {
         lat = s.latitude;
         lon = s.longitude;
-    } else if (phoneRecent) {
-        lat = s.phoneLat;
-        lon = s.phoneLon;
     } else if (s.everHadFix) {
         lat = s.latitude;
         lon = s.longitude;
@@ -1715,23 +1284,6 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
                               /*cachedOnly=*/finalFrame ? false : !mapFullPass);
     }
 
-    if (routes::active() && routeScreenPts) {
-        int n = routes::pointCount();
-        if (n > MAX_ROUTE_SCREEN_PTS) n = MAX_ROUTE_SCREEN_PTS;
-        for (int i = 0; i < n; ++i) {
-            double plat, plon;
-            routes::point(i, plat, plon);
-            map_tiles::geoToScreen(plat, plon, lat, lon, mapMpp, map.riderX,
-                                   map.riderY, rot, routeScreenPts[i * 2],
-                                   routeScreenPts[i * 2 + 1]);
-        }
-        map.route = routeScreenPts;
-        map.routePointCount = n;
-        map.riddenPointCount = routes::progressIndex() + 1;
-        map.showRemaining = true;
-        map.remainingKm = routes::remainingKm();
-    }
-
     // Not on the farewell frame: that one stays on the glass for days, long
     // after anyone is still where it would show them.
     if (!finalFrame) buildMapPeers(lat, lon, rot, s.useMiles, map);
@@ -1771,7 +1323,6 @@ void renderMapWithCache(const MapScreenData& map, const RideState& s, uint8_t* f
 
 void renderMapScreen(const RideState& s, uint8_t* fb) {
     MapScreenData map = {};
-    for (int i = 0; i < 3; ++i) map.stripFields[i] = dash_config::mapField(i);
     uint32_t m0 = millis();
     buildMapScreenData(s, map);
     uint32_t m1 = millis();
@@ -1827,8 +1378,6 @@ void renderMapScreen(const RideState& s, uint8_t* fb) {
                   map.partial ? " cut" : "", (int)mapMpp,
                   map.poiCount, map_tiles::projectStats().poisDropped,
                   map.centerLat, map.centerLon, map.peerCount);
-    drawNavBanner(fb);
-    drawPauseBanner(s, fb);
     drawMeshNotice(fb);
 }
 
@@ -1836,7 +1385,7 @@ void renderMapScreen(const RideState& s, uint8_t* fb) {
 // per call, so a tap only has to put it on the panel. Runs in the UI task's idle time and
 // gives way to a finger, which is checked all the way through.
 void mapPrerenderStep() {
-    if (!mapCacheOn || screen != SCREEN_MAP || powerOverlay || routes::navPending() ||
+    if (!mapCacheOn || screen != SCREEN_MAP || powerOverlay ||
         zoomHeld) return;
     const uint32_t now = millis();
     if (now - mapStillSince < kMapStillMs || (int32_t)(now - mapPrerenderNotBefore) < 0) return;
@@ -1886,7 +1435,6 @@ void mapPrerenderStep() {
 // One full map frame through the cache, as the UI task would make it.
 void mapTestFrame(const RideState& s, MapScreenData& map, uint8_t* fb) {
     map = MapScreenData();
-    for (int i = 0; i < 3; ++i) map.stripFields[i] = dash_config::mapField(i);
     memset(fb, 0xFF, fbSize);
     mapFullPass = true;
     buildMapScreenData(s, map);
@@ -1969,33 +1517,6 @@ void farewellTest() {
     forceDraw = true;
 }
 
-// Turn-by-turn banner across the top, shown on the map AND the dashboard while
-// navigating. Tapping it (kNavBanner) opens the directions list.
-//
-// Units come from the shared state, the same source the directions list reads,
-// rather than settings:: directly. Both stay in sync today (the settings screen
-// and the phone's BLE settings write both), but reading one fact from two
-// places is what made the list and the banner disagree in the first place.
-void drawNavBanner(uint8_t* fb, float onlyWithinM) {
-    if (!routes::navActive()) return;
-    char instr[routes::MANEUVER_TEXT];
-    float dist = 0;
-    if (routes::nextTurn(instr, sizeof(instr), dist)) {
-        if (onlyWithinM > 0 && dist > onlyWithinM) return;
-        ui_render_nav_banner(instr, dist, g_state.snapshot().useMiles, fb);
-        bandDrawnThisFrame = true;
-    }
-}
-
-// Auto-pause banner in the same band, on the same two screens. The turn banner
-// wins when both apply — a rider stopped AT a turn needs the instruction, and
-// the status bar's PAUSED chip still covers the pause.
-void drawPauseBanner(const RideState& s, uint8_t* fb) {
-    if (routes::navActive() || !s.ridePaused) return;
-    ui_render_pause_banner(fb);
-    bandDrawnThisFrame = true;
-}
-
 // A private-channel message, over whatever else is in the band for its ten
 // seconds (except a turn that is close — see meshNoticeShown).
 void drawMeshNotice(uint8_t* fb) {
@@ -2007,155 +1528,6 @@ void drawMeshNotice(uint8_t* fb) {
 
 
 
-
-// Keep the page in range when the list shrinks under it (a route cleared,
-// a REFRESH that found fewer files).
-void clampListPage() {
-    const int last = listTotal > 0 ? (listTotal - 1) / kMenuRowCount : 0;
-    if (listPage > last) listPage = last;
-    if (listPage < 0) listPage = 0;
-}
-
-void renderListScreen(uint8_t* fb) {
-    ListRow rows[kMenuRowCount] = {};
-    int count = 0;
-    const char* title = "";
-    const char* footer = "";
-    bool paged = false;   // Navigate / Ride History: rows + ui_render_pager
-
-    switch (screen) {
-        case SCREEN_ROUTES: {
-            title = "ROUTES";
-            paged = true;
-            const bool sd = ride_recorder::sdMounted();
-            footer = sd ? "put .gpx files in /routes on the SD card"
-                        : "no SD card";
-            if (!routeFiles)
-                routeFiles = (char(*)[routes::MAX_NAME])heap_caps_malloc(
-                    kRouteListMax * routes::MAX_NAME, MALLOC_CAP_SPIRAM);
-            static bool listedWithCard = false;
-            if (listStale || sd != listedWithCard) {
-                routeFileCount =
-                    sd && routeFiles ? routes::list(routeFiles, kRouteListMax)
-                                     : 0;
-                listedWithCard = sd;
-                listStale = false;
-            }
-            // The active route is a pinned "Clear route" row ahead of the
-            // files, so it leads page 1.
-            listPinned = routes::active() ? 1 : 0;
-            listTotal = listPinned + routeFileCount;
-            clampListPage();
-            for (int i = listPage * kMenuRowCount;
-                 i < listTotal && count < kMenuRowCount; ++i, ++count) {
-                ListRow& r = rows[count];
-                if (i < listPinned) {
-                    snprintf(r.title, sizeof(r.title), "Clear route");
-                    snprintf(r.subtitle, sizeof(r.subtitle),
-                             "%s · %.1f %s left", routes::activeName(),
-                             units::dist(routes::remainingKm(),
-                                         settings::useMiles()),
-                             settings::useMiles() ? "mi" : "km");
-                    r.inverted = true;
-                } else {
-                    snprintf(r.title, sizeof(r.title), "%s",
-                             routeFiles[i - listPinned]);
-                    snprintf(r.subtitle, sizeof(r.subtitle),
-                             "tap to follow this route");
-                }
-            }
-            break;
-        }
-        case SCREEN_DIRECTIONS: {
-            title = "DIRECTIONS";
-            footer = routes::navActive() ? "distances update as you move"
-                                         : "navigation has ended";
-            int n = routes::upcomingCount();
-            for (int i = 0; i < n && count < (int)(sizeof(rows) / sizeof(rows[0]));
-                 ++i) {
-                char instr[routes::MANEUVER_TEXT];
-                float dm = 0;
-                if (!routes::upcomingTurn(i, instr, sizeof(instr), dm)) break;
-                snprintf(rows[count].title, sizeof(rows[0].title), "%s", instr);
-                RideState s = g_state.snapshot();
-                char dtxt[16];
-                units::navDist(dtxt, sizeof(dtxt), dm, s.useMiles);
-                snprintf(rows[count].subtitle, sizeof(rows[0].subtitle),
-                         "in %s", dtxt);
-                rows[count].inverted = (i == 0);   // the turn you are riding to
-                count++;
-            }
-            if (count == 0) {
-                snprintf(rows[count].title, sizeof(rows[0].title), "No turns ahead");
-                snprintf(rows[count].subtitle, sizeof(rows[0].subtitle),
-                         "you are on the last leg");
-                count++;
-            }
-            break;
-        }
-        case SCREEN_HISTORY: {
-            title = "TRACKS";
-            footer = "tracks are .fit files in /rides on the SD card";
-            paged = true;
-            const bool sd = ride_recorder::sdMounted();
-            if (!rideFiles)
-                rideFiles = (ride_recorder::RideFile*)heap_caps_malloc(
-                    kRideListMax * sizeof(ride_recorder::RideFile),
-                    MALLOC_CAP_SPIRAM);
-
-            // A ride in progress gets a pinned row at the top; listRides()
-            // leaves its still-open, unfinalized FIT file out. Starting or
-            // finishing one changes the files, so it re-reads the card too.
-            const char* activeFile = ride_recorder::currentRideFile();
-            static char listedActive[sizeof(ride_recorder::RideFile::name)];
-            static bool listedWithCard = false;
-            if (listStale || sd != listedWithCard ||
-                strcmp(activeFile, listedActive) != 0) {
-                rideFileCount =
-                    sd && rideFiles
-                        ? ride_recorder::listRides(rideFiles, kRideListMax)
-                        : 0;
-                snprintf(listedActive, sizeof(listedActive), "%s", activeFile);
-                listedWithCard = sd;
-                listStale = false;
-            }
-            listPinned = activeFile[0] ? 1 : 0;
-            listTotal = listPinned + rideFileCount;
-            clampListPage();
-            for (int i = listPage * kMenuRowCount;
-                 i < listTotal && count < kMenuRowCount; ++i, ++count) {
-                ListRow& r = rows[count];
-                if (i < listPinned) {
-                    RideState s = g_state.snapshot();
-                    snprintf(r.title, sizeof(r.title), "Recording");   // DOBA: fits the mono face
-                    uint32_t secs = s.elapsedS;
-                    snprintf(r.subtitle, sizeof(r.subtitle),
-                             "%.1f %s · %lu:%02lu:%02lu",
-                             units::distM(s.distanceM, s.useMiles),
-                             units::distLabel(s.useMiles),
-                             (unsigned long)(secs / 3600),
-                             (unsigned long)(secs / 60 % 60),
-                             (unsigned long)(secs % 60));
-                    r.inverted = true;
-                } else {
-                    const ride_recorder::RideFile& f = rideFiles[i - listPinned];
-                    snprintf(r.title, sizeof(r.title), "%s", f.name);
-                    snprintf(r.subtitle, sizeof(r.subtitle), "%lu KB",
-                             (unsigned long)(f.size / 1024));
-                }
-            }
-            break;
-        }
-        default:
-            break;
-    }
-    // Directions rows ARE turns, so each one leads with its maneuver arrow.
-    ui_render_list(title, rows, count, footer, fb, screen == SCREEN_DIRECTIONS,
-                   paged);
-    if (paged)
-        ui_render_pager(listPage * kMenuRowCount, count, listTotal, "REFRESH",
-                        fb);
-}
 
 }  // namespace
 
@@ -2258,9 +1630,6 @@ bool beginPanel() {
     fbSize = epd_width() / 2 * epd_height();
     shadowFb = (uint8_t*)heap_caps_malloc(fbSize, MALLOC_CAP_SPIRAM);
 
-    routeScreenPts = (int16_t*)heap_caps_malloc(
-        MAX_ROUTE_SCREEN_PTS * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-
     EPDC_STEP("buffers");
     bootScreenLive = true;
     bootStatus("Display", true);
@@ -2304,13 +1673,6 @@ void bootRepaint() {
     EPDC_STEP("bootRepaint: done");
 }
 
-// Index of `step` in the table, or -1. Compared by pointer first since every
-// caller passes the same string literal, with a strcmp fallback.
-int bootFind(const char* step) {
-    for (int i = 0; i < bootCount; ++i)
-        if (bootLines[i] == step || strcmp(bootLines[i], step) == 0) return i;
-    return -1;
-}
 }  // namespace
 
 // Announce a step that is ABOUT to run, so the glass shows what the device is
@@ -2381,9 +1743,6 @@ bool begin() {
     // and it grows with the card — and it used to run with the glass showing a
     // fully ticked list and an unmoving bar. Nothing said the device was still
     // working, so the last four seconds of every boot looked like a hang.
-    // Read the rider's dashboard layout off the card before the first frame, so
-    // the panel never flashes the default and then rearrange itself.
-    dash_config::begin();
 
     bootStep("Maps");
     double mlat = DEFAULT_MAP_LAT, mlon = DEFAULT_MAP_LON;
@@ -2414,7 +1773,7 @@ bool begin() {
 // OTA partitions still protect the running image if the flash fails. To update:
 // copy the new firmware.bin to the SD card root and power the device on.
 void applySdUpdate() {
-    if (!ride_recorder::sdMounted()) return;
+    if (!sd_card::sdMounted()) return;
 
     // Locked for the whole check-rename-read sequence. This runs on the UI task
     // with the mesh task already live on the shared SPI bus; the previous
@@ -2642,7 +2001,6 @@ static void printConsoleHelp() {
     Serial.println("  mesh forget <slot>   delete a private channel");
     Serial.println("  mesh channel <name> [key]   set the channel (where — retunes)");
     Serial.println("  mesh <on|off>        power the LoRa radio");
-    Serial.println("  autopause [sec|off]  ride timer pause after N s stopped (0/off disables)");
     Serial.println("  wheel [mm]           speed-sensor wheel circumference (default 2105)");
     Serial.println("  workout <list|load <f>|start|pause|resume|stop|skip|back|goto <n>|ftp [W]>");
     Serial.println("  sensorsleep [on|off] sensor-link sleep experiment, this boot; status without argument");
@@ -3011,10 +2369,10 @@ static void runConsoleLine(char* line) {
         const char* cn = ct == CARD_NONE ? "NONE" : ct == CARD_MMC ? "MMC"
                        : ct == CARD_SD ? "SD" : ct == CARD_SDHC ? "SDHC" : "UNKNOWN";
         Serial.printf("[sd] mounted=%s cardType=%s size=%lluMB\n",
-                      ride_recorder::sdMounted() ? "yes" : "NO", cn, sizeMB);
+                      sd_card::sdMounted() ? "yes" : "NO", cn, sizeMB);
         // "Not mounted" has two causes that need opposite responses, and the
         // difference is invisible on the device's own screen. Say which it is.
-        if (!ride_recorder::sdMounted()) {
+        if (!sd_card::sdMounted()) {
             if (usb_storage::hostActive())
                 Serial.println("[sd] a USB host owns the card — unplug it, eject it, "
                                "or toggle the USB drive off/on ('usbdrive off' then 'on')");
@@ -3022,7 +2380,7 @@ static void runConsoleLine(char* line) {
                 Serial.println("[sd] not mounted by the firmware — cardType=NONE means "
                                "the driver cleaned up; use diag for command responses");
         }
-        if (ride_recorder::sdMounted()) {
+        if (sd_card::sdMounted()) {
             sdLock();
             uint64_t freeMB = (SD.totalBytes() - SD.usedBytes()) /
                               (1024ULL * 1024ULL);
@@ -3045,14 +2403,6 @@ static void runConsoleLine(char* line) {
         }
     } else if (!strcasecmp(cmd, "bootloader") || !strcasecmp(cmd, "boot")) {
         rebootToBootloader();
-    } else if (!strcasecmp(cmd, "autopause")) {
-        if (arg) {
-            int sec = !strcasecmp(arg, "off") ? 0 : atoi(arg);
-            settings::setAutoPauseSec(sec);
-        }
-        int cur = settings::autoPauseSec();
-        if (cur) Serial.printf("[autopause] after %d s stopped\n", cur);
-        else     Serial.println("[autopause] off");
     } else if (!strcasecmp(cmd, "sdwait")) {   // who keeps the card busy while others wait
 #ifndef OTP_SIM
         sdWaitReport();
@@ -3108,14 +2458,10 @@ static void runConsoleLine(char* line) {
         }
         Serial.printf("[cmd] owner set (%s)\n", settings::ownerField(0));
     } else if (!strcasecmp(cmd, "screen")) {
-        if (!arg) { Serial.println("[cmd] screen <map|dash|menu|settings|gps|layers>"); return; }
+        if (!arg) { Serial.println("[cmd] screen <home|map|library|comms|setup|more|points|sun|sos|gps|...>"); return; }
         powerOverlay = false;   // a jump closes the power sheet, as Back does
         if      (!strcasecmp(arg, "map"))      screen = SCREEN_MAP;
-        else if (!strcasecmp(arg, "dash"))     screen = SCREEN_DASH;
-        else if (!strcasecmp(arg, "menu"))     screen = SCREEN_MENU;
-        else if (!strcasecmp(arg, "settings")) screen = SCREEN_SETTINGS;
         else if (!strcasecmp(arg, "gps"))      screen = SCREEN_GPSDEBUG;
-        else if (!strcasecmp(arg, "layers"))   screen = SCREEN_MAPLAYERS;
         else if (!strcasecmp(arg, "home"))     screen = SCREEN_HOME;      // DOBA
         else if (!strcasecmp(arg, "comms"))    screen = SCREEN_COMMS;     // DOBA
         else if (!strcasecmp(arg, "compose"))  screen = SCREEN_COMPOSE;   // DOBA
@@ -3206,23 +2552,11 @@ void task(void*) {
     uint32_t lastDraw = 0;
     Screen lastScreen = screen;
     bool lastOverlay = false;
-    bool lastNavPrompt = false;
 
     lastActivityMs = millis();
-    int lastUpdatePct = -100, lastUpdatePhase = -1;
 
-    // Ride recovery runs HERE, not in setup(). It is unbounded card work — it
-    // once ran long enough to trip the interrupt watchdog, and since a reset
-    // mid-recovery tears another file, every reboot found more to do than the
-    // last. Off the boot path a slow recovery costs time, not a brick.
-TRC("enter");     ride_recorder::recoverRides();
-    // A ride the reset cut short: put the question on screen before anything
-    // else happens to the file.
-    if (ride_recorder::pendingRecovery(&pendingSummary)) {
-        recoveryPrompt = true;
-        screen = SCREEN_SUMMARY;
-    }
-TRC("recovered");     applySdUpdate();          // flash a firmware.bin from the SD card, if present
+
+TRC("enter");     applySdUpdate();          // flash a firmware.bin from the SD card, if present
 TRC("sdupdate");     usb_storage::begin();     // THEN expose the SD to a host computer over USB
 TRC("usb");     bool lastHostActive = false;
 
@@ -3237,7 +2571,7 @@ TRC("loop");         bool host = usb_storage::hostActive();
         lastHostActive = host;
 
         // A card that only mounted after boot had given up: setup() skipped the
-        // routes, the map index and the USB drive, and nothing revisited them, so
+        // map index and the USB drive, and nothing revisited them, so
         // the card stayed mounted-but-unused for the whole session. Run that
         // bring-up now. It happens here, in the UI task, next to the renderer
         // that consumes it.
@@ -3245,14 +2579,8 @@ TRC("loop");         bool host = usb_storage::hostActive();
         // It used to say the map cache was "this task's alone". It never was —
         // the BLE server writes to it on every tile received — and acting on
         // that belief is why nothing locked it. map_store owns the locking now.
-        if (ride_recorder::consumeLateMount()) {
-            diag::log("sd: late mount — loading routes/maps, exposing USB drive");
-            ride_recorder::recoverRides();
-            if (ride_recorder::pendingRecovery(&pendingSummary)) {
-                recoveryPrompt = true;
-                screen = SCREEN_SUMMARY;
-            }
-            routes::begin();
+        if (sd_card::consumeLateMount()) {
+            diag::log("sd: late mount — loading maps and books, exposing USB drive");
             map_store::rescanCard(); doba_lib::rescan(); doba_points::rescan(); doba_dem::rescan();  // DOBA
             applySdUpdate();      // a firmware.bin may have been on the card
             usb_storage::begin(); // no-op if it already came up
@@ -3282,9 +2610,7 @@ TRC("loop");         bool host = usb_storage::hostActive();
             double elat = 0, elon = 0;
             bool have = false;
             if (es.gpsFix) { elat = es.latitude; elon = es.longitude; have = true; }
-            else if (es.phoneFixValid && millis() - es.phoneFixMs < 15000) {
-                elat = es.phoneLat; elon = es.phoneLon; have = true;
-            } else if (es.everHadFix) { elat = es.latitude; elon = es.longitude; have = true; }
+            else if (es.everHadFix) { elat = es.latitude; elon = es.longitude; have = true; }
             if (have) {
                 float ev = map_store::elevationAt(elat, elon);
                 bool ok = (ev == ev);   // false when NAN
@@ -3313,24 +2639,12 @@ TRC("loop");         bool host = usb_storage::hostActive();
 
             // The page on screen, for diagnostics and the simulator.
             LiveView lv;
-            lv.pageCount = (unsigned char)dash_config::pageCount();
-            if (screen == SCREEN_DASH) {
-                lv.page = (unsigned char)dashPage;
-                lv.screen = 0;
-            } else if (screen == SCREEN_MAP) {
-                lv.page = (unsigned char)mapSlot();
-                lv.screen = 1;
-            }
+            if (screen == SCREEN_MAP) lv.screen = 1;
             live_view::publish(lv);
         }
 
-        // Auto-sleep after a quiet period to save battery — a bike computer
-        // left on a desk otherwise burns power on GPS + BLE + CPU. Held off
-        // while recording, navigating, moving, a phone is connected, or the
-        // stopwatch is running (powering off would throw its time away).
-        // Wake with BOOT.
+        // Auto-sleep after a quiet period to save battery. Wake with POWER.
         if (autoSleepEnabled && millis() - lastActivityMs > AUTO_SLEEP_MS &&
-            !ride_recorder::isRecording() && !routes::navActive() &&
             // DOBA: a radio that is listening is a pager: switching off would
             // miss the message or the SOS it is on for. (OTP held this for a
             // connected phone; Doba holds it while the mesh is on.)
@@ -3478,12 +2792,8 @@ TRC("touch");         if (touchOk && g_touchQ) {
             if (millis() - lastHome > 400) {
                 lastHome = millis();
                 noteActivity();
-                // The carousel: every page in configured order, the map
-                // among them wherever the rider put it. With the default
-                // config this is exactly the old dash <-> map swap.
                 // DOBA: Home is home — the main screen, from anywhere, at once.
                 // Back is the BACK corner of the status bar.
-                if (routes::navPending()) routes::dismissNav();
                 powerOverlay = false;
                 if (screen == SCREEN_ARTICLE) doba_lib::leaveArticle();
                 Serial.printf("[ui] home key from %d\n", (int)screen);
@@ -3511,25 +2821,16 @@ TRC("serial");         pollSerialCommands();   // serial-driven button presses (
             }
         }
 
-        bool navPrompt = routes::navPending();
-        if (navPrompt && !lastNavPrompt) navPromptShownAt = millis();
-        static int lastDashPage = 0;
-        // A page flip is a screen change in every way that matters to the
-        // refresh path: full-frame content swap, wants the quality pass.
-        bool screenChanged = screen != lastScreen || powerOverlay != lastOverlay
-                             || navPrompt != lastNavPrompt
-                             || (screen == SCREEN_DASH && dashPage != lastDashPage);
+        bool screenChanged = screen != lastScreen || powerOverlay != lastOverlay;
         // Was: a deferred GL16 clean scheduled after an interactive DU burst
         // settled. The driver DC-balances its own output, so there is nothing
         // left to clean up after — and the ~950 ms hitch that clean cost is gone
         // with it. Kept as a constant only because refresh() still takes the
         // argument.
         const bool wantClean = false;
-        bool navPromptAppearing = navPrompt && !lastNavPrompt;
 
         // A modal does not tick. Its own content is fixed — "SHUT DOWN?" and two
-        // buttons, or a route name and two buttons — and what is behind it is
-        // scrimmed or is a static route preview, so the 1 Hz redraw was spending
+        // buttons — and what is behind it is scrimmed, so the 1 Hz redraw was spending
         // a full-frame render plus a compaction every second to change nothing
         // the rider can read.
         //
@@ -3543,38 +2844,17 @@ TRC("serial");         pollSerialCommands();   // serial-driven button presses (
         // still: a real change (the modal opening or closing, a button press)
         // comes through screenChanged/forceDraw, and lastDraw is left stale so
         // the frame after the modal closes paints immediately.
-TRC("predraw");         const bool modalHoldsStill = powerOverlay || navPrompt;
+TRC("predraw");         const bool modalHoldsStill = powerOverlay;
         if (screenChanged || forceDraw ||
             (!modalHoldsStill && tickDue(screen, lastDraw))) {
             lastDraw = millis();
             forceDraw = false;
             Screen prevScreen = lastScreen;
-            const bool prevOverlay = lastOverlay, prevNav = lastNavPrompt;
+            const bool prevOverlay = lastOverlay;
             lastScreen = screen;
-            lastDashPage = dashPage;
             lastOverlay = powerOverlay;
-            lastNavPrompt = navPrompt;
             RideState s = g_state.snapshot();
-            // Route progress for the ROUTE LEFT dashboard field. Mirrored onto
-            // the snapshot rather than read inside the renderer, which is
-            // host-compiled for the previews and has no routes module.
-            // A sensor counts as connected only while its data is fresh. The
-            // BLE link flag alone said "connected" for a power meter that had
-            // stopped transmitting, so the field neither hid nor greyed and the
-            // rider saw a live-looking number from a sensor that was gone.
-            // Generous window: power meters are quiet when you stop pedalling.
-            constexpr uint32_t kSensorStaleMs = 15000;
-            const uint32_t nowMs = millis();
-            if (s.powerConnected && nowMs - s.powerMs > kSensorStaleMs)
-                s.powerConnected = false;
-            if (s.hrConnected && nowMs - s.hrMs > kSensorStaleMs)
-                s.hrConnected = false;
-            if (s.cadenceConnected && nowMs - s.cadenceMs > kSensorStaleMs)
-                s.cadenceConnected = false;
-            s.showOffline = settings::showOffline();
-            s.routeActive = routes::active();
-            s.routeRemainingKm = routes::remainingKm();
-            s.sdCard = ride_recorder::sdCardState();
+            s.sdCard = sd_card::sdCardState();
             // Swap to a downloaded map that covers where we are, if one exists.
             // Not while a host computer owns the SD card.
             if (s.everHadFix && !usb_storage::hostActive())
@@ -3582,110 +2862,16 @@ TRC("predraw");         const bool modalHoldsStill = powerOverlay || navPrompt;
             uint8_t* fb = epdc_framebuffer();
             memset(fb, 0xFF, epd_width() / 2 * epd_height());
             bandDrawnThisFrame = false;
-            bool pickerThisFrame = false;   // set by the WORKOUT page below
-            // While the "Start navigation?" prompt is up, the base screen shows
-            // the whole route fitted so it can be recognized before accepting.
-            if (navPrompt && !powerOverlay) {
-              // Preview first (its road context projects full-screen), then the
-              // status bar + accept sheet on top to mask any road spill.
-              ui_render_route_preview(fb);
-              // Clear the band AFTER the map, not before: the renderer has no
-              // clipping, so the road and water fills paint over anything drawn
-              // earlier. Clearing first (as I first wrote it) left the water
-              // dither sitting on top of the clock.
-              epd_fill_rect({0, 0, epd_rotated_display_width(), ui::STATUS_H},
-                            0xFF, fb);
-              ui::statusBar(s, fb);
-              ui_render_nav_prompt(routes::activeName(),
-                                   routes::maneuverCount(), fb);
-            } else if (greyTestShown) {   // DOBA: `greytest` console card
+            if (greyTestShown) {   // DOBA: `greytest` console card
               ui_render_grey_test(fb);
             } else {
             switch (screen) {
-                case SCREEN_DASH: {
-                    if (dash_config::page(dashPage).kind == DP_MAP)
-                        dashPage = firstContentPage();
-                    const DashPage& pg = dash_config::page(dashPage);
-                    {
-                        // Compact hero whenever a banner (turn, pause or message) owns
-                        // the band, so no field hides underneath it.
-                        ui_render_dashboard(s,
-                                            routes::navActive() || s.ridePaused ||
-                                                meshNoticeShown(),
-                                            pg.layout, fb);
-                    }
-                    drawNavBanner(fb, 0);
-                    if (pg.kind == DP_FIELDS) drawPauseBanner(s, fb);
-                    drawMeshNotice(fb);
-                    break;
-                }
                 case SCREEN_MAP: {
                     const uint32_t t0 = micros();
                     renderMapScreen(s, fb);
                     Serial.printf("[perf] map drawn in %lu ms at %.2f m/px\n", (unsigned long)((micros() - t0) / 1000), mapMpp);
                     break;
                 }
-                case SCREEN_SUMMARY:
-                    // Modal: the ride screen stays behind the sheet, scrimmed.
-                    ui_render_dashboard(s, routes::navActive(),
-                                        dash_config::current(), fb);
-                    ui_render_summary(pendingSummary, fb, recoveryPrompt);
-                    break;
-                case SCREEN_MENU: {
-                    MenuInfo m;
-                    m.recording = s.recording;
-                    m.gpsReady = s.gpsFix && s.timeValid;
-                    m.sdOk = ride_recorder::sdMounted();
-                    // Card numbers, read on arrival, when a ride starts or
-                    // stops, and every 30 s — not on every 1 Hz redraw. Each
-                    // read is SD work under sdLock, in the pass the rider's
-                    // tap is waiting behind; nothing else changes them while
-                    // the Menu is up.
-                    static int cachedRides = 0;
-                    static uint32_t cachedFreeMB = 0, cardReadAt = 0;
-                    static bool cardRead = false, cardRecording = false;
-                    if (m.sdOk && (!cardRead || prevScreen != SCREEN_MENU ||
-                                   cardRecording != s.recording ||
-                                   millis() - cardReadAt > 30000)) {
-                        cachedRides = ride_recorder::rideCount();
-                        cachedFreeMB = ride_recorder::sdFreeMB();
-                        cardReadAt = millis();
-                        cardRecording = s.recording;
-                        cardRead = true;
-                    } else if (!m.sdOk) {
-                        cardRead = false;   // re-read when the card comes back
-                    }
-                    m.rideCount = cachedRides;
-                    m.sdFreeMB = cachedFreeMB;
-                    m.hr = s.hrConnected;
-                    m.pwr = s.powerConnected;
-                    m.cad = s.cadenceConnected;
-                    m.batteryPercent = s.batteryPercent;
-                    m.rideDistanceM = s.distanceM;
-                    m.rideElapsedS = s.elapsedS;
-                    m.useMiles = s.useMiles;
-                    if (routes::active()) {
-                        snprintf(m.routeLine, sizeof(m.routeLine),
-                                 "%s · %.1f %s left", routes::activeName(),
-                                 units::dist(routes::remainingKm(), s.useMiles),
-                                 s.useMiles ? "mi" : "km");
-                    } else {
-                        snprintf(m.routeLine, sizeof(m.routeLine),
-                                 "no route loaded");
-                    }
-                    ui_render_menu(m, fb);
-                    ui::statusBar(s, fb, "MENU");
-                    break;
-                }
-                case SCREEN_ROUTES:
-                case SCREEN_HISTORY:
-                case SCREEN_DIRECTIONS:
-                    renderListScreen(fb);
-                    ui::statusBar(s, fb,
-                                  screen == SCREEN_ROUTES   ? "ROUTES"
-                                  : screen == SCREEN_HISTORY  ? "TRACKS"
-                                                              : "DIRECTIONS");
-                    break;
                 case SCREEN_HOME:
                 case SCREEN_COMMS:
                 case SCREEN_COMPOSE:
@@ -3704,27 +2890,6 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
                                   vf_evictions() != ev0 ? " (font cache full)" : "");
                     break;
                 }
-                case SCREEN_SETTINGS: {
-                    // Mesh state comes from the SERVICE, not settings: the tap
-                    // only stages a request, and the stored flag is not written
-                    // until the mesh task has actually brought the radio up or
-                    // put it to sleep. The task is woken immediately and a panel
-                    // repaint is far slower, so this still reads as instant —
-                    // and if the radio ever fails to start, the row shows what
-                    // is true rather than what was asked for.
-                    SettingsInfo si{settings::showOffline(),
-                                    0, settings::tzMinutes(),
-                                    settings::backlight(), settings::useMiles(),
-                                    settings::usbDrive(),
-                                    mesh_service::enabled()};
-                    ui_render_settings(si, fb);
-                    ui::statusBarBack(s, fb, "MORE");
-                    break;
-                }
-                case SCREEN_MAPLAYERS:
-                    ui_render_map_layers(settings::mapLayers(), fb);
-                    ui::statusBarBack(s, fb, "MAP LAYERS");
-                    break;
                 case SCREEN_GPSDEBUG: {
                     GpsDebug d;
                     gps_service::getDebug(d);
@@ -3755,7 +2920,7 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
                 }
             }
             if (powerOverlay) {
-                ui_render_power_sheet(s.recording, fb);
+                ui_render_power_sheet(fb);
             }
             }  // end else (normal screens)
             // These three classified the frame so refresh() could pick a waveform.
@@ -3763,9 +2928,8 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
             // because they document which screens are pure black/white and which
             // transitions used to need scrubbing, and because deleting them would
             // mean touching all ~15 refresh() call sites for no behaviour change.
-            bool fastInPage = screenIsFast(screen, powerOverlay) && !navPrompt;
-            bool listFast = screenListFast(screen) && screenListFast(prevScreen) &&
-                            !powerOverlay && !navPrompt;
+            bool fastInPage = screenIsFast(screen, powerOverlay);
+            bool listFast = false;
             // ENTERING the map is the only transition that earns a scrub — see
             // refresh(). Leaving it doesn't: what replaces the map is heavy type
             // and filled blocks, which drive over fine map lines without any
@@ -3778,40 +2942,11 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
             // map body, and closing it does NOT change `screen` — so without
             // this the checker stayed ghosted over the map until something else
             // happened to force a clear.
-            const bool modalClosed = (prevOverlay && !powerOverlay) ||
-                                     (prevNav && !navPrompt);
+            const bool modalClosed = prevOverlay && !powerOverlay;
             bool mapTransition = screen == SCREEN_MAP &&
                                  (prevScreen != SCREEN_MAP || modalClosed);
 
-            // A greyed-out dashboard cell earns the same scrub, for the same
-            // reason: the tone is a 25% dot, and whatever was on the glass
-            // under it only half-erases in one pulse. The driver has already
-            // recorded those pixels as white, so nothing later will touch them
-            // and the cell reads as dirty rather than inactive.
-            //
-            // Fires when arriving on the data page with cells already toned,
-            // and when one greys out IN PLACE — a sensor dropping mid-ride does
-            // not change `screen`, so entry alone would miss it.
-            static bool prevToned = false;
-            const bool toned = screen == SCREEN_DASH && !powerOverlay &&
-                               ui_render_dashboard_toned();
-            const bool tonedTransition =
-                toned && (prevScreen != SCREEN_DASH || modalClosed || !prevToned);
-            prevToned = toned;
-
-            // Every page flip in the Home-key carousel gets the quick scrub
-            // too: the pages are visually unrelated (fields, music art,
-            // workout's solid block), and DU-driving one over another leaves
-            // the old page as haze under the new. Scoped to what actually
-            // changed, so it stays quick; the 1 Hz in-page redraws never fire
-            // it (same page → same value).
-            static int prevDashPage = -1;
-            const bool dashPageFlip =
-                screen == SCREEN_DASH &&
-                (prevScreen != SCREEN_DASH || dashPage != prevDashPage);
-            prevDashPage = screen == SCREEN_DASH ? dashPage : -1;
-
-            // Any top-band overlay (turn banner or AUTO-PAUSED) leaving the
+            // Any top-band overlay (a message popup) leaving the
             // glass earns a scrub: they are solid black blocks, and the
             // content that replaces them half-erases under a DU drive — the
             // band's ghost sat over the page until something else forced a
@@ -3821,7 +2956,6 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
             const bool bandCleared = prevBand && !bandDrawnThisFrame;
             prevBand = bandDrawnThisFrame;
 
-            hardClearToned = tonedTransition;
             // Only changed pixels are driven, so what stays black between two screens
             // keeps its old history and shows inside anything solid on the new one:
             // settings toggles in the start button, for one. A scrub takes every pixel
@@ -3838,9 +2972,8 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
             scrubBits = zoomed && epdc_scan_enabled() ? mapFrameWater : nullptr;
             const bool scrubbing = scrubBits != nullptr;
             const bool painted = refresh(screenChanged, fastInPage, listFast, wantClean,
-                                         navPromptAppearing,
-                                         mapTransition || tonedTransition || dashPageFlip ||
-                                             bandCleared || scanScrub);
+                                         false,
+                                         mapTransition || bandCleared || scanScrub);
             if (painted && scrubbing) scrubbedMpp = mapMpp;
             scrubBits = nullptr;
         }

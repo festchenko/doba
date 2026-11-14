@@ -14,16 +14,6 @@ void begin();
 bool panelScan();
 void setPanelScan(bool on);
 
-// Auto-pause: seconds of no movement before the ride timer stops counting.
-// 0 = auto-pause off. Movement is judged by the recorder from power, cadence,
-// wheel rotation and GPS speed — see ride_recorder.cpp.
-int autoPauseSec();
-void setAutoPauseSec(int s);
-
-// Wheel circumference for a speed sensor, mm (default 2105, 700x25c). Speed
-// and sensor distance are revolutions x this. Out-of-range values
-// (wheel_speed::kMinCircMm..kMaxCircMm) are refused: returns false, unchanged.
-
 int tzMinutes();            // DOBA: from the GPS position when tzAuto()
 void setTzMinutes(int m);   // the manual offset
 int tzManualMinutes();
@@ -61,10 +51,6 @@ void setOwnerField(int i, const char* t);
 bool ownerSet();
 void setOwner(const char* t);
 
-// true = keep a field on the dashboard even when its sensor is not paired,
-// showing "no data" rather than removing it and re-packing the layout.
-bool showOffline();
-void setShowOffline(bool on);
 
 
 // Last known GPS position (map center across reboots). Returns false if

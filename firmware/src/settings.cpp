@@ -27,15 +27,7 @@ bool btOn = false;    // DOBA: Bluetooth switch (nothing uses it yet)
 bool wifiOn = false;  // DOBA: Wi-Fi switch (nothing uses it yet)
 char ownerText[128] = "";
 char ownerF[5][64] = {};    // DOBA: name, born, blood, medical, contact   // DOBA: "if found" card on the power-off screen  // true = expose SD as USB drive when plugged into a host
-// false = a field whose sensor is unpaired is dropped from the dashboard and
-// the rest re-pack; true = it stays, showing no data. ON by default: a new
-// device should show the layout the rider configured, gaps and all, rather
-// than a silently re-packed one that hides which sensors are missing.
-bool showOff = true;
 uint16_t mapLayerMask = 0x003F;   // MAP_LAYERS_ALL: every cycling layer on
-// Seconds of no movement (power, cadence, wheel and GPS all quiet) before the
-// ride timer auto-pauses. 0 disables auto-pause entirely.
-int autoPause = 10;
 bool panelScanOn = false;   // paint through epd_scan.cpp, not the driver's path
 // Per kind, a ';'-separated list of paired addresses, most recent first (max
 // SENSOR_MAX_PAIRED). Stored under the same NVS key as the old single address,
@@ -71,7 +63,7 @@ namespace settings {
 // The stored settings' format. Bump it with a migration step below whenever a
 // key changes meaning or goes away, so a newer firmware never reads an older
 // value as something else.
-constexpr uint32_t kSettingsVersion = 1;
+constexpr uint32_t kSettingsVersion = 2;
 
 void migrate() {
     const uint32_t v = prefs.getUInt("cfgver", 0);
@@ -81,6 +73,11 @@ void migrate() {
         static const char* const gone[] = {"ftp", "wheelmm", "wkpstep", "phname", "phid",
             "sens_hr", "sens_pwr", "sens_cad", "sens_rdr", "sens_spd",
             "snm_hr", "snm_pwr", "snm_cad", "snm_rdr", "snm_spd"};
+        for (const char* k : gone) if (prefs.isKey(k)) prefs.remove(k);
+    }
+    if (v < 2) {
+        // 1 -> 2: track recording and the bike dashboard went too.
+        static const char* const gone[] = {"apause", "showoff"};
         for (const char* k : gone) if (prefs.isKey(k)) prefs.remove(k);
     }
     prefs.putUInt("cfgver", kSettingsVersion);
@@ -99,7 +96,7 @@ void begin() {
     regionAutoOn = prefs.getBool("rgAuto", true);
     // Key bumped to usbdrv2 so the new OFF default takes effect even on devices
     // that had the old (default-ON) "usbdrv" value stored. OFF = the device
-    // keeps the SD (logs/recording) when plugged in.
+    // keeps the SD (logs, maps, books) when plugged in.
     usbDrv = prefs.getBool("usbdrv2", false);
     btOn = prefs.getBool("bt", false);
     wifiOn = prefs.getBool("wifi", false);
@@ -108,9 +105,7 @@ void begin() {
         char k[8]; snprintf(k, sizeof k, "own%d", i);
         prefs.getString(k, ownerF[i], sizeof ownerF[i]);
     }
-    showOff = prefs.getBool("showoff", true);
     mapLayerMask = prefs.getUShort("maplayers", 0x003F);
-    autoPause = prefs.getInt("apause", 10);
     panelScanOn = prefs.getBool("pscan", false);
     lastLat = prefs.getDouble("lastlat", 0);
     lastLon = prefs.getDouble("lastlon", 0);
@@ -153,12 +148,6 @@ void setPanelScan(bool on) {
     prefs.putBool("pscan", on);
 }
 
-
-int autoPauseSec() { return autoPause; }
-void setAutoPauseSec(int s) {
-    autoPause = constrain(s, 0, 120);
-    prefs.putInt("apause", autoPause);
-}
 
 
 // DOBA: by default the zone comes from the last GPS position (tz_auto), summer
@@ -221,16 +210,11 @@ void setOwner(const char* t) {
     prefs.putString("owner", ownerText);
 }
 
-bool showOffline() { return showOff; }
 uint16_t mapLayers() { return mapLayerMask; }
 void setMapLayers(uint16_t mask) {
     if (mask == mapLayerMask) return;
     mapLayerMask = mask;
     prefs.putUShort("maplayers", mapLayerMask);
-}
-void setShowOffline(bool on) {
-    showOff = on;
-    prefs.putBool("showoff", showOff);
 }
 
 

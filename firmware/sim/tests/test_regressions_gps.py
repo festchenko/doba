@@ -17,18 +17,6 @@ indoors = pytest.mark.parametrize("device", [["--gps-baud", "115200", "--gps-col
                                   ids=["indoors"])
 
 
-def phone_fix(link, lat, lon, utc=None, acc_m=10, speed_cms=None, course_cdeg=None):
-    """One location from the app's stream (link PhoneLocation)."""
-    loc = pb.PhoneLocation(lat_e7=int(lat * 1e7), lon_e7=int(lon * 1e7), accuracy_m=acc_m)
-    if utc is not None:
-        loc.utc = int(utc)
-    if speed_cms is not None:
-        loc.speed_cms = speed_cms
-    if course_cdeg is not None:
-        loc.course_cdeg = course_cdeg
-    link.tell(location=loc)
-
-
 @pytest.mark.parametrize("module_baud", [38400, 57600])
 def test_an_l76k_left_at_another_baud_still_gets_a_fix(module_baud):
     """24ba88c: an L76K left at a non-default baud (kept by its backup supply)

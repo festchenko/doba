@@ -2,7 +2,7 @@
 #include "memfault_service.h"
 #include "diag.h"
 #include "sd_bus.h"
-#include "ride_recorder.h"
+#include "sd_card.h"
 #include "usb_storage.h"
 #include "power_mgmt.h"
 #include <Arduino.h>
@@ -82,7 +82,7 @@ bool saveSD() {
     snprintf(temp, sizeof(temp), "/logs/memfault-%s.tmp", id);
     bool ok = false;
     sdLock();
-    if (ride_recorder::sdMounted() && !usb_storage::hostActive()) {
+    if (sd_card::sdMounted() && !usb_storage::hostActive()) {
         if (SD.exists(path)) {
             ok = matches(path); // Idempotent after reset before acknowledgement.
         } else {
@@ -127,7 +127,7 @@ void exportSerial() {
         Serial.printf("[memfault] begin id=%s encoding=sdk_data_export\n", id);
         bool ok = generate(Output::Serial);
         Serial.printf("[memfault] end complete=%d bytes=%u (flash retained)\n", ok, unsigned(outputBytes));
-    } else if (id[0] && ride_recorder::sdMounted() && !usb_storage::hostActive()) {
+    } else if (id[0] && sd_card::sdMounted() && !usb_storage::hostActive()) {
         char path[80]; snprintf(path, sizeof(path), "/logs/memfault-%s.log", id);
         sdLock();
         File file = SD.open(path, FILE_READ);
@@ -184,14 +184,14 @@ bool deliver(int action, const char* why) {
     size_t size = 0;
     bool saved = memfault_service::pending(&size);
     if (action) diag::log("memfault: pending=%d bytes=%u id=%s SD=%d; offline export, no uploads",
-                         saved, unsigned(size), memfault_service::pendingId(), ride_recorder::sdMounted());
+                         saved, unsigned(size), memfault_service::pendingId(), sd_card::sdMounted());
     if (action == 2) exportSerial();
     bool clear = !saved;
     // A failed SD mount never consumes the internal-flash coredump. The SDK
     // preserves the first pending dump if another crash happens before export,
     // so clearing it promptly after a verified export is what lets the NEXT
     // crash record a fresh dump.
-    if (saved && identify() && ride_recorder::sdMounted() && !usb_storage::hostActive() && saveSD()) {
+    if (saved && identify() && sd_card::sdMounted() && !usb_storage::hostActive() && saveSD()) {
         __real_memfault_platform_coredump_storage_clear();
         if (memfault_service::pending()) diag::log("memfault: flash acknowledgement failed; verified SD export retained, will retry");
         else {
@@ -201,7 +201,7 @@ bool deliver(int action, const char* why) {
         }
     } else if (saved && why) {
         diag::log("memfault: dump not exported at %s (SD=%d host=%d); retrying in %u s", why,
-                  ride_recorder::sdMounted(), usb_storage::hostActive(), unsigned(FAST_RETRY_MS / 1000));
+                  sd_card::sdMounted(), usb_storage::hostActive(), unsigned(FAST_RETRY_MS / 1000));
     }
     power_mgmt::busyRelease();
     return clear;

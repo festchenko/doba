@@ -4,7 +4,7 @@
 #include <atomic>
 #include <ctype.h>
 #include <esp_heap_caps.h>
-#include "ride_recorder.h"
+#include "sd_card.h"
 #include "sd_bus.h"
 #include "usb_storage.h"
 
@@ -42,8 +42,7 @@ struct Job {
 std::atomic<bool> busy{false};
 
 bool cardFree() {
-    return ride_recorder::sdMounted() && !ride_recorder::isRecording() &&
-           !usb_storage::hostActive();
+    return sd_card::sdMounted() && !usb_storage::hostActive();
 }
 
 // Write a whole line once the CDC buffer has room for it. false: the host
@@ -122,7 +121,7 @@ bool diag::validLogName(const char* name) {
 
 void diag::listSDLogs() {
     if (!cardFree()) {
-        Serial.println("[sdlog] unavailable: card missing, recording, or USB host owns card");
+        Serial.println("[sdlog] unavailable: card missing or USB host owns card");
         return;
     }
     sdLock();
@@ -155,7 +154,7 @@ void diag::dumpSDToSerial(const char* name, long offset, size_t maxBytes) {
         Serial.println("[sdlog] file must be a name in /logs (diag sd ls)"); return;
     }
     if (!cardFree()) {
-        Serial.println("[sdlog] unavailable: card missing, recording, or USB host owns card; use diag for retained evidence");
+        Serial.println("[sdlog] unavailable: card missing or USB host owns card; use diag for retained evidence");
         return;
     }
     if (busy.exchange(true)) { Serial.println("[sdlog] a dump is already running"); return; }

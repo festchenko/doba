@@ -8,6 +8,6 @@ void tick();
 // exposed to a USB host: deliver queued reports and export the Memfault dump.
 void onSdMounted(const char* why); // drain durable reports to SD after mount; retry without a card
 void recordLine(const char* line, size_t length); // bounded RTC breadcrumbs
-void requestTestPanic(); // deliberate diagnostic reset; refused while recording
+void requestTestPanic(); // deliberate diagnostic reset
 void requestStatus(); // serial request, serviced on the main task
 }

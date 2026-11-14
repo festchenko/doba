@@ -13,7 +13,7 @@
 #include "doba_fold_table.h"
 #include "epd_compat.h"
 #include "sd_bus.h"
-#include "ride_recorder.h"   // mountGeneration: cached files die with a remount
+#include "sd_card.h"   // mountGeneration: cached files die with a remount
 #include "ui_render.h"
 #include <Preferences.h>
 #ifdef VFONT
@@ -158,7 +158,7 @@ void closeIndexes() {   // under sdLock
     for (IdxCache& c : g_idx) { if (c.f) c.f.close(); c.book = -1; }
 }
 File* openIndex(int bi) {   // under sdLock
-    const uint32_t gen = ride_recorder::mountGeneration();
+    const uint32_t gen = sd_card::mountGeneration();
     IdxCache* lru = &g_idx[0];
     for (IdxCache& c : g_idx) {
         if (c.book == bi && c.gen == gen && c.f) { c.used = ++g_idxTick; return &c.f; }

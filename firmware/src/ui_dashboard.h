@@ -4,7 +4,6 @@
 // Fast MODE_DU refresh each second; MODE_GC16 full clear every
 // FULL_REFRESH_EVERY cycles to remove ghosting.
 //
-// Touch: bottom-right quadrant toggles ride recording.
 
 namespace ui_dashboard {
 

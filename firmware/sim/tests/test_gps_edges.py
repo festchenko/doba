@@ -15,8 +15,7 @@ import time
 import pytest
 
 
-from power_util import check_finished_fit, fit_records, only_ride
-from test_rides import SAVE_BUTTON, line_track
+from power_util import line_track
 
 LAT, LON = 37.77, -122.45
 WEEK_ROLLOVER_S = 1024 * 7 * 86400
@@ -56,47 +55,7 @@ def metres(a, b):
     return 2 * 6371000 * math.asin(math.sqrt(h))
 
 
-def start_ride(dev, speed=6):
-    dev.gps_track(line_track(LAT, LON, 20), speed_kmh=30)
-    dev.wait_status(lambda s: s["ride"]["gps_fix"] and s["ride"]["time_valid"], timeout=15)
-    dev.set_speed(speed)
-    dev.button("boot")
-    st = dev.wait_status(lambda s: s["ride"]["recording"], timeout=10)
-    return (st["gps"]["lat"], st["gps"]["lon"])
-
-
-def module_pos(dev):
-    g = dev.status()["gps"]
-    return (g["lat"], g["lon"])
-
-
-def stop_and_save(dev):
-    dev.button("boot")
-    dev.wait_status(lambda s: s["screen"] == "other", timeout=10)
-    dev.tap(*SAVE_BUTTON)
-    dev.wait_status(lambda s: not s["ride"]["recording"], timeout=20)
-    dev.set_speed(1)
-
-
 # ---- position --------------------------------------------------------------------------------
-
-
-def test_a_fix_that_jumps_across_the_map_adds_no_distance(device):
-    """Two seconds of fixes 25 km away (a multipath glitch, a module reset to
-    a stale almanac position) and back: the ride's distance must not gain the
-    50 km there and back."""
-    start = start_ride(device, speed=2)
-    device.wait_status(lambda s: s["ride"]["elapsed_s"] >= 20, timeout=20)
-    device.gps_silent(True)
-    for i in range(3):
-        device.gps_raw(fix_sentences(LAT + 0.225, LON, time.time() + i))
-        time.sleep(0.5)
-    device.gps_silent(False)
-    t = device.status()["ride"]["elapsed_s"]
-    st = device.wait_status(lambda s: s["ride"]["elapsed_s"] >= t + 20, timeout=20)
-    ridden = metres(start, module_pos(device))
-    assert st["ride"]["distance_m"] < ridden + 200, \
-        "%.0f m on the dashboard after %.0f m ridden" % (st["ride"]["distance_m"], ridden)
 
 
 def test_line_noise_and_bad_checksums_do_not_move_the_rider(device):
@@ -175,23 +134,3 @@ def test_the_clock_never_reads_a_day_early_at_utc_midnight(device):
     assert seen[0] < midnight <= seen[-1], (seen[0] - midnight, seen[-1] - midnight)
     assert all(0 < b - a <= 3 for a, b in zip(seen, seen[1:])), [u - midnight for u in seen]
 
-
-def test_a_ride_across_utc_midnight_keeps_its_timestamps_in_order(device):
-    """A ride through 00:00 UTC (late afternoon in the Americas, every
-    evening ride there). With the sentences arriving one at a time, as the
-    UART delivers them, the time of day rolls over in GGA before RMC brings
-    the new date. The FIT's record timestamps must still run forward one
-    second at a time — not jump back a day and forward again."""
-    device.gps_paced(True)
-    midnight = (int(time.time()) // 86400 + 1) * 86400
-    device.gps_time(midnight - 45)
-    start_ride(device, speed=3)
-    device.wait_status(lambda s: s["ride"]["elapsed_s"] >= 110, timeout=60)
-    stop_and_save(device)
-    _, data = only_ride(device)
-    check_finished_fit(data)
-    times = [r["utc"] for r in fit_records(data)]
-    assert times[0] < midnight < times[-1], (times[0] - midnight, times[-1] - midnight)
-    steps = [b - a for a, b in zip(times, times[1:])]
-    bad = [(i, s) for i, s in enumerate(steps) if not 0 <= s <= 3]
-    assert not bad, "record timestamps step by %s around midnight" % bad[:5]

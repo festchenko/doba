@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <ctime>
 
-// The SD card as the UI reports it (ride_recorder::sdCardState()). UNREADABLE
+// The SD card as the UI reports it (sd_card::sdCardState()). UNREADABLE
 // is a card that answered but would not mount: unformatted, or NTFS/APFS. The
 // FAT driver reads FAT32 and exFAT (tools/apply-exfat.sh); exFAT is the one
 // for big cards.
@@ -15,8 +15,8 @@ enum SdCardState : uint8_t {
     SD_CARD_UNREADABLE = 2,   // a card answered, the filesystem did not mount
 };
 
-// Single shared snapshot of everything the UI and recorder consume.
-// Producers (GPS task, BLE callbacks, battery poll) take the lock, update
+// Single shared snapshot of everything the UI consumes.
+// Producers (GPS task, sensors, battery poll) take the lock, update
 // their fields, release. Consumers copy the whole struct under the lock.
 //
 // Plain data — also compiled on the host by tools/preview to render
@@ -45,81 +45,13 @@ struct RideState {
     bool     timeValid = false;
     time_t   utc = 0;              // unix time from GPS
 
-    // Companion-phone live position: warm-starts the receiver and acts as a
-    // fallback location (+ altitude) when the device's own GPS has no fix.
-    // phoneFixMs is the device millis() at receipt (staleness check).
-    bool     phoneFixValid = false;
-    double   phoneLat = 0.0;
-    double   phoneLon = 0.0;
-    float    phoneAltM = 0.0f;
-    uint32_t phoneFixMs = 0;
-    // Horizontal accuracy the phone reported, in metres (0 = it didn't say).
-    // The recorder will only put a phone position in the ride file if this is
-    // good enough, so a cell-tower-grade fix cannot quietly become track data.
-    float    phoneAccM = 0.0f;
-    // The phone's own clock at that fix. Better than ours for stamping a
-    // record: with no GPS lock our time comes from the RTC, which drifts.
-    time_t   phoneUtc = 0;
-    // Speed and direction of travel from the phone stream (phone_motion.h):
-    // the phone's own values when it sent them, else derived from successive
-    // fixes. speed_source::publish() uses them when neither a wheel sensor nor the
-    // receiver has a fix to offer.
-    float    phoneSpeedKmh = 0.0f;
-    bool     phoneCourseValid = false;   // stays set: a stopped rider keeps it
-    float    phoneCourseDeg = 0.0f;
-
     // Terrain elevation at the current position, from the DEM baked into the
     // map tiles (set by the UI task). Used for ascent/grade instead of the
     // noisy GPS-chip altitude.
     bool     mapElevationValid = false;
     float    mapElevationM = 0.0f;
 
-    // BLE sensors (0xFF/0xFFFF = no data, matching FIT invalid values)
-    uint8_t  heartRateBpm = 0xFF;
-    uint16_t powerW = 0xFFFF;      // instantaneous
-    uint16_t power3sW = 0xFFFF;    // 3 s rolling average (hero display)
-    uint8_t  cadenceRpm = 0xFF;
-    bool     hrConnected = false;
-    bool     powerConnected = false;
-    bool     cadenceConnected = false;
-    bool     phoneConnected = false;   // companion app is connected over BLE
-    // millis() of the last reading from each sensor. A link can stay nominally
-    // up long after the sensor has stopped talking (a power meter that sleeps,
-    // or one that has rolled out of range), so "connected" is judged by DATA
-    // arriving, not by the stack's opinion of the link — see ui_dashboard.
-    uint32_t hrMs = 0, powerMs = 0, cadenceMs = 0;
-    // Wheel speed sensor (CSC wheel data — wheel_speed.h, fed by ble_sensors).
-    // wheelMoveMs: millis() of the last NEW wheel revolution — movement
-    // evidence for auto-pause. wheelDataMs: millis() of the last packet with
-    // wheel data at all, moving or not — the sensor is alive and a source.
-    // wheelSpeedKmh is the speed at the last revolution; speed_source decays it
-    // to 0 by wheelMoveMs. wheelDistM only ever grows (plausible revolutions x
-    // circumference since boot); the recorder takes per-tick deltas of it.
-    bool     speedSensorConnected = false;
-    uint32_t wheelMoveMs = 0;
-    uint32_t wheelDataMs = 0;
-    float    wheelSpeedKmh = 0.0f;
-    double   wheelDistM = 0.0;
-
-    // Ride accumulation (owned by the recorder)
-    bool     recording = false;
-    bool     ridePaused = false;   // auto-pause: timer frozen until movement
-    double   distanceM = 0.0;
-    uint32_t elapsedS = 0;
-    uint32_t movingS = 0;
-    float    gradePercent = 0.0f;
-    bool     gradeValid = false;
-    float    climbedM = 0.0f;
-    // The SD card filled mid-ride: the ride keeps timing but its file stopped
-    // growing. The status bar says SD FULL.
-    bool     cardFull = false;
-
-    // Loaded route progress, mirrored here (rather than read from routes::) so
-    // the dashboard's ROUTE LEFT field stays renderable on the host preview
-    // build, which has no routes module.
-    bool     routeActive = false;
-    float    routeRemainingKm = 0.0f;
-    // SdCardState, mirrored the same way for the status bar's "NO SD" chip.
+    // SdCardState, mirrored for the status bar's "NO SD" chip.
     uint8_t  sdCard = SD_CARD_OK;
 
     // Optional Qwiic sensors (aux_sensors.h). All absent-safe: baroValid and
@@ -138,29 +70,9 @@ struct RideState {
     bool     charging = false;
 
     // Rider config (mirrored from settings so renderers stay host-safe)
-    uint16_t ftpW = 250;
     int16_t  tzMin = -420;
     bool     useMiles = false;   // display units: false = km, true = miles
     bool     clock24h = true;    // status-bar clock: true = 24h, false = 12h
-    // Keep unpaired sensor fields on the dashboard instead of removing them.
-    bool     showOffline = false;
-};
-
-// End-of-ride stats for the summary screen (design 1g).
-struct RideSummary {
-    double   distanceM = 0.0;
-    uint32_t movingS = 0;
-    uint32_t elapsedS = 0;
-    float    avgSpeedKmh = 0.0f;
-    uint16_t avgPowerW = 0;        // 0 = no power data
-    uint16_t normPowerW = 0;       // 0 = no power data
-    uint8_t  avgHrBpm = 0;         // 0 = no HR data
-    float    climbedM = 0.0f;
-    time_t   startUtc = 0;
-    time_t   endUtc = 0;
-    int16_t  tzMin = -420;
-    bool     useMiles = false;
-    bool     cardFull = false;     // the SD card filled: the saved track ends early
 };
 
 // Metric <-> imperial display helpers. Host-safe (used by the preview harness

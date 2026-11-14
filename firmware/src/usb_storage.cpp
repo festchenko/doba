@@ -12,7 +12,7 @@ DRESULT ff_sd_write(uint8_t pdrv, const uint8_t* buffer, DWORD sector, UINT coun
 #include "config.h"
 #include "settings.h"
 #include "diag.h"
-#include "ride_recorder.h"
+#include "sd_card.h"
 #include "sd_bus.h"
 #include "crash_report.h"
 
@@ -71,7 +71,7 @@ int32_t onRead(uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
     int tries = 0;
     sdLock();
     while (!ok && tries < 4) {
-        ok = ff_sd_read(ride_recorder::sdDrive(), buf, lba, count) == RES_OK;
+        ok = ff_sd_read(sd_card::sdDrive(), buf, lba, count) == RES_OK;
         if (!ok) { ++tries; delay(2); }
     }
     sdUnlock();
@@ -93,7 +93,7 @@ int32_t onWrite(uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t bufsize
     int tries = 0;
     sdLock();
     while (!ok && tries < 3) {
-        ok = ff_sd_write(ride_recorder::sdDrive(), buffer, lba, count) == RES_OK;
+        ok = ff_sd_write(sd_card::sdDrive(), buffer, lba, count) == RES_OK;
         if (!ok) { ++tries; delay(2); }
     }
     sdUnlock();
@@ -185,30 +185,20 @@ void poll() {
         diag::log("usb storage: host has the SD (device reports no SD until released)");
     }
     // One writer per filesystem: the firmware lets go of its own volume.
-    if (g_hostActive && !g_lent && !g_reclaimPending) g_lent = ride_recorder::lendToHost();
+    if (g_hostActive && !g_lent && !g_reclaimPending) g_lent = sd_card::lendToHost();
 
     // Nothing from the host for a long time and no eject: assume it's gone.
-    // Skipped during a ride — recording is the one time being wrong about this
-    // is expensive, and the ride is writing to the card anyway.
     if (g_hostActive && !g_reclaimPending &&
-        millis() - g_lastActivityMs > IDLE_RECLAIM_MS &&
-        !ride_recorder::isRecording()) {
+        millis() - g_lastActivityMs > IDLE_RECLAIM_MS) {
         diag::log("usb storage: no host traffic for %u s — taking the SD back",
                   (unsigned)(IDLE_RECLAIM_MS / 1000));
         g_reclaimPending = true;
     }
 
     if (!g_reclaimPending) return;
-    // Deliberately left pending rather than done now: this used to call SD.end()
-    // straight from here, with no sdLock and no regard for a ride in progress —
-    // an unplug mid-ride tore the filesystem out from under the open FIT file,
-    // which is precisely the interrupted transaction that wedges a card into
-    // cardType=NONE. ride_recorder::remount() takes the lock and refuses during
-    // a ride, so all this has to do is wait for the ride to end.
-    if (ride_recorder::isRecording()) return;
 
     g_reclaimPending = false;
-    bool ok = ride_recorder::remount("usb host released");
+    bool ok = sd_card::remount("usb host released");
     g_lent = false;
     g_hostActive = false;
     g_loggedActive = false;
