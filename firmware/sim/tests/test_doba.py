@@ -313,7 +313,7 @@ def test_a_picture_in_a_zim_article_reaches_the_screen_from_its_pack(doba, book)
 
 
 def test_stealth_from_the_home_bar_goes_silent_and_needs_a_5s_hold_to_end(doba):
-    """One tap on HOME's stealth bar: no transmit, no BT advertising, no light.
+    """One tap on HOME's stealth bar: no transmit, no light.
     SILENT also puts the LoRa radio to sleep; ending stealth takes a finger held
     5 s and brings the radio back as it was."""
     boot(doba)
@@ -323,7 +323,6 @@ def test_stealth_from_the_home_bar_goes_silent_and_needs_a_5s_hold_to_end(doba):
     since = doba.log_seq()
     doba.tap(270, 960 - 10 - 41)                          # STEALTH bar
     doba.wait_log(r"\[stealth\] on \(listening\)", since=since)
-    doba.wait_log(r"ble: stealth", since=since)
     since = doba.log_seq()
     doba.console("stealth silent", 800)
     doba.wait_log(r"\[stealth\] state silent radio=0", since=since)

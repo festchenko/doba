@@ -3,8 +3,6 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-#include "ble_sensors.h"
-#include "ble_server.h"
 #include "mesh_service.h"
 
 namespace stealth {
@@ -62,8 +60,6 @@ void set(bool on) {
     if (on == active()) return;
     writeFlag("stealth", on, g_on);
     applyRadio(on);
-    ble_server::applyStealth();
-    ble_sensors::applyStealth();
     Serial.printf("[stealth] %s%s\n", on ? "on" : "off", on && listen() ? " (listening)" : "");
 }
 

@@ -4,8 +4,8 @@
 #ifdef PM_GPS_RX_GUARD
 #include <esp_private/pm_impl.h>
 #include <esp_idf_version.h>
-#if !defined(PM_BLE_XTAL) || !CONFIG_IDF_TARGET_ESP32S3 || ESP_IDF_VERSION != ESP_IDF_VERSION_VAL(4, 4, 6)
-#error "GPS RX guard requires the audited ESP32-S3 / IDF 4.4.6 MAIN_XTAL profile"
+#if !CONFIG_IDF_TARGET_ESP32S3 || ESP_IDF_VERSION != ESP_IDF_VERSION_VAL(4, 4, 6)
+#error "GPS RX guard requires the audited ESP32-S3 / IDF 4.4.6 profile"
 #endif
 #include <esp_sleep.h>
 #include <esp_timer.h>

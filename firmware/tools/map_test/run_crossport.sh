@@ -19,7 +19,7 @@ JSON=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 S=$2; W=$3; N=$4; E=$5
 OUT=${6:-$(mktemp -d)}
 OUT=$(mkdir -p "$OUT" && cd "$OUT" && pwd)
-H3=companion-ios/Sources/H3
+H3=third_party/h3
 
 # --- Swift driver (host build of the app's MapBuilder + the vendored H3 C)
 mkdir -p "$OUT/obj"
@@ -28,7 +28,7 @@ for f in "$H3"/h3shim.c "$H3"/lib/*.c; do
 done
 swiftc -O -import-objc-header companion-ios/Sources/BikeGPS-Bridging-Header.h \
     -Xcc -I -Xcc "$H3" -Xcc -I -Xcc "$H3/include" \
-    companion-ios/Sources/MapBuilder.swift companion-ios/Sources/H3Tiles.swift \
+    companion-ios/Sources/MapBuilder.swift third_party/h3Tiles.swift \
     tools/map_test/crossport/main.swift "$OUT"/obj/*.o -o "$OUT/crossport_swift"
 
 "$OUT/crossport_swift" tiles "$S" "$W" "$N" "$E" > "$OUT/tiles.txt"

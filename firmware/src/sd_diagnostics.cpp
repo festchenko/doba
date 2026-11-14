@@ -6,7 +6,6 @@
 #include "diag.h"
 #include "ride_recorder.h"
 #include "usb_storage.h"
-#include "ble_server.h"
 
 namespace {
 std::atomic<unsigned> requested{0};
@@ -48,8 +47,8 @@ void sd_diagnostics::tick() {
         power_mgmt::sleepStats(initialSleep, rejected, us);
         previousSleep = initialSleep; afterSleepPassed = 0;
         afterSleepPhonePassed = finalSleepCalls = 0;
-        previousPhoneId = ble_server::phoneConnectionId();
-        previousPhoneUp = ble_server::isPhoneConnected();
+        previousPhoneId = 0UL;
+        previousPhoneUp = false;
         everStarted = true;
         running = true;
         diag::log("sdtest: armed %us; unplug USB; checks every 5s after 15s", seconds);
@@ -77,8 +76,8 @@ void sd_diagnostics::tick() {
     power_mgmt::sleepStats(sleepCalls, rejected, sleepUs);
     uint32_t sleepDelta = sleepCalls - previousSleep;
     previousSleep = sleepCalls;
-    unsigned long phoneId = ble_server::phoneConnectionId();
-    bool phoneUp = ble_server::isPhoneConnected();
+    unsigned long phoneId = 0UL;
+    bool phoneUp = false;
     bool samePhone = previousPhoneUp && phoneUp && phoneId == previousPhoneId;
     previousPhoneId = phoneId; previousPhoneUp = phoneUp;
     sdLock();

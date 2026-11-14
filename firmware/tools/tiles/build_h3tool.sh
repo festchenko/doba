@@ -1,10 +1,10 @@
 #!/bin/sh
 # Build tools/tiles/h3tool from the H3 C sources the iOS/Android apps vendor
-# (companion-ios/Sources/H3), so the server uses the apps' exact H3 math.
+# (third_party/h3), so the server uses the apps' exact H3 math.
 #   tools/tiles/build_h3tool.sh [outfile]   (default: tools/tiles/.bin/h3tool)
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
-H3="$here/../../companion-ios/Sources/H3"
+H3="$here/../../third_party/h3"
 out=${1:-$here/.bin/h3tool}
 mkdir -p "$(dirname "$out")"
 ${CC:-cc} -O2 -std=c11 -D_DEFAULT_SOURCE -I "$H3" -I "$H3/include" \

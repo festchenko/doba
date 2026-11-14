@@ -12,7 +12,7 @@ set -e
 cd "$(dirname "$0")"
 
 ROOT=../..
-H3=$ROOT/companion-ios/Sources/H3
+H3=$ROOT/third_party/h3
 OBJ=/tmp/h3lookup_obj
 mkdir -p "$OBJ"
 

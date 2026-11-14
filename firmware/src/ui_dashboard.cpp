@@ -37,18 +37,12 @@
 #include "doba_library.h" // DOBA
 #include "map_tiles.h"
 #include "map_store.h"
-#include "media.h"
-#include "workout.h"
-#include "workout_service.h"
 #include "i2c_bus.h"
 #include "usb_storage.h"
-#include "ble_sensors.h"
 #include <esp_random.h>
 
 #include "lora_radio.h"
 #include "mesh_service.h"
-#include <NimBLEDevice.h>
-#include "ble_server.h"
 #include "routes.h"
 #include "settings.h"
 #include "speed_source.h"
@@ -59,8 +53,7 @@
 #include "smooth_epd.h"
 #include "power_mgmt.h"
 #include "dash_config.h"
-#include "stopwatch.h"
-#include "segments.h"
+#include "live_view.h"
 
 namespace {
 
@@ -75,7 +68,7 @@ uint8_t* shadowFb = nullptr;
 size_t fbSize = 0;
 
 enum Screen { SCREEN_DASH, SCREEN_MAP, SCREEN_SUMMARY, SCREEN_MENU,
-              SCREEN_SENSORS, SCREEN_ROUTES, SCREEN_HISTORY,
+              SCREEN_ROUTES, SCREEN_HISTORY,
               SCREEN_SETTINGS, SCREEN_GPSDEBUG, SCREEN_DIRECTIONS,
               SCREEN_MAPLAYERS,
               // DOBA: the launcher, comms and library (doba_ui.h).
@@ -164,62 +157,6 @@ const uint8_t* mapFrameWater = nullptr;  // and where its water is, for a zoom's
 uint8_t* mapPrerenderFb = nullptr;       // a full framebuffer to prerender into
 uint8_t* mapLayerBeingKept = nullptr;
 
-// The workout page's ALL BLOCKS list: open/closed and which page of eight
-// rows is showing. UI state, not workout state — closing it changes nothing
-// about the session.
-bool workoutAllOpen = false;
-int workoutListPage = 0;
-
-// The STOPWATCH page's clock and laps. Lives here, not with the page: it is
-// time stamps, so it keeps counting while the rider is on any other screen,
-// and only this task touches it (taps, the render, the auto-sleep check).
-// Static storage, ~400 bytes for the 99 lap marks.
-Stopwatch stopwatch;
-
-// Live Strava segments: the starred set (adopted from segments:: when the app
-// syncs a new one) and the matcher timing efforts against it. Fed each fix
-// below, whatever page is up — an effort is timed even off the SEGMENT page.
-// Only this task touches either.
-seg::SegmentDb segDb;
-seg::Matcher segMatcher;
-// Where the panel was before an effort switched it to the SEGMENT page, so
-// the result lapsing puts the rider back. -1 = we didn't switch.
-int segReturnPage = -1;
-bool segReturnMap = false;
-// Which of the relevant segments (Matcher::list) the page shows, by segment
-// index; -1 = the first. A new effort selects itself; one that drops out of
-// the list (its result lapsed) falls back to the first.
-int segSel = -1;
-
-// The view the SEGMENT page shows: the selected segment, with its place in
-// the list for the page's arrows. `list`/`n` get the list itself.
-void segSelectedView(uint32_t now, seg::View& v, int* list, int& n) {
-    n = segMatcher.list(now, list, seg::MAX_LIST);
-    int pos = -1;
-    for (int i = 0; i < n; ++i) if (list[i] == segSel) pos = i;
-    if (pos < 0) {
-        pos = n > 0 ? 0 : -1;
-        segSel = n > 0 ? list[0] : -1;
-    }
-    segMatcher.view(now, segSel, v);
-    v.listPos = pos + 1;
-    v.listCount = n;
-}
-
-int segmentSlot() {
-    for (int i = 0; i < dash_config::pageCount(); ++i)
-        if (dash_config::page(i).kind == DP_SEGMENT) return i;
-    return -1;
-}
-
-// The picker (WORKOUT page, nothing loaded): which page of rows, and the
-// page last drawn — taps resolve against what the rider SAW, not a list that
-// may have rescanned since. In PSRAM: ~1.3 KB this task's stack shouldn't
-// carry. The list itself is workout_service's; it never reads SD here.
-int workoutPickIdx = 0;
-WorkoutPickPage* workoutPick = nullptr;
-bool workoutPickShown = false;   // last frame was the picker
-
 // Serial test hooks: drive the UI over the CDC serial port to profile the map
 // without physical taps. Toggle timing logs with 't'; single-char commands
 // injected in the task loop mirror button presses. See pollSerialCommands().
@@ -264,7 +201,6 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
                         bool finalFrame = false);
 
 // Which screen the Sensors page was opened from, so back returns there.
-Screen sensorsFrom = SCREEN_MENU;
 
 // Same for the upcoming-directions list, reached by tapping the turn banner.
 Screen directionsFrom = SCREEN_MAP;
@@ -621,10 +557,6 @@ void shutdownDevice(uint8_t* fb, const char* reason) {
 constexpr int MAX_ROUTE_SCREEN_PTS = 4096;
 int16_t* routeScreenPts = nullptr;
 
-// Rows behind the list screens, rebuilt on entry/render
-ble_sensors::Candidate sensorCands[8];
-int sensorCandCount = 0;
-
 // Navigate and Ride History page through a listing read from the card once —
 // when the screen opens, on REFRESH, or when the card or the ride being
 // recorded changes — never on the 1 Hz redraw: the card runs at 4 MHz under
@@ -693,7 +625,26 @@ void noteActivity() {
     lastUiInputMs = millis();
     forceDraw = true;
     if (uiWake) xSemaphoreGive(uiWake);   // redraw now, don't wait out the block
-    ble_sensors::noteActivity();
+}
+
+// The periodic redraw. Screens that show live readings (the map, the ride
+// page, SOS, GPS details, the sun clock) tick every second. Every other page
+// only changes on a tap or an event (which force a frame), or through its
+// status band: the clock's minute, the battery, the fix. Those redraw when
+// the minute turns, and every 30 s at the latest — a full render a second for
+// nothing was most of the UI task's CPU on a page being read.
+bool liveScreen(Screen sc) {
+    return sc == SCREEN_MAP || sc == SCREEN_DASH || sc == SCREEN_SOS || sc == SCREEN_GPSDEBUG ||
+           sc == SCREEN_SUN || sc == SCREEN_SUMMARY || sc == SCREEN_HOME || sc == SCREEN_DIRECTIONS;
+}
+bool tickDue(Screen sc, uint32_t lastDraw) {
+    const uint32_t since = millis() - lastDraw;
+    if (liveScreen(sc)) return since >= 1000;
+    if (since >= 30000) return true;
+    static int lastMinute = -1;
+    const int minute = (int)((time(nullptr) / 60) % 60);
+    if (since >= 1000 && minute != lastMinute) { lastMinute = minute; return true; }
+    return false;
 }
 
 // Panel refresh.
@@ -796,7 +747,7 @@ bool screenIsFast(Screen s, bool overlay) {
 // changes and any in-place updates can take the fast DU path instead of the
 // slower GL16 — this is what makes "switching menu state" feel snappy.
 bool screenListFast(Screen s) {
-    return s == SCREEN_MENU || s == SCREEN_SENSORS || s == SCREEN_ROUTES ||
+    return s == SCREEN_MENU || s == SCREEN_ROUTES ||
            s == SCREEN_HISTORY || s == SCREEN_SETTINGS ||
            s == SCREEN_DIRECTIONS || s == SCREEN_MAPLAYERS;
 }
@@ -805,8 +756,6 @@ bool inRect(const EpdRect& r, int x, int y) {
     return x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
 }
 
-void enterSensors();
-void leaveList();
 void handlePowerTap(int x, int y);
 void ackPagerTap(const EpdRect& r);
 
@@ -915,7 +864,6 @@ void goBack() {
         case SCREEN_SETUP: case SCREEN_SETUP_NAME: case SCREEN_POINTS:
         case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE: case SCREEN_BATTERY:
         case SCREEN_ARTICLE:  dobaGo(doba_ui::back(dobaPage())); break;
-        case SCREEN_SENSORS:  leaveList(); break;  // also stops the BLE scan
         case SCREEN_MENU:     screen = SCREEN_DASH; break;
         case SCREEN_MAP:      screen = SCREEN_HOME; break;   // DOBA: the map is a page of Doba's home
         // Back on the summary resumes the ride (non-destructive); SAVE / DISCARD
@@ -1145,158 +1093,6 @@ void handleTap(int x, int y) {
     switch (screen) {
         case SCREEN_DASH:
         case SCREEN_MAP:
-            // The SEGMENT page's pager (two or more relevant segments): the
-            // list pager's up / down, previous / next segment. Like the other
-            // paged lists it stops at the ends (that arrow is not drawn).
-            if (screen == SCREEN_DASH &&
-                dash_config::page(dashPage).kind == DP_SEGMENT &&
-                (inRect(kPagerUp, x, y) || inRect(kPagerDown, x, y))) {
-                seg::View v;
-                int list[seg::MAX_LIST], n = 0;
-                segSelectedView(millis(), v, list, n);
-                if (n >= 2) {
-                    const int to = v.listPos - 1 + (inRect(kPagerUp, x, y) ? -1 : 1);
-                    if (to >= 0 && to < n) {
-                        segSel = list[to];
-                        ackPagerTap(inRect(kPagerUp, x, y) ? kPagerUp : kPagerDown);
-                        forceDraw = true;
-                    }
-                    break;
-                }
-            }
-            // Transport controls on the MUSIC page. Handled before the shared
-            // dash/map targets so the buttons win over the "strip" fallthrough;
-            // the status bar above them still opens the menu as everywhere.
-            if (screen == SCREEN_DASH &&
-                dash_config::page(dashPage).kind == DP_MUSIC &&
-                y >= ui::STATUS_H) {
-                uint8_t cmd = 0;
-                if (inRect(kMediaPrev, x, y)) cmd = MC_PREV;
-                else if (inRect(kMediaPlay, x, y)) cmd = MC_TOGGLE;
-                else if (inRect(kMediaNext, x, y)) cmd = MC_NEXT;
-                else if (inRect(kMediaVolDown, x, y)) cmd = MC_VOL_DOWN;
-                else if (inRect(kMediaVolUp, x, y)) cmd = MC_VOL_UP;
-                if (cmd) {
-                    ble_server::mediaCommand(cmd);
-                    // Answer play/pause on the glass now: flip the local flag
-                    // and repaint rather than waiting the round trip to the
-                    // phone — its state report will correct us if it disagrees.
-                    if (cmd == MC_TOGGLE) media::toggleLocal();
-                    forceDraw = true;
-                }
-                break;
-            }
-            // The STOPWATCH page: START/PAUSE, RESET, LAP — answered on the
-            // glass at once (noteActivity already forced the redraw). A tap
-            // anywhere else on the page does nothing, so a brush against the
-            // digits can't pause the clock. A disabled button (RESET while
-            // running, LAP while paused) does nothing either.
-            if (screen == SCREEN_DASH &&
-                dash_config::page(dashPage).kind == DP_STOPWATCH &&
-                y >= ui::STATUS_H) {
-                if (inRect(kStopwatchToggle, x, y)) {
-                    stopwatch.toggle(millis());
-                    forceDraw = true;
-                } else if (inRect(kStopwatchReset, x, y)) {
-                    if (stopwatch.canReset() && stopwatch.reset())
-                        forceDraw = true;
-                } else if (inRect(kStopwatchLap, x, y)) {
-                    if (stopwatch.canLap() && stopwatch.lap(millis()))
-                        forceDraw = true;
-                }
-                break;
-            }
-            // The WORKOUT page, same shape as the music block above.
-            // Everything here answers on the glass at once; there is no
-            // phone round trip to wait for. Navigation is the prev/next
-            // block strips themselves; the footer holds pause and the
-            // ALL BLOCKS list, whose rows start the block they name.
-            if (screen == SCREEN_DASH &&
-                dash_config::page(dashPage).kind == DP_WORKOUT &&
-                y >= ui::STATUS_H) {
-                WorkoutView wv;
-                workout_service::view(wv);
-                if (!wv.loaded) {
-                    // The picker. A row tap queues the load on the loop
-                    // task (the same load as the app's [0x11]); the row
-                    // reads LOADING until the page flips to READY.
-                    if (workoutPickShown && workoutPick) {
-                        const WorkoutPickPage& p = *workoutPick;
-                        if (inRect(kPagerUp, x, y)) {
-                            if (workoutPickIdx > 0) {
-                                --workoutPickIdx;
-                                ackPagerTap(kPagerUp);
-                            }
-                        } else if (inRect(kPagerDown, x, y)) {
-                            if (p.first + p.count < p.total) {
-                                ++workoutPickIdx;
-                                ackPagerTap(kPagerDown);
-                            }
-                        } else if (inRect(kPagerAction, x, y)) {
-                            if (p.state != WLIST_SCANNING) {
-                                workout_service::requestListRefresh();
-                                ackPagerTap(kPagerAction);
-                            }
-                        } else if (p.state == WLIST_READY &&
-                                   y >= kWorkoutRowTop &&
-                                   y < kWorkoutRowTop +
-                                           kWorkoutRowH * kWorkoutRowsPerPage) {
-                            int r = (y - kWorkoutRowTop) / kWorkoutRowH;
-                            if (r < p.count && p.rows[r].ok)
-                                workout_service::requestLoad(p.rows[r].file);
-                        }
-                    }
-                    forceDraw = true;
-                    break;
-                }
-                if (workoutViewReady(wv) && !workoutAllOpen &&
-                    inRect(kWorkoutRedo, x, y)) {
-                    // READY's left strip: back to the picker. Unloading is
-                    // what the app's Stop does too, so the app follows.
-                    workout_service::unload();
-                    forceDraw = true;
-                    break;
-                }
-                if (workoutAllOpen) {
-                    if (inRect(kPagerUp, x, y)) {
-                        if (workoutListPage > 0) --workoutListPage;
-                    } else if (inRect(kPagerDown, x, y)) {
-                        if ((workoutListPage + 1) * kWorkoutRowsPerPage <
-                            wv.segCount)
-                            ++workoutListPage;
-                    } else if (inRect(kPagerAction, x, y)) {
-                        workoutAllOpen = false;
-                    } else if (y >= kWorkoutRowTop &&
-                               y < kWorkoutRowTop +
-                                       kWorkoutRowH * kWorkoutRowsPerPage) {
-                        int idx = workoutListPage * kWorkoutRowsPerPage +
-                                  (y - kWorkoutRowTop) / kWorkoutRowH;
-                        if (wv.loaded && idx < wv.segCount) {
-                            workout_service::jumpToSeg(idx);
-                            workoutAllOpen = false;
-                        }
-                    }
-                    forceDraw = true;
-                    break;
-                }
-                if (inRect(kWorkoutRedo, x, y)) {
-                    if (wv.loaded) workout_service::jumpToSeg(wv.segIdx - 1);
-                    forceDraw = true;
-                } else if (inRect(kWorkoutStartNext, x, y)) {
-                    if (wv.loaded) workout_service::jumpToSeg(wv.segIdx + 1);
-                    forceDraw = true;
-                } else if (inRect(kWorkoutPause, x, y)) {
-                    workout_service::toggle();
-                    forceDraw = true;
-                } else if (inRect(kWorkoutAll, x, y)) {
-                    if (wv.loaded) {
-                        workoutAllOpen = true;
-                        workoutListPage = wv.segIdx / kWorkoutRowsPerPage;
-                    }
-                    forceDraw = true;
-                }
-                break;
-            }
             if (screen == SCREEN_MAP) {
                 int dx = x - kMapCompass.cx,
                     dy = y - mapCompassCy(routes::navActive()) - (mapTopoActive ? 56 : 0);
@@ -1393,27 +1189,11 @@ void handleTap(int x, int y) {
                 switch (row) {
                     case 0: startOrStopTrack(); break;
                     case 1: enterPagedList(SCREEN_ROUTES); break;
-                    case 2: sensorsFrom = SCREEN_MENU; enterSensors(); break;
                     case 3: enterPagedList(SCREEN_HISTORY); break;
                     case 4: screen = SCREEN_SETTINGS; break;
                 }
             } else {
                 screen = SCREEN_DASH;  // header or footer: back to ride
-            }
-            break;
-        }
-        case SCREEN_SENSORS: {
-            // PAIRED DEVICES: row 0 is the phone (fixed pairing), the sensor
-            // candidates follow it.
-            int row = (y - kMenuRowTop) / kMenuRowH;
-            if (y >= kMenuRowTop && row == 0) {
-                sheetKind = SHEET_UNPAIR;   // UNPAIR PHONE? / NOT PAIRED
-                powerOverlay = true;
-            } else if (y >= kMenuRowTop && row >= 1 && row - 1 < sensorCandCount &&
-                       row < kMenuRowCount) {
-                ble_sensors::pairCandidate(sensorCands[row - 1].addr);
-            } else {
-                leaveList();
             }
             break;
         }
@@ -1518,13 +1298,11 @@ void handleTap(int x, int y) {
             }
             if (edited) {
                 g_state.with([](RideState& st) {
-                    st.ftpW = (uint16_t)settings::ftpWatts();
                     st.tzMin = (int16_t)settings::tzMinutes();
                     st.useMiles = settings::useMiles();
                     st.clock24h = settings::clock24h();
                     st.showOffline = settings::showOffline();
                 });
-                ble_server::pushSettingsToPhone();   // mirror the edit to the app
             } else if (y >= kMenuRowTop && row == kSettingsGpsRow) {
                 screen = SCREEN_GPSDEBUG;
             }
@@ -1542,7 +1320,6 @@ void handleTap(int x, int y) {
             const int row = ui_map_layers_hit(x, y);
             if (row >= 0) {
                 settings::setMapLayers(settings::mapLayers() ^ ui_map_layer_bit(row));
-                ble_server::pushMapLayersToPhone();   // keep the app's switches in step
             }
             break;
         }
@@ -1565,16 +1342,6 @@ void handleTap(int x, int y) {
 }
 
 void handlePowerTap(int x, int y) {
-    if (sheetKind == SHEET_UNPAIR) {
-        // UNPAIR only exists while a phone is paired; on the "not paired"
-        // sheet that rect is empty paper and a tap there just closes it.
-        if (inRect(kPowerShutdown, x, y) && ble_server::phonePaired()) {
-            ble_server::requestUnpair();
-            diag::log("ui: unpair phone confirmed on the panel");
-        }
-        powerOverlay = false;   // UNPAIR, CANCEL/CLOSE or outside: done
-        return;
-    }
     if (inRect(kPowerShutdown, x, y)) {
         uint8_t* fb = epdc_framebuffer();
         shutdownDevice(fb, "user power-off (dialog)");  // does not return
@@ -2234,49 +2001,9 @@ void drawMeshNotice(uint8_t* fb) {
     bandDrawnThisFrame = true;
 }
 
-void enterSensors() {
-    ble_sensors::setScanAlways(true);
-    screen = SCREEN_SENSORS;
-}
 
-void leaveList() {
-    ble_sensors::setScanAlways(false);
-    screen = sensorsFrom;  // Menu or Settings, whichever opened it
-}
 
-const char* kindsText(uint8_t mask) {
-    switch (mask & 0xf) {
-        case 1: return "heart rate";
-        case 2: return "power";
-        case 3: return "HR + power";
-        case 8: return "radar";
-        case 4: return "cadence";
-        case 6: return "power + cadence";
-        case 7: return "HR + power + cadence";
-        default: return "sensor";
-    }
-}
 
-// Compact kind label for the Sensors row subtitle (must stay short so the row
-// fits the screen width).
-const char* shortKinds(uint8_t mask) {
-    // Speed & Cadence: an unidentified 0x1816 device carries both bits until
-    // it has connected and said which it is (ble_sensors.h).
-    constexpr uint8_t kCsc = 1 << ble_sensors::KIND_CSC, kSpd = 1 << ble_sensors::KIND_SPEED;
-    if ((mask & (kCsc | kSpd)) == (kCsc | kSpd)) return (mask & 0xb) ? "Sensor" : "Speed/Cad";
-    if (mask & kSpd) return (mask & 0xf) ? "Sensor" : "Speed";
-    switch (mask & 0xf) {
-        case 1: return "HR";
-        case 2: return "Power";
-        case 3: return "HR+Power";
-        case 8: return "Radar";
-        case 4: return "Cadence";
-        case 5: return "HR+Cadence";
-        case 6: return "Power+Cad";
-        case 7: return "HR+Power+Cad";
-        default: return "Sensor";
-    }
-}
 
 // Keep the page in range when the list shrinks under it (a route cleared,
 // a REFRESH that found fewer files).
@@ -2294,53 +2021,6 @@ void renderListScreen(uint8_t* fb) {
     bool paged = false;   // Navigate / Ride History: rows + ui_render_pager
 
     switch (screen) {
-        case SCREEN_SENSORS: {
-            title = "PHONE LINK";
-            footer = "the OpenTrailPaper app pairs here (messages, settings)";
-            // Row 0: the phone this device belongs to (fixed pairing, see
-            // ble_server.cpp). Same row recipe as a sensor: name as the title,
-            // status first in the subtitle, inverted while connected. Tapping
-            // it opens the UNPAIR PHONE? / NOT PAIRED sheet.
-            {
-                const bool paired = ble_server::phonePaired();
-                const char* name = ble_server::pairedPhoneName();
-                snprintf(rows[0].title, sizeof(rows[0].title), "%s",
-                         paired && name[0] ? name : "Phone");
-                if (!paired)
-                    snprintf(rows[0].subtitle, sizeof(rows[0].subtitle),
-                             "Not paired · open the app to pair");
-                else if (ble_server::isPhoneConnected())
-                    snprintf(rows[0].subtitle, sizeof(rows[0].subtitle),
-                             "Connected · Phone · tap to unpair");
-                else
-                    snprintf(rows[0].subtitle, sizeof(rows[0].subtitle),
-                             "Paired · Phone · tap to unpair");
-                rows[0].inverted = paired && ble_server::isPhoneConnected();
-            }
-            sensorCandCount = ble_sensors::getCandidates(sensorCands, 8);
-            count = 1 + (sensorCandCount < kMenuRowCount - 1 ? sensorCandCount
-                                                             : kMenuRowCount - 1);
-            for (int i = 1; i < count; ++i) {
-                auto& c = sensorCands[i - 1];
-                snprintf(rows[i].title, sizeof(rows[i].title), "%s",
-                         c.name[0] ? c.name : c.addr);
-                // Status FIRST (short kind label second) so the important word
-                // — connected/saved — is never clipped off the right edge.
-                const char* kinds = shortKinds(c.kindsMask);
-                if (c.connected) {
-                    snprintf(rows[i].subtitle, sizeof(rows[i].subtitle),
-                             "Connected · %s", kinds);
-                } else if (c.paired) {
-                    snprintf(rows[i].subtitle, sizeof(rows[i].subtitle),
-                             "%s · %s", c.rssi ? "In range" : "Saved", kinds);
-                } else {
-                    snprintf(rows[i].subtitle, sizeof(rows[i].subtitle),
-                             "%s · %d dBm", kinds, c.rssi);
-                }
-                rows[i].inverted = c.connected;
-            }
-            break;
-        }
         case SCREEN_ROUTES: {
             title = "ROUTES";
             paged = true;
@@ -2815,16 +2495,6 @@ static long agnssRxRemaining = 0;
 // Console word -> sensor kind. KIND_ALL for "all", KIND_BAD for anything else
 // (which the caller then treats as a MAC address).
 constexpr int KIND_ALL = -1, KIND_BAD = -2;
-static int sensorKindArg(const char* a) {
-    if (!a) return KIND_BAD;
-    if (!strcasecmp(a, "radar") || !strcasecmp(a, "varia")) return ble_sensors::KIND_RADAR;
-    if (!strcasecmp(a, "all")) return KIND_ALL;
-    if (!strcasecmp(a, "hr") || !strcasecmp(a, "heart")) return ble_sensors::KIND_HR;
-    if (!strcasecmp(a, "power") || !strcasecmp(a, "pwr")) return ble_sensors::KIND_POWER;
-    if (!strcasecmp(a, "cadence") || !strcasecmp(a, "cad")) return ble_sensors::KIND_CSC;
-    if (!strcasecmp(a, "speed") || !strcasecmp(a, "spd")) return ble_sensors::KIND_SPEED;
-    return KIND_BAD;
-}
 
 // `sensors` — the saved MAC per kind, the MAC of each live link, and every
 // device seen this session. The Sensors screen labels a row with the sensor's
@@ -2938,67 +2608,6 @@ static void printMeshReport() {
     }
 }
 
-static void printSensorReport() {
-    ble_sensors::Link ls[ble_sensors::KIND_COUNT];
-    ble_sensors::links(ls);
-    Serial.println("[sensors] saved pairings (we connect to these MACs and nothing else):");
-    for (int k = 0; k < ble_sensors::KIND_COUNT; ++k) {
-        const ble_sensors::Link& l = ls[k];
-        if (!l.pairedAddr[0] && !l.connected) {
-            Serial.printf("  %-8s (not paired)\n", l.kind);
-            continue;
-        }
-        Serial.printf("  %-8s %-17s %-13s %s\n", l.kind,
-                      l.pairedAddr[0] ? l.pairedAddr : "(not paired)",
-                      l.connected ? "CONNECTED" : "not connected", l.name);
-        // Further pairings of the same kind (a trainer's simulated strap, a
-        // second bike's meter) — the scanner takes whichever advertises.
-        for (int i = 1; i < settings::sensorAddrCount(k); ++i)
-            Serial.printf("  %-8s %-17s also paired\n", "",
-                          settings::sensorAddrAt(k, i));
-        // A live link to an address we never saved cannot happen through the
-        // scan path — if it ever prints, that IS the bug, so say so loudly
-        // rather than folding it into the line above.
-        if (l.connected && !settings::sensorPaired(k, l.liveAddr))
-            Serial.printf("  %-8s ** live link is %s, NOT the saved address **\n",
-                          "", l.liveAddr);
-    }
-
-    // The live packet. "A number shows when I'm not wearing the strap" is
-    // decided by these bytes: whether packets are still arriving, and whether
-    // the strap admits it has no skin contact while sending them.
-    ble_sensors::HrPacket hp = ble_sensors::lastHrPacket();
-    if (!hp.atMs) {
-        Serial.println("[sensors] no HR packet received this session");
-    } else {
-        const char* contact = (hp.flags & 0x04) ? ((hp.flags & 0x02) ? "yes" : "NO")
-                                                : "unsupported";
-        Serial.printf("[sensors] last HR packet: %u bpm, %.1f s ago, "
-                      "flags=0x%02X (contact %s) len=%u\n",
-                      hp.bpm, (millis() - hp.atMs) / 1000.0f, hp.flags, contact,
-                      hp.len);
-    }
-
-    ble_sensors::Candidate cs[12];
-    int n = ble_sensors::getCandidates(cs, 12);
-    // Both reasons the rssi column lies are worth printing, because reading it
-    // as a live distance sends you off after the wrong sensor: a CONNECTED
-    // device has stopped advertising, so its number is frozen at whatever it
-    // measured just before the link came up, and nothing is ever dropped from
-    // the list, so a device that has since left still shows its last reading.
-    // To measure where a connected sensor actually is, `disconnect` it first.
-    Serial.printf("[sensors] %d device(s) seen this session (rssi is frozen while "
-                  "CONNECTED, and nothing is ever pruned):\n", n);
-    for (int i = 0; i < n; ++i) {
-        Serial.printf("  %-17s %4d dBm  %-13s %s%s%s\n", cs[i].addr, cs[i].rssi,
-                      shortKinds(cs[i].kindsMask),
-                      cs[i].paired ? "PAIRED " : "",
-                      cs[i].connected ? "CONNECTED " : "",
-                      cs[i].name);
-    }
-    Serial.println("[sensors] 'disconnect <hr|power|cadence|speed|radar|all>' drops a link, "
-                   "'forget <kind|mac|all>' unpairs for good");
-}
 
 static void printConsoleHelp() {
     Serial.println("commands:");
@@ -3121,6 +2730,39 @@ static void runConsoleLine(char* line) {
             const uint32_t id = mesh_service::queueText(mesh::BROADCAST_ADDR, text);
             if (id) Serial.printf("[cmd] queued packet 0x%08x: %s\n", (unsigned)id, text);
             else    Serial.println("[cmd] NOT queued (radio off, or outbox full)");
+        } else if (arg && !strcasecmp(arg, "tx")) {
+            // mesh tx <dest hex|all> <channel> <text>: a message to anyone, on any slot.
+            char* d = strtok(nullptr, " \t");
+            char* c = strtok(nullptr, " \t");
+            char* text = strtok(nullptr, "");
+            while (text && *text == ' ') ++text;
+            if (!d || !c || !text || !*text) { Serial.println("[cmd] mesh tx <dest hex|all> <channel> <text>"); return; }
+            const uint32_t dest = !strcasecmp(d, "all") ? mesh::BROADCAST_ADDR : (uint32_t)strtoul(d, nullptr, 16);
+            const uint32_t id = mesh_service::queueText(dest, text, (uint8_t)atoi(c));
+            Serial.printf("[cmd] mesh tx id=%u\n", (unsigned)id);
+        } else if (arg && !strcasecmp(arg, "preset")) {
+            const char* i = strtok(nullptr, " \t");
+            if (i) mesh_service::setPreset((uint8_t)atoi(i));
+            Serial.printf("[cmd] mesh preset %s\n", mesh_service::presetName());
+        } else if (arg && !strcasecmp(arg, "share")) {
+            const char* i = strtok(nullptr, " \t");
+            const char* on = strtok(nullptr, " \t");
+            if (i && on) mesh_service::setSharesLocation((uint8_t)atoi(i), !strcasecmp(on, "on"));
+            Serial.printf("[cmd] mesh share %s %s\n", i ? i : "?", on ? on : "?");
+        } else if (arg && !strcasecmp(arg, "chan")) {
+            // mesh chan <slot> <hex psk> <name, spaces allowed>: a private channel with a given key.
+            const char* i = strtok(nullptr, " \t");
+            const char* hx = strtok(nullptr, " \t");
+            char* nm = strtok(nullptr, "");
+            while (nm && *nm == ' ') ++nm;
+            uint8_t psk[mesh::MAX_PSK_LEN] = {};
+            size_t n = 0;
+            for (size_t k = 0; hx && hx[k] && hx[k + 1] && n < sizeof psk; k += 2) {
+                char two[3] = {hx[k], hx[k + 1], 0};
+                psk[n++] = (uint8_t)strtoul(two, nullptr, 16);
+            }
+            const bool ok = i && nm && mesh_service::setPrivateChannel((uint8_t)atoi(i), nm, psk, n);
+            Serial.printf("[cmd] mesh chan %s\n", ok ? "ok" : "refused");
         } else if (arg && !strcasecmp(arg, "private")) {
             // Create a private channel with a random 256-bit key. The same thing
             // the app's QR flow does, reachable without a phone.
@@ -3247,65 +2889,6 @@ static void runConsoleLine(char* line) {
         } else {
             printMeshReport();
         }
-    } else if (!strcasecmp(cmd, "sensors")) {
-        printSensorReport();
-    } else if (!strcasecmp(cmd, "disconnect")) {
-        int want = sensorKindArg(arg);
-        if (want == KIND_BAD) {
-            Serial.println("[cmd] disconnect <hr|power|cadence|speed|radar|all>");
-            return;
-        }
-        ble_sensors::Link ls[ble_sensors::KIND_COUNT];
-        ble_sensors::links(ls);
-        int dropped = 0;
-        for (int k = 0; k < ble_sensors::KIND_COUNT; ++k) {
-            if (want != KIND_ALL && k != want) continue;
-            if (!ble_sensors::disconnect(k)) continue;
-            Serial.printf("[sensors] dropped %s (%s)\n", ls[k].kind, ls[k].liveAddr);
-            dropped++;
-        }
-        if (!dropped) Serial.println("[sensors] nothing connected to drop");
-        else Serial.println("[sensors] still paired — it will reconnect within "
-                            "seconds; use 'forget' to stop that");
-    } else if (!strcasecmp(cmd, "forget")) {
-        // `forget phone`: drop every BLE bond (the phone pairing for AMS).
-        // The recovery for a stale-bond loop — iOS reconnecting with keys the
-        // device no longer matches and dropping the link before the app can
-        // get a session. Pair fresh on the next connect; the rider must also
-        // Forget the device in the iPhone's Bluetooth settings.
-        if (arg && !strcasecmp(arg, "phone")) {
-            int n = NimBLEDevice::getNumBonds();
-            NimBLEDevice::deleteAllBonds();
-            Serial.printf("[ble] %d bond%s cleared — also Forget the device on "
-                          "the iPhone (Settings > Bluetooth), then reconnect\n",
-                          n, n == 1 ? "" : "s");
-            return;
-        }
-        int want = sensorKindArg(arg);
-        if (!arg) {
-            Serial.println("[cmd] forget <hr|power|cadence|speed|radar|all|phone|aa:bb:..>");
-        } else if (want == KIND_ALL) {
-            ble_sensors::forgetAll();
-            Serial.println("[sensors] every pairing cleared");
-        } else if (want == KIND_BAD) {
-            // Not a kind word, so treat it as a MAC. forget() clears every kind
-            // paired to that address (a power meter is usually cadence too).
-            ble_sensors::forget(arg);
-        } else {
-            ble_sensors::Link ls[ble_sensors::KIND_COUNT];
-            ble_sensors::links(ls);
-            if (!ls[want].pairedAddr[0])
-                Serial.printf("[sensors] %s is not paired\n", ls[want].kind);
-            else
-                ble_sensors::forget(ls[want].pairedAddr);
-        }
-    } else if (!strcasecmp(cmd, "bleinterval")) {
-        if ((arg && strcasecmp(arg, "status") && strcasecmp(arg, "fast")) || strtok(nullptr, " \t")) {
-            Serial.println("[cmd] bleinterval [status|fast]");
-            return;
-        }
-        if (arg && !strcasecmp(arg, "fast")) ble_server::requestFastInterval();
-        else ble_server::reportInterval();
     } else if (!strcasecmp(cmd, "maptest")) {
         mapSelfTest();
     } else if (!strcasecmp(cmd, "farewell")) {
@@ -3455,37 +3038,10 @@ static void runConsoleLine(char* line) {
             bool on = !strcasecmp(arg, "on") || !strcasecmp(arg, "1");
             settings::setUsbDrive(on);
             usb_storage::setDriveEnabled(on);
-            ble_server::pushSettingsToPhone();   // keep the app's toggle in step
             Serial.printf("[usbdrive] turned %s\n", on ? "on" : "off");
         }
     } else if (!strcasecmp(cmd, "bootloader") || !strcasecmp(cmd, "boot")) {
         rebootToBootloader();
-    } else if (!strcasecmp(cmd, "sensorsleep")) {
-        if (arg) {
-            if (strcasecmp(arg, "on") && strcasecmp(arg, "off")) {
-                Serial.println("[cmd] sensorsleep [on|off]");
-                return;
-            }
-            ble_sensors::setSleepAllowed(!strcasecmp(arg, "on"));
-        }
-        ble_sensors::reportSleep();
-    } else if (!strcasecmp(cmd, "sleepexp")) {
-        if (arg) ble_server::setRelaxedSleepExperiment(
-            !strcasecmp(arg, "on") || !strcasecmp(arg, "1"));
-        Serial.printf("[sleepexp] light sleep with phone: %s\n",
-                      ble_server::relaxedSleepAllowed() ? "ARMED" : "off");
-    } else if (!strcasecmp(cmd, "wheel")) {
-        if (arg && !settings::setWheelCircMm(atoi(arg)))
-            Serial.printf("[wheel] %s refused: %d..%d mm\n", arg,
-                          wheel_speed::kMinCircMm, wheel_speed::kMaxCircMm);
-        else if (arg)
-            ble_server::pushSettingsToPhone();   // mirror to the app
-        const RideState s = g_state.snapshot();
-        Serial.printf("[wheel] circumference %d mm; speed source %s (%.1f km/h), "
-                      "wheel sensor %s, %.0f m counted since boot\n",
-                      settings::wheelCircMm(), speed_source::name(s.speedSource),
-                      s.speedKmh, s.speedSensorConnected ? "connected" : "absent",
-                      s.wheelDistM);
     } else if (!strcasecmp(cmd, "autopause")) {
         if (arg) {
             int sec = !strcasecmp(arg, "off") ? 0 : atoi(arg);
@@ -3494,94 +3050,12 @@ static void runConsoleLine(char* line) {
         int cur = settings::autoPauseSec();
         if (cur) Serial.printf("[autopause] after %d s stopped\n", cur);
         else     Serial.println("[autopause] off");
-    } else if (!strcasecmp(cmd, "workout")) {
-        // workout                      status
-        // workout list                 files in /workouts
-        // workout load <file>          make it active (extension included)
-        // workout start|stop|skip      run control
-        // workout ftp [watts]          show / set the FTP the targets scale by
-        if (arg && !strcasecmp(arg, "list")) {
-            char names[512];
-            int n = workout_service::list(names, sizeof(names));
-            Serial.printf("[workout] %d file(s) in /workouts:\n%s", n, names);
-        } else if (arg && !strcasecmp(arg, "load")) {
-            char* name = strtok(nullptr, " \t");
-            if (!name) { Serial.println("[workout] load <file.erg>"); return; }
-            const char* reason = "";
-            if (workout_service::load(name, &reason)) {
-                WorkoutView v;
-                workout_service::view(v);
-                Serial.printf("[workout] loaded %s: %d intervals, %lu:%02lu, "
-                              "'workout start' begins\n", v.name, v.segCount,
-                              (unsigned long)(v.totalSec / 60),
-                              (unsigned long)(v.totalSec % 60));
-            } else {
-                Serial.printf("[workout] load failed: %s\n", reason);
-            }
-        } else if (arg && !strcasecmp(arg, "start")) {
-            workout_service::start();
-            Serial.println(workout_service::running()
-                               ? "[workout] running"
-                               : "[workout] nothing loaded");
-        } else if (arg && !strcasecmp(arg, "stop")) {
-            workout_service::stop();
-            Serial.println("[workout] stopped");
-        } else if (arg && !strcasecmp(arg, "pause")) {
-            workout_service::pause();
-        } else if (arg && !strcasecmp(arg, "resume")) {
-            workout_service::resume();
-        } else if (arg && !strcasecmp(arg, "skip")) {
-            workout_service::skip();
-        } else if (arg && !strcasecmp(arg, "back")) {
-            workout_service::prevInterval();
-        } else if (arg && !strcasecmp(arg, "goto")) {
-            char* n = strtok(nullptr, " \t");
-            WorkoutView v;
-            workout_service::view(v);
-            if (!n || !v.loaded) {
-                Serial.println("[workout] goto <interval 1..N>");
-            } else {
-                int idx = atoi(n) - 1;
-                if (idx < 0) idx = 0;
-                if (idx >= v.segCount) idx = v.segCount - 1;
-                workout_service::jumpToFraction(
-                    v.totalSec ? ((float)v.wk->segs[idx].startSec + 0.5f) /
-                                     (float)v.totalSec
-                               : 0.f);
-                Serial.printf("[workout] at interval %d/%d\n", idx + 1,
-                              v.segCount);
-            }
-        } else if (arg && !strcasecmp(arg, "ftp")) {
-            char* w = strtok(nullptr, " \t");
-            if (w) settings::setFtpWatts(atoi(w));
-            Serial.printf("[workout] ftp %d W%s\n", settings::ftpWatts(),
-                          w ? " (reload the workout to rescale an .mrc)" : "");
-        } else {
-            WorkoutView v;
-            workout_service::view(v);
-            if (!v.loaded) {
-                Serial.println("[workout] none loaded — 'workout list', then "
-                               "'workout load <file>'");
-            } else {
-                Serial.printf("[workout] %s: %s, interval %d/%d, target %u W, "
-                              "%lu/%lu s\n", v.name,
-                              v.done ? "DONE" : v.running ? "RUNNING" : "ready",
-                              v.segIdx + 1, v.segCount, v.targetW,
-                              (unsigned long)v.elapsedSec,
-                              (unsigned long)v.totalSec);
-            }
-        }
     } else if (!strcasecmp(cmd, "reboot")) {
         Serial.println("[cmd] rebooting");
         Serial.flush(); delay(80); esp_restart();
     } else if (!strcasecmp(cmd, "timing")) {
         dbgTiming = !dbgTiming;
         diag::log("dbg timing %s", dbgTiming ? "ON" : "OFF");
-    } else if (!strcasecmp(cmd, "scan")) {
-        bool on = arg && !strcasecmp(arg, "on");
-        ble_sensors::setScanAlways(on);
-        if (on) ble_sensors::noteActivity();
-        Serial.printf("[cmd] sensor scan %s — 'sensors' lists what it hears\n", on ? "ON" : "off");
     } else if (!strcasecmp(cmd, "lang") && arg) {   // DOBA: lang en|uk
         i18n::setLang(!strcasecmp(arg, "uk") ? i18n::UK : i18n::EN);
     } else if (!strcasecmp(cmd, "libopen") && arg) {   // DOBA: libopen <title>, the rest of the line
@@ -3771,7 +3245,6 @@ TRC("loop");         bool host = usb_storage::hostActive();
                 screen = SCREEN_SUMMARY;
             }
             routes::begin();
-            segments::begin();
             map_store::rescanCard(); doba_lib::rescan(); doba_points::rescan(); doba_dem::rescan();  // DOBA
             applySdUpdate();      // a firmware.bin may have been on the card
             usb_storage::begin(); // no-op if it already came up
@@ -3817,31 +3290,6 @@ TRC("loop");         bool host = usb_storage::hostActive();
         // A firmware update in progress takes over the screen with a progress
         // modal (redrawn only when the percentage/phase moves so the e-paper
         // isn't thrashed). Everything else is paused until it finishes/reboots.
-TRC("upd");         if (ble_server::updateInProgress()) {
-            int pct = ble_server::updatePercent();
-            const char* phase = ble_server::updatePhase();
-            int phaseId = phase[0] == 'I' ? 2 : 1;
-            bool phaseChanged = phaseId != lastUpdatePhase;
-            // Redraw the modal on phase change or every 10% (the progress bar
-            // updates use the fast DU path, not a full GL16 — frequent
-            // high-current full refreshes during the BLE transfer can disrupt
-            // it). The current screen shows through behind the popup.
-            if (phaseChanged || pct - lastUpdatePct >= 10 ||
-                (pct == 100 && lastUpdatePct != 100)) {
-                lastUpdatePct = pct;
-                lastUpdatePhase = phaseId;
-                RideState s = g_state.snapshot();
-                s.phoneConnected = ble_server::isPhoneConnected();
-                uint8_t* fb = epdc_framebuffer();
-                memset(fb, 0xFF, fbSize);
-                ui_render_dashboard(s, routes::navActive(), dash_config::current(), fb);   // backdrop
-                ui_render_update_overlay(phase, pct, fb);          // modal on top
-                refresh(phaseChanged, !phaseChanged, false);   // GL16 on phase change, else DU
-            }
-            vTaskDelay(pdMS_TO_TICKS(200));
-            continue;
-        }
-        lastUpdatePct = -100; lastUpdatePhase = -1;
 
         // Riding counts as activity even without touching the screen — a bike
         // computer must NEVER auto-off while you're moving. Any real speed keeps
@@ -3855,137 +3303,8 @@ TRC("upd");         if (ble_server::updateInProgress()) {
             // underneath a rider who is very much still riding.
             if (now.deviceMoving) lastActivityMs = millis();
 
-            // The stopwatch's lap averages, fed every pass whatever page is
-            // up (a few samples a second; it integrates only while running).
-            // Speed is THE speed the dashboard shows, valid while any source
-            // is behind it. Power and cadence are the instantaneous readings
-            // while their source is actually reporting — the same 15 s
-            // freshness the dashboard greys those fields by. Cadence is
-            // whatever the CADENCE field shows: a cadence sensor, or a power
-            // meter's crank data (ble_sensors writes both to cadenceRpm).
-            const uint32_t ms = millis();
-            const bool powerFresh = now.powerConnected &&
-                                    now.powerW != 0xFFFF &&
-                                    ms - now.powerMs <= 15000;
-            const bool cadenceFresh = now.cadenceConnected &&
-                                      now.cadenceRpm != 0xFF &&
-                                      ms - now.cadenceMs <= 15000;
-            stopwatch.sample(ms, now.speedKmh,
-                             now.speedSource != speed_source::NONE,
-                             powerFresh ? now.powerW : 0, powerFresh,
-                             cadenceFresh ? now.cadenceRpm : 0, cadenceFresh);
-
-            // Live segments. A new starred set from the app replaces the old
-            // one (and abandons whatever effort was being timed on it).
-            if (segments::takePending(segDb)) {
-                segMatcher.attach(&segDb);
-                forceDraw = true;
-            }
-            // Power and heart rate for the effort's averages (the result
-            // screen), with the same 15 s freshness as everywhere else.
-            const bool hrFresh = now.hrConnected && now.heartRateBpm != 0xFF &&
-                                 ms - now.hrMs <= 15000;
-            segMatcher.sample(ms, powerFresh ? now.powerW : 0, powerFresh,
-                              hrFresh ? now.heartRateBpm : 0, hrFresh);
-            // Each fix once, stamped with when it arrived: the device's own
-            // GPS, else a fresh phone fix while the receiver has none.
-            static uint32_t lastSegFix = 0;
-            if (now.gpsFix && now.gpsFixMs != lastSegFix) {
-                lastSegFix = now.gpsFixMs;
-                segMatcher.update(now.gpsFixMs, now.latitude, now.longitude);
-            } else if (!now.gpsFix && now.phoneFixValid &&
-                       ms - now.phoneFixMs < 5000 &&
-                       now.phoneFixMs != lastSegFix) {
-                lastSegFix = now.phoneFixMs;
-                segMatcher.update(now.phoneFixMs, now.phoneLat, now.phoneLon);
-            } else {
-                segMatcher.tick(ms);
-            }
-            // The SEGMENT page comes up by itself when an effort starts (unless
-            // the rider set it to manual), and the panel goes back to where it
-            // was once the result has had its time. Only from the ride
-            // screens: never over a menu, a sheet or the nav prompt.
-            int startedSeg = -1;
-            const bool started = segMatcher.takeStarted(&startedSeg);
-            if (started) segSel = startedSeg;   // a new effort shows itself
-            const int slot = segmentSlot();
-            if (started && slot >= 0 && dash_config::page(slot).autoShow &&
-                (screen == SCREEN_DASH || screen == SCREEN_MAP) &&
-                !powerOverlay && !routes::navPending()) {
-                const bool onIt = screen == SCREEN_DASH && dashPage == slot;
-                if (!onIt) {
-                    // A second effort straight after the first keeps the
-                    // original place to go back to.
-                    if (segReturnPage < 0) {
-                        segReturnMap = screen == SCREEN_MAP;
-                        segReturnPage = dashPage;
-                    }
-                    screen = SCREEN_DASH;
-                    dashPage = slot;
-                }
-            }
-            if (segReturnPage >= 0) {
-                const seg::Phase ph = segMatcher.phase();
-                const bool stillOnIt = screen == SCREEN_DASH && dashPage == slot;
-                if (!stillOnIt) {
-                    segReturnPage = -1;   // the rider moved on: leave them be
-                } else if (ph == seg::IDLE || ph == seg::ARMED) {
-                    if (segReturnPage < dash_config::pageCount()) {
-                        dashPage = segReturnPage;
-                        screen = segReturnMap ? SCREEN_MAP : SCREEN_DASH;
-                        if (screen == SCREEN_DASH &&
-                            dash_config::page(dashPage).kind == DP_MAP)
-                            screen = SCREEN_MAP;
-                    }
-                    segReturnPage = -1;
-                }
-            }
-
-            // Stopwatch buttons pressed in the app (the link's
-            // StopwatchCommand): queued by the link task, run here on the UI
-            // task exactly as the page's own taps, with the same enablement
-            // rules. Each one counts as the rider touching the device (keeps
-            // it awake, repaints the page now); the state change below makes
-            // the link task push a fresh LiveFrame on its next pass.
-            while (unsigned char op = ble_server::takeStopwatchCommand()) {
-                const uint32_t t = millis();
-                bool did = false;
-                if (op == ble_server::LIVE_SW_TOGGLE) {
-                    stopwatch.toggle(t);
-                    did = true;
-                } else if (op == ble_server::LIVE_SW_RESET) {
-                    did = stopwatch.canReset() && stopwatch.reset();
-                } else if (op == ble_server::LIVE_SW_LAP) {
-                    did = stopwatch.canLap() && stopwatch.lap(t);
-                }
-                if (did) noteActivity();
-            }
-
-            // A page the rider moved to in the app's view of the device:
-            // follow it, like the panel's own page button, but only from a
-            // page or the map — never over a menu, sheet, overlay or nav
-            // prompt. An out-of-range slot (a layout the app hasn't synced)
-            // is ignored.
-            {
-                const int want = ble_server::takeShowPage();
-                if (want >= 0 && want < dash_config::pageCount() &&
-                    (screen == SCREEN_DASH || screen == SCREEN_MAP) &&
-                    !powerOverlay && !routes::navPending()) {
-                    const int curSlot = screen == SCREEN_MAP ? mapSlot() : dashPage;
-                    if (want != curSlot) {
-                        dashPage = want;
-                        screen = dash_config::page(want).kind == DP_MAP ? SCREEN_MAP : SCREEN_DASH;
-                        segReturnPage = -1;   // the rider chose: no auto-return
-                        forceDraw = true;
-                    }
-                    noteActivity();
-                }
-            }
-
-            // The page on screen and the stopwatch, for the app's live view
-            // (the phone link's LiveFrames). A copy under a spinlock; the link
-            // task only reads it while the app subscribes to those topics.
-            ble_server::LiveView lv;
+            // The page on screen, for diagnostics and the simulator.
+            LiveView lv;
             lv.pageCount = (unsigned char)dash_config::pageCount();
             if (screen == SCREEN_DASH) {
                 lv.page = (unsigned char)dashPage;
@@ -3994,33 +3313,7 @@ TRC("upd");         if (ble_server::updateInProgress()) {
                 lv.page = (unsigned char)mapSlot();
                 lv.screen = 1;
             }
-            lv.swRunning = stopwatch.running;
-            lv.swAccumMs = stopwatch.accumMs;
-            lv.swStartMs = stopwatch.startMs;
-            lv.swLaps = (unsigned char)stopwatch.lapCount;
-            if (stopwatch.lapCount > 0) {
-                lv.swLastLapEndMs = stopwatch.lapEndMs[stopwatch.lapCount - 1];
-                lv.swLastSplitMs = stopwatch.lapSplitMs(stopwatch.lapCount - 1);
-            }
-            const float swV = stopwatch.currentAvgSpeedKmh();
-            lv.swLapSpeedDkmh = swV < 0 ? 0xFFFF
-                                : (unsigned short)(swV * 10.0f > 65534 ? 65534 : swV * 10.0f + 0.5f);
-            const int swP = stopwatch.currentAvgPowerW();
-            lv.swLapPowerW = swP < 0 ? 0xFFFF : (unsigned short)(swP > 65534 ? 65534 : swP);
-            const int swC = stopwatch.currentAvgCadenceRpm();
-            lv.swLapCadenceRpm = swC < 0 ? 0xFF : (unsigned char)(swC > 254 ? 254 : swC);
-            lv.swShowPower = stopwatch.showPower();
-            lv.swShowCadence = stopwatch.showCadence();
-            for (int r = 0; r < ble_server::LiveView::LIVE_SW_ROWS &&
-                            stopwatch.lapCount - 1 - r >= 0; ++r) {
-                const int i = stopwatch.lapCount - 1 - r;
-                lv.swRowSplitMs[r] = stopwatch.lapSplitMs(i);
-                lv.swRowSpeedDkmh[r] = stopwatch.lapSpeedDkmh[i];
-                lv.swRowPowerW[r] = stopwatch.lapPowerW[i];
-                lv.swRowCadenceRpm[r] = stopwatch.lapCadenceRpm[i];
-                lv.swRows = (unsigned char)(r + 1);
-            }
-            ble_server::publishLiveView(lv);
+            live_view::publish(lv);
         }
 
         // Auto-sleep after a quiet period to save battery — a bike computer
@@ -4030,8 +3323,10 @@ TRC("upd");         if (ble_server::updateInProgress()) {
         // Wake with BOOT.
         if (autoSleepEnabled && millis() - lastActivityMs > AUTO_SLEEP_MS &&
             !ride_recorder::isRecording() && !routes::navActive() &&
-            !stopwatch.running && !segMatcher.busy() &&
-            !ble_server::isPhoneConnected() && !ble_server::linkPending()) {
+            // DOBA: a radio that is listening is a pager: switching off would
+            // miss the message or the SOS it is on for. (OTP held this for a
+            // connected phone; Doba holds it while the mesh is on.)
+            !mesh_service::enabled()) {
             uint8_t* fb = epdc_framebuffer();
             shutdownDevice(fb, "auto-sleep (idle timeout)");   // does not return
         }
@@ -4188,91 +3483,6 @@ TRC("touch");         if (touchOk && g_touchQ) {
 
 TRC("serial");         pollSerialCommands();   // serial-driven button presses (testing/profiling)
 
-        // A layout the rider just changed in the app should land on the panel
-        // now, not up to a second later — they are looking at both screens.
-        if (ble_server::takeDashChanged()) {
-            // The config may have fewer pages now — never point past the end,
-            // and a data screen must never wear the map's slot.
-            if (dashPage >= dash_config::pageCount()) dashPage = 0;
-            if (screen == SCREEN_DASH &&
-                dash_config::page(dashPage).kind == DP_MAP)
-                dashPage = firstContentPage();
-            forceDraw = true;
-        }
-        // A pairing code appearing (or clearing) must repaint NOW — the rider
-        // is standing there with the phone's dialog open.
-        {
-            static uint32_t lastPairCode = 0;
-            uint32_t pc = ble_server::pairingCode();
-            if (pc != lastPairCode) { lastPairCode = pc; forceDraw = true; }
-        }
-        // New metadata or album art landed: repaint the music page now, not at
-        // the next 1 Hz tick — the rider just pressed a button somewhere.
-        {
-            static uint32_t lastMediaVersion = 0;
-            uint32_t mv = media::version();
-            if (mv != lastMediaVersion) {
-                lastMediaVersion = mv;
-                if (screen == SCREEN_DASH &&
-                    dash_config::page(dashPage).kind == DP_MUSIC)
-                    forceDraw = true;
-            }
-        }
-        // Same for the WORKOUT page: a rescan finishing, a tapped workout
-        // landing (or failing), the app loading or unloading one.
-        {
-            static uint32_t lastWorkoutVersion = 0;
-            uint32_t wv = workout_service::version();
-            if (wv != lastWorkoutVersion) {
-                lastWorkoutVersion = wv;
-                if (screen == SCREEN_DASH &&
-                    dash_config::page(dashPage).kind == DP_WORKOUT)
-                    forceDraw = true;
-            }
-        }
-
-        // A running STOPWATCH repaints when its displayed second turns over,
-        // not on the free-running 1 Hz tick: that tick drifts against the
-        // clock's own start, so now and then a second would be skipped on
-        // the glass. Still one repaint a second, just in step.
-        {
-            static uint32_t lastStopwatchSec = UINT32_MAX;
-            if (screen == SCREEN_DASH && stopwatch.running &&
-                dash_config::page(dashPage).kind == DP_STOPWATCH) {
-                uint32_t sec = stopwatch.elapsedMs(millis()) / 1000;
-                if (sec != lastStopwatchSec) {
-                    lastStopwatchSec = sec;
-                    forceDraw = true;
-                }
-            }
-        }
-
-        // The SEGMENT page during an effort: in step with its clock, like the
-        // stopwatch above. Any other change of what it shows (armed, done,
-        // the result lapsing, a new nearest segment) repaints too.
-        {
-            static uint32_t lastSegSec = UINT32_MAX;
-            static int lastSegPhase = -1;
-            if (screen == SCREEN_DASH &&
-                dash_config::page(dashPage).kind == DP_SEGMENT) {
-                // The shown segment, its phase and place in the list: any
-                // change of those repaints, as does its clock's second.
-                static int lastSegKey = -1;
-                seg::View v;
-                int list[seg::MAX_LIST], n = 0;
-                segSelectedView(millis(), v, list, n);
-                const seg::Phase ph = v.phase;
-                const uint32_t sec = ph == seg::ACTIVE ? v.elapsedMs / 1000 : 0;
-                const int key = (v.segIndex + 1) * 1000 + v.listPos * 32 + v.listCount;
-                if (sec != lastSegSec || (int)ph != lastSegPhase || key != lastSegKey) {
-                    lastSegSec = sec;
-                    lastSegPhase = (int)ph;
-                    lastSegKey = key;
-                    forceDraw = true;
-                }
-            }
-        }
-
         // A private-channel message pops up on its arrival and goes again
         // after MESH_NOTICE_MS; both ends are a repaint.
         {
@@ -4324,7 +3534,7 @@ TRC("serial");         pollSerialCommands();   // serial-driven button presses (
         // the frame after the modal closes paints immediately.
 TRC("predraw");         const bool modalHoldsStill = powerOverlay || navPrompt;
         if (screenChanged || forceDraw ||
-            (!modalHoldsStill && millis() - lastDraw >= 1000)) {
+            (!modalHoldsStill && tickDue(screen, lastDraw))) {
             lastDraw = millis();
             forceDraw = false;
             Screen prevScreen = lastScreen;
@@ -4334,7 +3544,6 @@ TRC("predraw");         const bool modalHoldsStill = powerOverlay || navPrompt;
             lastOverlay = powerOverlay;
             lastNavPrompt = navPrompt;
             RideState s = g_state.snapshot();
-            s.phoneConnected = ble_server::isPhoneConnected();   // for the status bar
             // Route progress for the ROUTE LEFT dashboard field. Mirrored onto
             // the snapshot rather than read inside the renderer, which is
             // host-compiled for the previews and has no routes module.
@@ -4345,7 +3554,6 @@ TRC("predraw");         const bool modalHoldsStill = powerOverlay || navPrompt;
             // Generous window: power meters are quiet when you stop pedalling.
             constexpr uint32_t kSensorStaleMs = 15000;
             const uint32_t nowMs = millis();
-            radarExpire(s.radar, nowMs);
             if (s.powerConnected && nowMs - s.powerMs > kSensorStaleMs)
                 s.powerConnected = false;
             if (s.hrConnected && nowMs - s.hrMs > kSensorStaleMs)
@@ -4387,55 +3595,7 @@ TRC("predraw");         const bool modalHoldsStill = powerOverlay || navPrompt;
                     if (dash_config::page(dashPage).kind == DP_MAP)
                         dashPage = firstContentPage();
                     const DashPage& pg = dash_config::page(dashPage);
-                    if (pg.kind == DP_MUSIC) {
-                        // Advance the position locally while playing — the
-                        // phone only reports on state changes, and a frozen
-                        // bar under a playing track reads as a hang.
-                        // Same position the app's live MUSIC record carries
-                        // (MediaState::positionMs), so the two bars agree.
-                        MediaState m = media::get();
-                        if (m.present) {
-                            const uint32_t p = m.positionMs(millis()) / 1000;
-                            m.posSec = p > 0xFFFF ? 0xFFFF : (uint16_t)p;
-                        }
-                        ui_render_media(s, m, fb);
-                    } else if (pg.kind == DP_WORKOUT) {
-                        WorkoutView wv;
-                        workout_service::view(wv);
-                        if (!wv.loaded) workoutAllOpen = false;
-                        if (!wv.loaded && !workoutPick)
-                            workoutPick = (WorkoutPickPage*)heap_caps_calloc(
-                                1, sizeof(WorkoutPickPage), MALLOC_CAP_SPIRAM);
-                        if (!wv.loaded && workoutPick) {
-                            // The picker appearing (page opened, Back, the
-                            // app unloading) rescans: the card may have
-                            // changed since the list was read.
-                            if (!workoutPickShown) {
-                                workout_service::requestListRefresh();
-                                workoutPickIdx = 0;
-                            }
-                            pickerThisFrame = true;
-                            WorkoutPickPage& p = *workoutPick;
-                            workout_service::listPage(workoutPickIdx, p);
-                            if (p.count == 0 && p.total > 0) {
-                                // The list shrank under the page we were on.
-                                workoutPickIdx =
-                                    (p.total - 1) / WORKOUT_PICK_ROWS;
-                                workout_service::listPage(workoutPickIdx, p);
-                            }
-                            ui_render_workout_picker(s, p, fb);
-                        } else if (workoutAllOpen)
-                            ui_render_workout_list(s, wv, workoutListPage, fb);
-                        else
-                            ui_render_workout(s, wv, fb);
-                    } else if (pg.kind == DP_STOPWATCH) {
-                        ui_render_stopwatch(s, stopwatch, millis(), fb);
-                    } else if (pg.kind == DP_SEGMENT) {
-                        seg::View v;
-                        int list[seg::MAX_LIST], n = 0;
-                        segSelectedView(millis(), v, list, n);
-                        ui_render_segment(s, v, fb);
-                    } else {
+                    {
                         // Compact hero whenever a banner (turn, pause or message) owns
                         // the band, so no field hides underneath it.
                         ui_render_dashboard(s,
@@ -4443,16 +3603,7 @@ TRC("predraw");         const bool modalHoldsStill = powerOverlay || navPrompt;
                                                 meshNoticeShown(),
                                             pg.layout, fb);
                     }
-                    // Field pages carry the banners as fixtures; music,
-                    // workout and stopwatch are dense layouts the band would
-                    // bury, so the turn cue only POPS UP when a turn
-                    // approaches (500 m ~ a minute of warning) and the pause
-                    // stays in their status bar.
-                    const bool densePage = pg.kind == DP_MUSIC ||
-                                           pg.kind == DP_WORKOUT ||
-                                           pg.kind == DP_STOPWATCH ||
-                                           pg.kind == DP_SEGMENT;
-                    drawNavBanner(fb, densePage ? 500.0f : 0);
+                    drawNavBanner(fb, 0);
                     if (pg.kind == DP_FIELDS) drawPauseBanner(s, fb);
                     drawMeshNotice(fb);
                     break;
@@ -4498,16 +3649,10 @@ TRC("predraw");         const bool modalHoldsStill = powerOverlay || navPrompt;
                     m.hr = s.hrConnected;
                     m.pwr = s.powerConnected;
                     m.cad = s.cadenceConnected;
-                    m.spd = s.speedSensorConnected &&
-                            speed_source::sensorFresh(s, millis());
-                    m.radar = s.radar.connected;
                     m.batteryPercent = s.batteryPercent;
                     m.rideDistanceM = s.distanceM;
                     m.rideElapsedS = s.elapsedS;
                     m.useMiles = s.useMiles;
-                    m.phonePaired = ble_server::phonePaired();
-                    snprintf(m.phoneName, sizeof(m.phoneName), "%s",
-                             ble_server::pairedPhoneName());
                     if (routes::active()) {
                         snprintf(m.routeLine, sizeof(m.routeLine),
                                  "%s · %.1f %s left", routes::activeName(),
@@ -4521,14 +3666,12 @@ TRC("predraw");         const bool modalHoldsStill = powerOverlay || navPrompt;
                     ui::statusBar(s, fb, "MENU");
                     break;
                 }
-                case SCREEN_SENSORS:
                 case SCREEN_ROUTES:
                 case SCREEN_HISTORY:
                 case SCREEN_DIRECTIONS:
                     renderListScreen(fb);
                     ui::statusBar(s, fb,
-                                  screen == SCREEN_SENSORS    ? "PHONE LINK"
-                                  : screen == SCREEN_ROUTES   ? "ROUTES"
+                                  screen == SCREEN_ROUTES   ? "ROUTES"
                                   : screen == SCREEN_HISTORY  ? "TRACKS"
                                                               : "DIRECTIONS");
                     break;
@@ -4559,7 +3702,7 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
                     // and if the radio ever fails to start, the row shows what
                     // is true rather than what was asked for.
                     SettingsInfo si{settings::showOffline(),
-                                    settings::ftpWatts(), settings::tzMinutes(),
+                                    0, settings::tzMinutes(),
                                     settings::backlight(), settings::useMiles(),
                                     settings::usbDrive(),
                                     mesh_service::enabled()};
@@ -4601,23 +3744,9 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
                 }
             }
             if (powerOverlay) {
-                if (sheetKind == SHEET_UNPAIR)
-                    ui_render_unpair_sheet(ble_server::phonePaired(),
-                                           ble_server::pairedPhoneName(),
-                                           ble_server::pairedPhoneCount(), fb);
-                else
-                    ui_render_power_sheet(s.recording, fb);
+                ui_render_power_sheet(s.recording, fb);
             }
             }  // end else (normal screens)
-            // Pairing code sheet sits over everything — the phone's dialog is
-            // modal on its side too. Outside the branch above, so it covers
-            // the "Start navigation?" prompt as well: a code the rider can't
-            // see is a pairing that can't finish.
-            if (unsigned int pc = ble_server::pairingCode())
-                ui_render_pairing(pc, fb);
-            // Leaving the picker (another page, a menu, a workout loading)
-            // re-arms its rescan-on-appear.
-            workoutPickShown = pickerThisFrame;
             // These three classified the frame so refresh() could pick a waveform.
             // The driver picks its own now (see refresh()), so they are inert — kept
             // because they document which screens are pure black/white and which
@@ -4733,3 +3862,20 @@ namespace doba_ui {
 bool mapTrackUp() { return ::mapTrackUp; }
 void setMapTrackUp(bool on) { ::mapTrackUp = on; }
 }  // namespace doba_ui
+
+namespace live_view {
+namespace {
+LiveView g_live;
+portMUX_TYPE g_liveMux = portMUX_INITIALIZER_UNLOCKED;
+}  // namespace
+void publish(const LiveView& v) {
+    portENTER_CRITICAL(&g_liveMux);
+    g_live = v;
+    portEXIT_CRITICAL(&g_liveMux);
+}
+void read(LiveView& v) {
+    portENTER_CRITICAL(&g_liveMux);
+    v = g_live;
+    portEXIT_CRITICAL(&g_liveMux);
+}
+}  // namespace live_view

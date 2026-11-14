@@ -1,5 +1,6 @@
 """Shared helpers for the mesh tests: a device with its LoRa radio fitted and
-switched on, the phone's view of it, and a stock Meshtastic node's view of
+switched on, the device's own view of it (the sim's `mesh` control), and a
+stock Meshtastic node's view of
 what it puts on the air (otpsim.mesh — an independent codec)."""
 import base64
 import os
@@ -8,8 +9,10 @@ import time
 
 import pytest
 
-from conftest import ARTIFACTS, TIME_SCALE, paired_phone
-from otpsim import LinkClient, SimDevice, pb
+from types import SimpleNamespace
+
+from conftest import ARTIFACTS, TIME_SCALE
+from otpsim import SimDevice
 from otpsim import mesh as M
 
 BROADCAST = M.BROADCAST
@@ -28,13 +31,11 @@ def node_num_for(mac):
 
 
 class Mesh:
-    """One device with its radio on, a paired phone on the link, and helpers
-    that read the mesh the way the apps do (MeshCommand get, every page)."""
+    """One device with its radio on, and helpers that read the mesh as the
+    device holds it (the sim's `mesh` control command)."""
 
     def __init__(self, dev, radio_on=True):
         self.dev = dev
-        self.phone = paired_phone(dev)
-        self.link = LinkClient(self.phone).hello()
         self.num = self.state().node_num
         line = dev.wait_log(r"PKI key pair, public key", since=0, timeout=10)
         self.public_key = base64.b64decode(line.split("public key ")[1].strip())
@@ -45,36 +46,35 @@ class Mesh:
         if radio_on:
             self.radio(True)
 
-    # -- the phone's view -------------------------------------------------------------------
+    # -- the device's view ------------------------------------------------------------------
 
-    def get(self, topic):
-        r = self.link.request(mesh=pb.MeshCommand(get=pb.MeshGet(topics=[topic])), all_pages=True)
-        return r
+    def _mesh(self, **op):
+        return self.dev.cmd("mesh", **op)
+
+    def _view(self):
+        return _ns(self._mesh()["mesh"])
 
     def state(self):
-        return self.get(pb.MESH_TOPIC_STATE)[0].mesh_state
+        return self._view().state
 
     def stats(self):
-        return self.get(pb.MESH_TOPIC_STATS)[0].mesh_stats
+        return self._view().stats
 
     def nodes(self):
-        return [n for m in self.get(pb.MESH_TOPIC_NODES) for n in m.mesh_nodes.nodes]
+        return self._view().nodes
 
     def history(self):
-        return [x for m in self.get(pb.MESH_TOPIC_HISTORY) for x in m.mesh_history.messages]
+        return self._view().history
 
     def device_channels(self):
-        return list(self.get(pb.MESH_TOPIC_CHANNELS)[0].mesh_channels.channels)
-
-    def command(self, **op):
-        return self.link.expect_result(mesh=pb.MeshCommand(**op))
+        return self._view().channels
 
     def radio(self, on, announce=True):
-        """Mesh on or off from the app. Turned on, waits (unless `announce`
-        is False) for the NodeInfo the device sends 5 s later, so a test's
-        own frames don't land while it is transmitting (half-duplex)."""
+        """Mesh on or off. Turned on, waits (unless `announce` is False) for
+        the NodeInfo the device sends 5 s later, so a test's own frames don't
+        land while it is transmitting (half-duplex)."""
         seq = self.dev.lora()["tx_seq"]
-        self.command(radio_on=on)
+        self._mesh(op="radio", on=on)
         want = "rx" if on else "sleep"
         self.dev_wait(lambda: self.dev.lora()["mode"] == want, "radio " + want)
         if on and announce:
@@ -82,14 +82,30 @@ class Mesh:
                           "the announcement after switching on", timeout=15)
 
     def send(self, text, dest=BROADCAST, channel=0):
-        """As the app's composer: the answer (mesh_queued or a result)."""
-        return self.link.request(mesh=pb.MeshCommand(send=pb.MeshSend(dest=dest, channel=channel, text=text)))
+        """As Doba's composer: the message queued on the UI task (console `mesh tx`)."""
+        d = "all" if dest == BROADCAST else "%x" % dest
+        lines = self.dev.console("mesh tx %s %d %s" % (d, channel, text), 400)
+        ids = [int(l.split("id=")[1]) for l in lines if "mesh tx id=" in l]
+        pid = ids[0] if ids else 0
+        return _Queued(_Msg(packet_id=pid) if pid else None)
 
     def set_private(self, index, name, psk):
-        self.command(set_channel=pb.MeshChannelEdit(index=index, name=name, psk=psk))
+        self.dev.console("mesh chan %d %s %s" % (index, bytes(psk).hex() or "-", name), 400)
         self.dev_wait(lambda: any(c.index == index and c.name == name for c in self.device_channels()),
                       "private channel %d applied" % index)
         self.channels.append(M.Channel(name, psk))
+
+    def command(self, preset=None, delete_channel=None, radio_on=None):
+        """What the old phone link's MeshCommand did, through the sim's control."""
+        if preset is not None:
+            self.dev.console("mesh preset %d" % preset, 400)
+        if delete_channel is not None:
+            self.dev.console("mesh forget %d" % delete_channel, 400)
+        if radio_on is not None:
+            self._mesh(op="radio", on=radio_on)
+
+    def share(self, index, on):
+        self.dev.console("mesh share %d %s" % (index, "on" if on else "off"), 400)
 
     # -- the air ---------------------------------------------------------------------------
 
@@ -176,10 +192,7 @@ class Mesh:
             time.sleep(0.1)
 
     def close(self):
-        try:
-            self.phone.disconnect()
-        except Exception:
-            pass
+        pass
 
 
 def keep_artifacts(request, dev):
@@ -218,3 +231,30 @@ def is_port(h, port):
 
 def lock_warnings(dev):
     return [l for l in dev.log() if "WITHOUT sdLock" in l or "LOCK ORDER INVERSION" in l]
+
+
+class _Queued:
+    """The old link's answer to a send: mesh_queued with the packet id."""
+
+    def __init__(self, q):
+        self.mesh_queued = q
+
+    def WhichOneof(self, _):
+        return "mesh_queued" if self.mesh_queued else "result"
+
+
+class _Msg(SimpleNamespace):
+    """Attribute access plus protobuf's HasField(), for tests written against
+    the old phone-link messages."""
+
+    def HasField(self, name):
+        return getattr(self, name, None) is not None
+
+
+def _ns(x):
+    """JSON from the control channel -> attribute access, like the old protobufs."""
+    if isinstance(x, dict):
+        return _Msg(**{k: _ns(v) for k, v in x.items()})
+    if isinstance(x, list):
+        return [_ns(v) for v in x]
+    return x

@@ -14,8 +14,8 @@ import time
 
 import pytest
 
-from conftest import TIME_SCALE, paired_phone
-from otpsim import LinkClient, LinkError, SimPhone, pb
+from conftest import TIME_SCALE
+
 from otpsim.tiles import card_path, fixture_manifest, fixture_tiles
 from power_util import FAST, check_finished_fit, console_text, fit_records, only_ride, uptime_s
 from test_rides import SAVE_BUTTON, line_track
@@ -144,31 +144,6 @@ def test_power_cuts_at_any_moment_of_a_ride_lose_at_most_the_last_checkpoint(dev
 
 # ---- the crash report ------------------------------------------------------------------------
 
-@pytest.mark.parametrize("reason", CRASHES)
-def test_a_crash_leaves_a_report_on_the_card_for_the_app(device, reason):
-    """After a panic, a watchdog or a brownout the next boot writes a crash
-    report to /logs, naming the reset and carrying the last lines the
-    firmware logged before it. The app's log list shows it and the app can
-    download it — this is how a rider's crash reaches the developers."""
-    device.console("timing")                 # a line we know was logged just before
-    device.wait_log(r"dbg timing ON", since=0, timeout=5)
-    device.reset(reason)
-    device.wait_log(r"crash report saved and verified: /logs/crash-", since=0, timeout=15)
-    files = crash_files(device)
-    assert len(files) == 1, files
-    text = open(os.path.join(device.sd, "logs", files[0])).read()
-    assert "reset=%s" % REASON_TEXT[reason] in text, text[:300]
-    tail = text.split("Prior boot RTC log tail")[1]
-    assert "dbg timing ON" in tail, "the report lost the last log lines before the crash:\n" + tail
-
-    phone = paired_phone(device)
-    link = LinkClient(phone).hello()
-    pages = link.request(list=pb.ListRequest(kind=pb.LIST_LOGS), all_pages=True, timeout=10)
-    names = {f.name: f.size for p in pages for f in p.file_list.files}
-    assert files[0] in names, names
-    got = link.download(pb.SOURCE_LOG, files[0])
-    assert got.decode() == text
-
 
 @pytest.mark.parametrize("how", ["power cut", "restart", "wake from sleep"])
 def test_no_crash_report_without_a_crash(device, how):
@@ -252,52 +227,6 @@ def test_the_crash_test_is_refused_while_a_ride_records(device):
 
 
 # ---- a tile torn by a reset mid-write ----------------------------------------------------------
-
-def test_a_tile_torn_by_a_reset_is_not_listed_as_the_version_the_app_sent(device, link):
-    """A watchdog mid-way through writing a map tile (it happened: a big tile
-    held the card for seconds) leaves a short file under the tile's name. The
-    device must not tell the app it holds that version — the app would never
-    send the tile again — and the map must still draw without taking the
-    device down. Re-sending the tile repairs it."""
-    h3, data, version = max(fixture_tiles(), key=lambda t: len(t[1]))
-    path = card_path(device.sd, h3)
-    device.set_sd_latency(150)               # every 4 KB write call: 150 ms of card time
-    err = []
-
-    def send():
-        try:
-            link.upload(pb.TARGET_MAP_TILE, h3, data, timeout=60, tile_version=version)
-        except Exception as e:                # the link dies with the reset
-            err.append(e)
-
-    t = threading.Thread(target=send, daemon=True)
-    t.start()
-    deadline = time.time() + 30 * TIME_SCALE
-    while time.time() < deadline:
-        if os.path.exists(path) and 0 < os.path.getsize(path) < len(data) // 2:
-            break
-        time.sleep(0.01)
-    else:
-        pytest.fail("the tile write never got under way")
-    device.reset("task_wdt")
-    t.join(10)
-    device.set_sd_latency(0)
-    torn = os.path.getsize(path) if os.path.exists(path) else 0
-    assert torn < len(data), "the write finished before the reset"
-    listed = {t["id"]: t["version"] for t in device.cmd("tiles")["tiles"]}
-    assert listed.get(h3, "") != version, "a torn tile (%d of %d bytes) is listed as %s" % (torn, len(data), version)
-
-    device.console("timing")
-    device.gps(*tile_centre(h3))
-    device.console("screen map")
-    time.sleep(3)
-    assert device.running and device.status()["screen"] == "map"
-
-    link = LinkClient(rejoin(device, link.phone)).hello()
-    link.upload(pb.TARGET_MAP_TILE, h3, data, timeout=60, tile_version=version)
-    assert open(path, "rb").read() == data
-    listed = {t["id"]: t["version"] for t in device.cmd("tiles")["tiles"]}
-    assert listed[h3] == version
 
 
 def rejoin(dev, phone):

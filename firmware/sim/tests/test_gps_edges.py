@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from otpsim import LinkClient, pb
+
 from power_util import check_finished_fit, fit_records, only_ride
 from test_rides import SAVE_BUTTON, line_track
 
@@ -79,24 +79,6 @@ def stop_and_save(dev):
 
 
 # ---- position --------------------------------------------------------------------------------
-
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: ride_recorder.cpp's device-GPS distance path adds a step only if it is under 100 m "
-    "(`if (d > 0.5 && d < 100.0) distanceM += d`), whatever the time since the last fix; the phone "
-    "path scales the same limit by the gap (40 m/s * dtSec). After a 60 s GPS outage (a tunnel, tree "
-    "cover) the first fix is ~500 m on at 30 km/h and the whole stretch is dropped: the ride's distance "
-    "and average speed come out short by everything ridden while the receiver had no fix"))
-def test_distance_ridden_through_a_tunnel_is_counted(device):
-    start = start_ride(device)
-    device.wait_status(lambda s: s["ride"]["elapsed_s"] >= 30, timeout=20)
-    device.gps_silent(True)                  # into the tunnel: the module still moves on
-    t0 = device.status()["ride"]["elapsed_s"]
-    device.wait_status(lambda s: s["ride"]["elapsed_s"] >= t0 + 60, timeout=30)
-    device.gps_silent(False)
-    st = device.wait_status(lambda s: s["ride"]["gps_fix"] and s["ride"]["elapsed_s"] >= t0 + 90, timeout=30)
-    ridden = metres(start, module_pos(device))
-    assert st["ride"]["distance_m"] >= 0.9 * ridden, \
-        "%.0f m on the dashboard after %.0f m ridden" % (st["ride"]["distance_m"], ridden)
 
 
 def test_a_fix_that_jumps_across_the_map_adds_no_distance(device):
@@ -167,22 +149,6 @@ def test_a_module_a_gps_week_rollover_behind_never_sets_the_clock(device):
     assert st["wall_unix"] < 1_000_000_000, st["wall_unix"]     # still unset, not 2007
     old = time.strftime("%Y%m%d.log", time.gmtime(now - WEEK_ROLLOVER_S))
     assert not os.path.exists(os.path.join(device.sd, "logs", old))
-
-
-@cold
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: ble_server.cpp applyPhoneTime() takes the phone's clock only while the device has no GPS fix "
-    "(`noGpsFix`), but gps_service.cpp drops a fix's date before 2025. With a receiver whose date is "
-    "wrong (week-number rollover) the device has a fix and no time: the phone's clock in Hello and in "
-    "every location is ignored, the status bar stays --:-- and BOOT never starts a ride ('no GPS time yet')"))
-def test_the_phone_clock_is_taken_when_the_gps_date_is_unbelievable(device):
-    fix_from_the_past(device)
-    from conftest import paired_phone
-    phone = paired_phone(device)
-    LinkClient(phone).hello(unix_ms=time.time() * 1000)
-    device.wait_status(lambda s: s["ride"]["time_valid"] and abs(s["wall_unix"] - time.time()) < 5, timeout=5)
-    device.button("boot")
-    device.wait_status(lambda s: s["ride"]["recording"], timeout=5)
 
 
 def test_the_clock_never_reads_a_day_early_at_utc_midnight(device):

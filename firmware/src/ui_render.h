@@ -167,75 +167,11 @@ const EpdFont* valueFont(int digitPx);
 void ui_render_dashboard(const RideState& s, bool navActive,
                          const DashLayout& layout, uint8_t* fb);
 
-// The MUSIC page: phone media controls + album art (media_state.h). Touch
-// targets exported for the dashboard's hit-testing, same as the sheets'.
-struct MediaState;
-void ui_render_media(const RideState& s, const MediaState& m, uint8_t* fb);
-
-// The WORKOUT pages, from the Claude Design "Workout View" frames: the
-// executing view (hero countdown, reversed power band, session profile,
-// prev/next block strips) and the ALL BLOCKS list (88 px rows, paged by 8,
-// tap a row to start that block). Touch targets exported like the media
-// row's; the list's rows are hit-tested from kWorkoutRowTop/kWorkoutRowH.
-struct WorkoutView;
-void ui_render_workout(const RideState& s, const WorkoutView& v, uint8_t* fb);
-void ui_render_workout_list(const RideState& s, const WorkoutView& v, int page,
-                            uint8_t* fb);
-// With nothing loaded the page is the PICKER: the files in /workouts, one
-// per row (title, duration, block count, intensity sparkline), paged by
-// WORKOUT_PICK_ROWS on the same row grid and footer as the block list; the
-// footer's right-hand button (kPagerAction) is REFRESH here. Tap a row to
-// load it. In the loaded-but-not-started (READY) state, the kWorkoutRedo
-// strip becomes "< WORKOUTS", back to this list.
-struct WorkoutPickPage;
-void ui_render_workout_picker(const RideState& s, const WorkoutPickPage& p,
-                              uint8_t* fb);
-extern const EpdRect kWorkoutRedo;
-extern const EpdRect kWorkoutStartNext;
-extern const EpdRect kWorkoutPause;
-extern const EpdRect kWorkoutAll;
-extern const int kWorkoutRowTop, kWorkoutRowH, kWorkoutRowsPerPage;
-extern const EpdRect kMediaVolDown;
-extern const EpdRect kMediaPrev;
-extern const EpdRect kMediaPlay;
-extern const EpdRect kMediaNext;
-extern const EpdRect kMediaVolUp;
-
-// The STOPWATCH page (`page stopwatch`, stopwatch.h): the elapsed time as big
-// as the panel allows; once there are laps, the total above the lap in
-// progress and the completed laps, newest first. START/PAUSE, RESET and LAP
-// along the footer, each in a fixed place (Stopwatch::canReset/canLap say
-// which are live). Touch targets exported for the dashboard's hit-testing,
-// like the media row's.
-struct Stopwatch;
-void ui_render_stopwatch(const RideState& s, const Stopwatch& sw, uint32_t now,
-                         uint8_t* fb);
-extern const EpdRect kStopwatchToggle;
-extern const EpdRect kStopwatchReset;
-extern const EpdRect kStopwatchLap;
-
-// The SEGMENT page (`page segment`, segment_match.h): live Strava segments.
-// Idle, the nearest starred segment within 5 km (name, distance to its start,
-// length, grade, PR). During an effort, the elapsed time as big as it goes,
-// the live delta against PR pace, and a progress bar with the distance left.
-// After the finish, the time and the delta against the PR (or NEW PR). No
-// touch targets: everything on it happens by riding.
-// With two or more relevant segments (overlapping efforts, nearby starts)
-// the bottom carries the list pager (ui_render_pager, "n / N"): kPagerUp /
-// kPagerDown step to the previous / next segment.
-namespace seg { struct View; }
-void ui_render_segment(const RideState& s, const seg::View& v, uint8_t* fb);
-
-// BLE pairing sheet: the 6-digit code the phone asks the rider to type,
-// drawn over whatever screen is up while the pairing dialog is live.
-void ui_render_pairing(uint32_t code, uint8_t* fb);
-
 // Field machinery shared with the map's data strip (map_view.cpp): value +
 // unit for a DashField, and whether its source is currently present.
 void dashFieldValue(uint8_t field, const RideState& s, char* val, size_t valCap,
                     const char** unit);
 bool dashFieldAvailable(uint8_t field, const RideState& s);
-void ui_render_radar(const RideState& s, const EpdRect& rect, uint8_t* fb);
 // The WIDEST string a field can produce — what type is sized against, so a
 // value crossing a digit boundary can never resize its cell mid-ride.
 const char* dashSizingHint(uint8_t field);
@@ -387,7 +323,6 @@ void ui_settings_toggle(int x, int y, int w, int h, bool on, uint8_t* fb,
 // component with different words. Paired: UNPAIR (kPowerShutdown) / CANCEL (kPowerCancel). Not paired:
 // an explanation and CLOSE only (kPowerCancel). `count` > 1 only on a device
 // migrated with bonds to several phones.
-void ui_render_unpair_sheet(bool paired, const char* name, int count, uint8_t* fb);
 
 // Sub-screens run their content to here. There is no BACK strip: the capacitive
 // Home button below the glass already goes back from every one of them, so a

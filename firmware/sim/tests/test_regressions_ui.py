@@ -12,7 +12,6 @@ import zlib
 
 import pytest
 
-from otpsim import pb
 
 W, H = 540, 960
 STATUS_H = 64
@@ -170,45 +169,6 @@ def fix_at(device, lat, lon, settle_s=1.5):
 
 # -- the tests --------------------------------------------------------------------------
 
-def test_modal_holds_still_on_the_1hz_tick(device, link, tmp_path):
-    """d73d585 "Stop redrawing modals on the 1 Hz tick". The SHUT DOWN button
-    took two or three goes: the UI loop re-rendered and re-painted the whole
-    frame under the power sheet every second, and a tap that began and ended
-    inside that busy pass was never seen. (The sim holds a tap until the
-    firmware has read it, so the lost tap itself isn't reproduced; the busy
-    redraw that lost it is.) Under a modal the panel must stay still while the
-    numbers behind it (the POWER hero of the default layout) change."""
-    pw = pair_sensor(device, link, "power", watts=200, cadence=85)
-    device.wait_status(lambda s: s["ride"]["power"] == 200, timeout=20)
-    start_recording(device)
-    open_power_sheet(device, tmp_path)
-    time.sleep(1.5)                          # let the opening paint(s) land
-    st0 = device.status()
-    for i in range(10):                      # 5 s of a rider pushing harder and harder
-        device.cmd("sensor", kind="power", addr=pw, watts=210 + 25 * i)
-        time.sleep(0.5)
-    st1 = device.status()
-    assert st1["ride"]["power"] > 300, st1["ride"]
-    assert st1["paints"] == st0["paints"], (
-        "the panel repainted %d times under the power sheet in %d s of riding"
-        % (st1["paints"] - st0["paints"], st1["ride"]["elapsed_s"] - st0["ride"]["elapsed_s"]))
-
-
-def test_navigate_prompt_does_not_scrim_the_route(device, link, tmp_path):
-    """82c5832 "Stop scrimming the route under the NAVIGATE prompt". The
-    sheet's 50% checker went over the route preview too, so the one thing the
-    rider is deciding about — which route this is — was hidden behind it. The
-    preview above the sheet must be clean; the power sheet still scrims."""
-    pts = line_track(37.77, -122.45, 2)
-    send_route(link, "Loop", pts, [(pts[50][0], pts[50][1], "Turn left")])
-    device.wait_status(lambda s: s["nav"]["pending"], timeout=10)
-    time.sleep(1.5)
-    g = glass(device, tmp_path, "prompt")
-    assert g.ink(0, SHEET_TOP + 1, W, SHEET_TOP + 5) > 0.95, "no NAVIGATE sheet on the glass"
-    tone = g.checker(0, STATUS_H, W, SHEET_TOP)
-    assert tone < 0.3, "the route preview is under a scrim (checker strength %.2f)" % tone
-    assert g.ink(0, STATUS_H, W, SHEET_TOP) > 0.002, "no route drawn above the sheet"
-
 
 def test_power_sheet_scrims_the_status_bar_too(device, tmp_path):
     """ce15d45 "Grey the status bar under the power-off overlay too" (#107).
@@ -236,62 +196,6 @@ def test_power_sheet_scrims_the_status_bar_too(device, tmp_path):
 
 HERO_BODY = (40, 130, 500, 300)     # inside the default layout's POWER hero, above the value
 HR_CELL_BODY = (36, 630, 250, 670)   # inside HEART RATE, between caption and value
-
-
-def test_dead_sensor_greys_the_hero_too(device, tmp_path):
-    """39bd282 "Grey out the hero cell when its sensor is gone". The hero had
-    no stale handling: with no power meter the biggest number on the panel
-    looked live while the grid cells beside it greyed out."""
-    device.wait_status(lambda s: s["screen"] == "dash" and s["paints"] > 0)
-    time.sleep(1.5)
-    g = glass(device, tmp_path, "dash")
-    assert g.dots(*HR_CELL_BODY) > 0.6, "the HEART RATE cell isn't greyed with no strap"
-    hero = g.dots(*HERO_BODY)
-    assert hero > 0.6, "the POWER hero is not greyed out with no power meter (%.2f)" % hero
-
-
-def test_a_cell_greying_in_place_is_scrubbed(device, link):
-    """7fc3a22 "Scrub the panel where the dashboard greys a cell out". The
-    greyed tone is a fine dot over whatever the glass held, which one light
-    pulse doesn't fully erase; the driver then believes those pixels are white
-    and never drives them again, so the cell reads dirty. A cell greying out
-    mid-ride (a power meter going quiet) must earn a scrub. The sim doesn't
-    model the residue — it checks the firmware pays for the scrub."""
-    # DOBA: the default layout carries no sensor cells; give it OTP's.
-    r = link.request(set_dash=pb.DashConfig(text="power hero\nhr\ncadence\nspeed\n"))
-    assert r.WhichOneof("body") == "dash", r
-    pair_sensor(device, link, "hr", bpm=140)
-    pw = pair_sensor(device, link, "power", watts=220, cadence=88)
-    device.wait_status(lambda s: s["ride"]["power"] == 220 and s["ride"]["hr"] == 140
-                       and s["ride"]["cadence"] == 88, timeout=30)
-    time.sleep(2)                                      # every cell live, settled
-    before = device.status()["scrubs"]
-    device.set_speed(5)
-    device.cmd("sensor", kind="power", addr=pw, sending=False)
-    device.wait_status(lambda s: s["ride"]["power"] == -1, timeout=40)
-    time.sleep(2)
-    device.set_speed(1)
-    after = device.status()["scrubs"]
-    assert after > before, "the power cell greyed out in place with no scrub"
-
-
-@pytest.mark.xfail(reason="tonedTransition keys off 'any cell toned' (prevToned), so a cell greying "
-                          "out while another is already grey (no HR strap) earns no scrub", strict=True)
-def test_a_second_cell_greying_in_place_is_scrubbed(device, link):
-    """Found while checking 7fc3a22: the scrub fires only when the frame goes
-    from no greyed cell to some. Riding without a heart-rate strap (HEART RATE
-    is greyed from boot), the power meter going quiet greys the POWER hero in
-    place — the very case the commit names — and nothing is scrubbed."""
-    pw = pair_sensor(device, link, "power", watts=220, cadence=88)
-    device.wait_status(lambda s: s["ride"]["power"] == 220 and s["ride"]["cadence"] == 88, timeout=30)
-    time.sleep(2)
-    before = device.status()["scrubs"]
-    device.set_speed(5)
-    device.cmd("sensor", kind="power", addr=pw, sending=False)
-    device.wait_status(lambda s: s["ride"]["power"] == -1, timeout=40)
-    time.sleep(2)
-    device.set_speed(1)
-    assert device.status()["scrubs"] > before, "the power hero greyed out in place with no scrub"
 
 
 def eventually(device, predicate, message, timeout=5):
@@ -372,64 +276,6 @@ def ride_route(device, link, pts, turns, start_m=0.0):
     device.wait_status(lambda s: s["ride"]["gps_fix"], timeout=10)
     send_route(link, "Test", pts, [along(m) + (text,) for m, text in turns])
     return accept_route(device)
-
-
-def test_a_wandering_fix_does_not_walk_through_the_turns(device, link):
-    """773f98d "Calculate the distance to the next turn instead of tracking
-    it". The next turn was a cursor that only moved forward: one fix that
-    wandered past a turn consumed it for good, so a rider standing still on a
-    weak fix watched the cues step through the route. The next turn is now a
-    function of where the rider is — when the fix comes back, so does the turn."""
-    pts = line_track(LAT0, LON0, 3, step_m=20)
-    turns = [(400, "Turn 1"), (600, "Turn 2"), (800, "Turn 3"), (1000, "Turn 4")]
-    ride_route(device, link, pts, turns, start_m=300)
-    nav = fix_at(device, *along(300))
-    assert nav["next"] == "Turn 1", nav
-    for m, north in [(460, 20), (300, -15), (480, 10), (290, 25), (470, -20)]:
-        fix_at(device, *along(m, north))    # a bad fix up to 180 m ahead
-    nav = fix_at(device, *along(300))
-    assert nav["next"] == "Turn 1", "standing at 300 m, the cue is %r at %.0f m" % (nav["next"], nav["next_m"])
-    assert abs(nav["next_m"] - 100) < 15, nav
-
-
-def test_a_noisy_fix_just_past_a_turn_does_not_skip_it(device, link):
-    """bdbec8d, the "wrong turn announcements" part (1/2): a turn was consumed
-    5 m past it — inside any bike GPS's error — so one noisy fix at a corner
-    announced the next turn while the rider was still short of the junction.
-    A fix 10 m past the turn still shows that turn."""
-    pts = line_track(LAT0, LON0, 2, step_m=20)
-    ride_route(device, link, pts, [(400, "Turn 1"), (700, "Turn 2")], start_m=360)
-    nav = fix_at(device, *along(385))
-    assert nav["next"] == "Turn 1", nav
-    nav = fix_at(device, *along(410, 4))
-    assert nav["next"] == "Turn 1", "10 m past Turn 1 the cue jumped to %r" % nav["next"]
-
-
-def test_a_turn_between_vertices_is_placed_where_it_is(device, link):
-    """bdbec8d, the "wrong turn announcements" part (2/2): maneuvers snapped to
-    the nearest route VERTEX, and a polyline only has a vertex where the road
-    bends — so a "continue onto" halfway down a 2 km straight landed hundreds
-    of metres away. The distance to it must be the real one."""
-    pts = [along(0), along(2000), offset(*along(2000), 1000, 0)]
-    turns = [(1000, "Continue onto Oak St"), (2000, "Turn left")]
-    ride_route(device, link, pts, turns, start_m=0)
-    nav = fix_at(device, *along(100))
-    assert nav["next"] == "Continue onto Oak St", nav
-    assert abs(nav["next_m"] - 900) < 30, "900 m to the turn, the cue says %.0f m" % nav["next_m"]
-
-
-def test_the_turn_countdown_moves_between_route_points(device, link):
-    """c368c01 "Fix turn-by-turn tracking": progress was quantised to route
-    vertices, so the distance to the turn stuck and then jumped by the point
-    spacing instead of counting down. Walking 10 m steps along a route with
-    points 50 m apart, the readout moves 10 m every step."""
-    pts = line_track(LAT0, LON0, 1, step_m=50)
-    ride_route(device, link, pts, [(800, "Turn right")], start_m=200)
-    seen = []
-    for m in range(210, 320, 10):
-        seen.append(round(fix_at(device, *along(m), settle_s=1.2)["next_m"]))
-    steps = [a - b for a, b in zip(seen, seen[1:])]
-    assert all(5 <= s <= 15 for s in steps), "distance to the turn walking 10 m steps: %s" % seen
 
 
 # -- lists ------------------------------------------------------------------------------

@@ -14,6 +14,7 @@ import time
 
 from otpsim import SimDevice
 from otpsim.device import ControlError
+from otpsim.device import ControlError
 from test_rides import SAVE_BUTTON, line_track, record_ride
 
 FAST = ["--gps-baud", "115200"]
@@ -142,7 +143,14 @@ def test_a_ride_file_that_kills_recovery_does_not_boot_loop():
     os.makedirs(os.path.join(dev.sd, "rides"), exist_ok=True)
     finished_fit(os.path.join(dev.sd, "rides", "20250101-080000.fit"))
     try:
-        dev.launch()
+        try:
+            dev.launch()
+        except ControlError:
+            # The fatal read can come before the boot's last line now that
+            # nothing slow (the Bluetooth stack) starts ahead of the recorder:
+            # the reset then closes the channel launch() is waiting on. The
+            # console log on disk carries on across the reset.
+            pass
         deadline = time.time() + 30
         while time.time() < deadline:
             lines = console_lines(dev)

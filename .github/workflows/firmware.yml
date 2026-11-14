@@ -64,10 +64,10 @@ jobs:
         run: git clone --depth 1 https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO vendor/T5S3-4.7-e-paper-PRO
       - name: MGRS/UTM maths
         run: pip install mgrs pyproj && python3 tools/milgeo_test/run.py
-      - name: Doba + map tests
+      - name: Simulator suites
         env:
           OTP_SIM_TIME_SCALE: "3"
-        run: sim/test.sh -q test_topo.py test_maps.py test_boot.py test_doba.py
+        run: sim/test.sh -q
 
   content:
     name: Library and map tools

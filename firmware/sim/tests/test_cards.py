@@ -19,8 +19,8 @@ import time
 
 import pytest
 
-from conftest import ARTIFACTS, TIME_SCALE, paired_phone
-from otpsim import LinkClient, LinkError, SimDevice, cards, pb
+from conftest import ARTIFACTS, TIME_SCALE
+from otpsim import SimDevice, cards
 from test_regressions_rides import HISTORY_ROW, fit_crc, read_png
 from test_rides import SAVE_BUTTON, check_fit, line_track, record_ride
 
@@ -176,62 +176,6 @@ def test_boots_to_the_dashboard(boot_card, card_image, profile, record_property)
 
 # ---- the app's lists ----------------------------------------------------------------------------
 
-@pytest.mark.parametrize("profile", PROFILES)
-def test_app_ride_list_matches_the_card(boot_card, profile):
-    """Every ride, newest first. (Up to 512 once, in directory order: on a
-    card with more the app never saw the newest.)"""
-    dev, card = boot_card(profile)
-    link = link_to(dev)
-    pages = link.request(list=pb.ListRequest(kind=pb.LIST_RIDES), all_pages=True, timeout=10)
-    names = [f.name for p in pages for f in p.file_list.files]
-    got = {f.name: f.size for p in pages for f in p.file_list.files}
-    assert got == card.rides, "app sees %d rides, the card has %d" % (len(got), len(card.rides))
-    assert names == sorted(names, reverse=True)
-
-
-@SLOW
-def test_past_the_list_cap_the_app_gets_the_newest_rides(boot_card):
-    """More rides than one walk holds: the newest LIST_MAX are listed, newest
-    first, whatever order the directory keeps them in."""
-    dev, card = boot_card("empty")
-    rides = os.path.join(dev.sd, "rides")
-    os.makedirs(rides, exist_ok=True)
-    base = 1577836800                    # 2020-01-01; one ride an hour
-    names = [time.strftime("%Y%m%d-%H%M%S.fit", time.gmtime(base + 3600 * i)) for i in range(LIST_MAX + 300)]
-    for n in random.Random(4).sample(names, len(names)):   # directory order isn't age order
-        open(os.path.join(rides, n), "wb").close()
-    link = link_to(dev)
-    pages = link.request(list=pb.ListRequest(kind=pb.LIST_RIDES), all_pages=True, timeout=30)
-    got = [f.name for p in pages for f in p.file_list.files]
-    assert got == sorted(names, reverse=True)[:LIST_MAX]
-
-
-@pytest.mark.parametrize("profile", PROFILES)
-def test_app_route_workout_and_log_lists_match_the_card(boot_card, profile):
-    dev, card = boot_card(profile)
-    link = link_to(dev)
-    assert listed(link, pb.LIST_ROUTES) == card.routes
-    assert listed(link, pb.LIST_WORKOUTS) == card.workouts
-    logs = listed(link, pb.LIST_LOGS)
-    own = set(logs) - set(card.logs)     # today's log (or pending.log): the device's own
-    assert {n: logs[n] for n in card.logs} == card.logs
-    assert len(own) <= 2 and all(n.endswith(".log") for n in own), own
-
-
-@pytest.mark.parametrize("profile", [
-    "empty", "typical", "nearly_full",
-    pytest.param("heavy", marks=[SLOW, pytest.mark.xfail(strict=True, reason=(
-        "BUG: LIST_MAP_TILES stops at TILE_LIST_MAX=4096 (ble_server.cpp lockTileList) with no sign "
-        "to the app — the silent truncation that comment says it fixed at 512, moved to 4096. The app "
-        "keeps re-sending tiles the device already holds."))]),
-])
-def test_app_tile_list_matches_the_card(boot_card, profile):
-    dev, card = boot_card(profile)
-    link = link_to(dev)
-    got = listed(link, pb.LIST_MAP_TILES, timeout=30)
-    assert len(got) == len(set(got))
-    assert set(got) == set(card.tiles), "app sees %d tiles, the card has %d" % (len(got), len(card.tiles))
-
 
 # ---- the panel ------------------------------------------------------------------------------------
 
@@ -274,35 +218,6 @@ def test_ride_history_pages_through_the_card(boot_card, profile, tmp_path):
 
 
 # ---- recording ------------------------------------------------------------------------------------
-
-@pytest.mark.parametrize("profile", PROFILES)
-def test_a_ride_records_saves_and_downloads(boot_card, profile):
-    dev, card = boot_card(profile)
-    link = link_to(dev)
-    before = rides_on(dev)
-    record_ride(dev, seconds=40)
-    new = rides_on(dev) - before
-    assert len(new) == 1, new
-    name = new.pop()
-    path = os.path.join(dev.sd, "rides", name)
-    data = open(path, "rb").read()
-    assert fit_problems(data) is None, fit_problems(data)
-    got = link.download(pb.SOURCE_RIDE, name, timeout=60)
-    assert got == data
-    check_fit(got)
-    for n in random.Random(profile).sample(sorted(card.rides), min(20, len(card.rides))):
-        assert digest(os.path.join(dev.sd, "rides", n)) == digest(os.path.join(card.sd, "rides", n)), n
-    assert name in listed(link, pb.LIST_RIDES)
-
-
-@SLOW
-def test_the_newest_ride_reaches_the_app_on_a_heavy_card(boot_card):
-    dev, card = boot_card("heavy")
-    link = link_to(dev)
-    before = rides_on(dev)
-    record_ride(dev, seconds=20)
-    name = (rides_on(dev) - before).pop()
-    assert name in listed(link, pb.LIST_RIDES)
 
 
 # ---- a full card ----------------------------------------------------------------------------------
@@ -409,92 +324,8 @@ def full_device(boot_card):
     return dev, card, link
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: a route uploaded to a full card is reported RESULT_OK and loaded, but routes.cpp "
-    "loadFromMemory ignores the failed write: /routes/<name> is left empty and the route is gone "
-    "after a reboot."))
-def test_a_route_upload_to_a_full_card_is_refused(boot_card):
-    dev, card, link = full_device(boot_card)
-    gpx = cards.gpx_route("Full", 37.77, -122.42, 20, random.Random(1))
-    with pytest.raises(LinkError):
-        link.upload(pb.TARGET_ROUTE, "Full.gpx", gpx, timeout=60)
-
-
 def a_new_tile():
     cell, box = cards.h3_cells((37.0, -121.0, 37.05, -120.95))[0]   # a prefix no profile uses
     return cell, cards.sample_tile(cell, box)
 
 
-def test_a_tile_upload_to_a_full_card_fails_and_leaves_nothing(boot_card):
-    dev, card, link = full_device(boot_card)
-    cell, tile = a_new_tile()
-    with pytest.raises(LinkError) as e:
-        link.upload(pb.TARGET_MAP_TILE, cell, tile, timeout=60)
-    assert e.value.code in ("RESULT_IO_ERROR", "RESULT_PARSE_ERROR")
-    assert not os.path.exists(dev.sd + cards.tile_path(cell))
-    assert dev.status()["screen"] == "dash"
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: a tile that doesn't fit is answered RESULT_PARSE_ERROR ('not a usable tile, or SD write "
-    "failed'), not RESULT_IO_ERROR: the app can't tell a full card from a bad tile."))
-def test_a_tile_upload_to_a_full_card_says_io_error(boot_card):
-    dev, card, link = full_device(boot_card)
-    cell, tile = a_new_tile()
-    with pytest.raises(LinkError) as e:
-        link.upload(pb.TARGET_MAP_TILE, cell, tile, timeout=60)
-    assert e.value.code == "RESULT_IO_ERROR", e.value
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: map_store::saveTile remembers a tile directory as made ('ensured') even when its mkdir "
-    "failed on the full card, so once space is freed every tile for that directory still fails "
-    "(open: ENOENT) until the device restarts."))
-def test_tiles_save_again_once_space_is_freed(boot_card):
-    dev, card, link = full_device(boot_card)
-    cell, tile = a_new_tile()
-    with pytest.raises(LinkError):
-        link.upload(pb.TARGET_MAP_TILE, cell, tile, timeout=60)
-    os.remove(os.path.join(dev.sd, "filler.bin"))
-    assert dev.sd_usage()["free_bytes"] > 1 << 20
-    link.upload(pb.TARGET_MAP_TILE, cell, tile, timeout=60)
-    assert os.path.exists(dev.sd + cards.tile_path(cell))
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: a workout upload to a full card is refused (RESULT_IO_ERROR) but leaves an empty "
-    "/workouts/<name> behind, which LIST_WORKOUTS and the picker then offer."))
-def test_a_workout_upload_to_a_full_card_is_refused_and_leaves_nothing(boot_card):
-    dev, card, link = full_device(boot_card)
-    with pytest.raises(LinkError) as e:
-        link.upload(pb.TARGET_WORKOUT, "new.erg", cards.erg_workout("new", random.Random(2)), timeout=60)
-    assert e.value.code == "RESULT_IO_ERROR"
-    assert "new.erg" not in listed(link, pb.LIST_WORKOUTS)
-
-
-def test_a_firmware_upload_to_a_full_card_is_refused(boot_card):
-    dev, card, link = full_device(boot_card)
-    with pytest.raises(LinkError) as e:
-        link.upload(pb.TARGET_FIRMWARE, "firmware.bin", b"\xE9" + os.urandom(200 * 1024 - 1), timeout=60)
-    assert e.value.code == "RESULT_IO_ERROR"
-    assert not os.path.exists(os.path.join(dev.sd, "firmware.bin"))
-    assert dev.status()["screen"] == "dash"
-
-
-def test_deleting_rides_from_the_app_frees_space(boot_card):
-    """On a full card: deleting rides gives their clusters back, they leave
-    the list, and the card takes new files again."""
-    dev, card, link = full_device(boot_card)
-    gone = sorted(card.rides)[:10]
-    cl = dev.sd_usage()["cluster_bytes"]
-    for n in gone:
-        r = link.request(delete_file=pb.DeleteRequest(kind=pb.LIST_RIDES, name=n))
-        assert r.WhichOneof("body") == "result" and r.result.code == pb.RESULT_OK, r
-    freed = sum(-(-card.rides[n] // cl) * cl for n in gone)
-    free = dev.sd_usage()["free_bytes"]
-    assert freed - 8 * cl <= free <= freed, (free, freed)   # diag's log may take a cluster or two back
-    left = listed(link, pb.LIST_RIDES)
-    assert not set(gone) & set(left)
-    assert len(left) == len(card.rides) - len(gone)
-    link.upload(pb.TARGET_WORKOUT, "after.erg", cards.erg_workout("after", random.Random(3)), timeout=30)
-    assert "after.erg" in listed(link, pb.LIST_WORKOUTS)

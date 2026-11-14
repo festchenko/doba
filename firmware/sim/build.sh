@@ -14,7 +14,7 @@ VENDOR=${OTP_VENDOR:-$ROOT/vendor}
 EPDIY=$VENDOR/T5S3-4.7-e-paper-PRO/lib/epdiy/src
 GPS=$VENDOR/T5S3-4.7-e-paper-PRO/lib/TinyGPSPlus/src
 
-INC="-I sim/shim -I sim/host -I src -I companion-ios/Sources/H3/include -I src/proto -I third_party/nanopb -I $GPS -I $EPDIY -I tools/preview/shim -I companion-ios/Sources/H3"
+INC="-I sim/shim -I sim/host -I src -I third_party/h3/include -I third_party/nanopb -I $GPS -I $EPDIY -I tools/preview/shim -I third_party/h3"
 DEFS="-DVFONT -DOTP_SIM=1 -DPB_ENABLE_MALLOC=0 -DARDUINO=10819 -DESP32=1 -DBOARD_HAS_PSRAM=1"
 WARN="-Wno-unused-parameter -Wno-unused-variable -Wno-unused-function -Wno-deprecated-declarations -Wno-c99-designator -Wno-writable-strings -Wno-format -Wno-unused-but-set-variable"
 CXXFLAGS="-include sim/linux/linux_compat.h -std=gnu++17 -g -O1 $WARN $INC $DEFS"
@@ -22,20 +22,20 @@ CFLAGS="-include sim/linux/linux_compat.h -std=gnu11 -g -O1 $WARN $INC $DEFS"
 
 # Firmware sources compiled as-is. Everything else in src/ is hardware and
 # has a stand-in in sim/host/.
-FW_CPP="link settings dash_config dash_layout ui_render vfont
-  map_view map_tiles map_store topo_layer milspec milgeo doba_keyboard doba_i18n doba_battery doba_ui doba_library doba_icons stealth tz_auto doba_places doba_pois doba_topo_bg doba_points doba_dem doba_sun routes segments ride_recorder fit_writer workout
-  workout_service diag diag_sd media radar mesh_service mesh_proto mesh_crypto
-  gps_service ble_server ble_sensors ams_client
+FW_CPP="settings dash_config dash_layout ui_render vfont
+  map_view map_tiles map_store topo_layer milspec milgeo doba_keyboard doba_i18n doba_battery doba_ui doba_library doba_icons stealth tz_auto doba_places doba_pois doba_topo_bg doba_points doba_dem doba_sun routes ride_recorder fit_writer
+  diag diag_sd mesh_service mesh_proto mesh_crypto
+  gps_service
   crash_report"
-FW_C="link_frame proto/link.pb"
+FW_C=""
 EXTRA_C="third_party/nanopb/pb_common third_party/nanopb/pb_encode third_party/nanopb/pb_decode
-  companion-ios/Sources/H3/h3shim"
-H3_C=$(ls companion-ios/Sources/H3/lib/*.c | sed 's/\.c$//')
+  third_party/h3/h3shim"
+H3_C=$(ls third_party/h3/lib/*.c | sed 's/\.c$//')
 
 # Objects are rebuilt when their source, any header in src/ or sim/, or this
 # script is newer; compiles run in parallel.
 objs=""
-NEWEST_HDR=$(ls -t src/*.h src/*.inc src/proto/*.h sim/shim/*.h sim/shim/*/*.h sim/host/*.h sim/build.sh 2>/dev/null | head -1)
+NEWEST_HDR=$(ls -t src/*.h src/*.inc sim/shim/*.h sim/shim/*/*.h sim/host/*.h sim/build.sh 2>/dev/null | head -1)
 JOBS=${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc || echo 4)}
 compile() {   # src, compiler, flags, ext[, another source it #includes]
     o="$OUT/obj/$(echo "$1" | tr '/' '_').o"

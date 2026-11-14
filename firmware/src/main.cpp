@@ -19,10 +19,6 @@
 #include "settings.h"
 #include "doba_battery.h"
 #include "routes.h"
-#include "segments.h"
-#include "ble_sensors.h"
-#include "ble_server.h"
-#include "link.h"
 #include "ride_recorder.h"
 #include "ui_dashboard.h"
 #include "board_power.h"
@@ -31,7 +27,6 @@
 #include "sd_diagnostics.h"
 #include "usb_storage.h"
 #include "power_mgmt.h"
-#include "workout_service.h"
 #include "aux_sensors.h"
 #include "mesh_service.h"
 #include "diag.h"
@@ -436,7 +431,6 @@ void setup() {
     }
     settings::begin();
     g_state.with([](RideState& s) {
-        s.ftpW = (uint16_t)settings::ftpWatts();
         s.tzMin = (int16_t)settings::tzMinutes();
         s.useMiles = settings::useMiles();
         s.clock24h = settings::clock24h();
@@ -471,7 +465,6 @@ void setup() {
     ui_dashboard::bootStatus("SD card", sdOk);
     if (sdOk) {
         routes::begin();
-        segments::begin();   // starred Strava segments, for the SEGMENT page
     }
     // Restore the wall clock from the coin-cell RTC (which, unlike the ESP32's
     // internal clock, survives a full power-off). Must happen before the GPS
@@ -593,8 +586,8 @@ void setup() {
             diag::log("gps warm-start: no saved position");
         }
     }
-    // Display BEFORE the two NimBLE stacks, which is the opposite of the order
-    // that shipped on epdiy.
+    // Display early (historically: before the NimBLE stacks, which no longer
+    // exist in Doba — the notes below are kept for the RAM layout).
     //
     // Internal DRAM does not fit everything: ~137 KB static + ~160 KB for
     // EPD_Painter's default layout + ~50 KB for the BLE controller, against
@@ -644,36 +637,14 @@ void setup() {
     // rail pins alone.
     if (ioExpanderOk) ioExpander.pinMode(IOEXP_PIN_SIDE_BUTTON, INPUT);
 
-    BOOT_STEP("ui_dashboard done -> ble_sensors::begin()");
-    // DOBA: Bluetooth only when switched on in Settings (default off). Left
-    // off, nothing advertises, nothing can be seen by a phone, and the NimBLE
-    // host never takes its ~50 KB of internal RAM.
-    const bool btOn = settings::bluetooth();
-    if (btOn) {
-        ble_sensors::begin();
-        BOOT_STEP("ble_sensors done -> ble_server::begin()");
-        ble_server::begin();   // GATT server for the iOS companion app
-    } else {
-        diag::log("ble: off in settings — not started");
-    }
-
-    BOOT_STEP("ble_server done -> power_mgmt::begin()");
+    BOOT_STEP("ui_dashboard done -> power_mgmt::begin()");
 
     // Enable automatic light sleep now that every peripheral (GPS UART, BLE, EPD)
     // is up. No-op + logged warning on a stock framework without CONFIG_PM_ENABLE.
     power_mgmt::begin();
-    workout_service::begin();   // picker cache locks, before any task runs
     BOOT_STEP("power_mgmt done -> creating tasks");
 
     xTaskCreatePinnedToCore(gps_service::task, "gps", 4096, nullptr, 3, nullptr, 0);
-    if (btOn) {
-    xTaskCreatePinnedToCore(ble_sensors::task, "ble", 6144, nullptr, 2, nullptr, 0);
-    xTaskCreatePinnedToCore(ble_server::task, "srv", 4096, nullptr, 1, nullptr, 0);
-    // The phone link: decodes the app's requests, does the SD work they need
-    // and is the one sender on its TX characteristic (src/link.cpp).
-    xTaskCreatePinnedToCore(phone_link::task, "link", phone_link::TASK_STACK, nullptr, 1,
-                            nullptr, 0);
-    }
     xTaskCreatePinnedToCore(ride_recorder::task, "rec", 6144, nullptr, 3, nullptr, 1);
     xTaskCreatePinnedToCore(batteryTask, "bat", 3072, nullptr, 1, nullptr, 1);
     // No task at all when nothing is fitted — the whole feature costs an absent
@@ -742,10 +713,7 @@ void loop() {
     sd_diagnostics::tick();
     crash_report::tick();
     memfault_service::tick();
-    workout_service::tick();   // pause-at-block-boundary mode
-    // The 1 s cadence, but woken early to scan /workouts or load a workout
-    // the rider tapped on the picker (SD work kept off the UI task).
-    workout_service::serviceFor(1000);
+    delay(1000);
 }
 
 void board_radio_power(bool on) {

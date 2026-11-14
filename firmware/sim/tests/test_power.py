@@ -11,8 +11,7 @@ import time
 
 import pytest
 
-from conftest import paired_phone
-from otpsim import LinkClient, pb
+
 from power_util import (FAST, IDLE_S, card_logs, check_finished_fit, console_text, fit_records, only_ride,
                         run_to, uptime_s)
 from test_rides import SAVE_BUTTON, line_track
@@ -123,39 +122,6 @@ def test_riding_without_recording_keeps_it_on_and_stopping_starts_the_countdown(
     assert_switched_off_after_idle(off, t)
 
 
-def test_a_connected_phone_keeps_it_on(device, link):
-    """With the app connected (a map download, a route on the way, the
-    rider looking at the app's live view), the device must not vanish."""
-    stays_on(device, 25)
-    assert device.status()["phone_connected"]
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: ui_dashboard.cpp's auto-sleep check holds off only while the phone is connected and never "
-    "restarts the idle countdown when the link ends, so a phone that has been connected for over ten "
-    "minutes takes the device down the moment its link drops (walking out of range, iOS dropping the "
-    "connection in the background): it powers off within seconds, before the phone can reconnect"))
-def test_a_dropped_phone_link_does_not_switch_it_off_at_once(device, phone):
-    LinkClient(phone).hello()
-    stays_on(device, 15)
-    device.drop_phone(0x08)                   # supervision timeout: out of range
-    phone.wait_disconnected(5)
-    t = uptime_s(device)
-    off = run_to(device, t + 120)
-    assert off is None, "powered off %.0f s after the phone's link dropped" % (off - t)
-
-
-def test_a_running_stopwatch_keeps_it_on_after_the_phone_leaves(device, link, phone):
-    """Started from the app, the stopwatch would lose its time if the device
-    switched off: it holds the device on with nobody connected."""
-    link.expect_result(live_subscribe=pb.LiveSubscribe(topics=[pb.LIVE_TOPIC_STOPWATCH]))
-    link.tell(stopwatch=pb.StopwatchCommand(op=pb.STOPWATCH_OP_TOGGLE))
-    link.wait_push("live", lambda f: f.HasField("stopwatch") and f.stopwatch.running, timeout=5)
-    phone.disconnect()
-    device.wait_status(lambda s: not s["phone_connected"], timeout=10)
-    stays_on(device, 25)
-
-
 @pytest.mark.xfail(strict=True, reason=(
     "BUG: the auto-sleep check in ui_dashboard.cpp ignores usb_storage::hostActive(): with the card "
     "mounted on a computer over USB (copying maps or rides, nobody touching the panel) the device "
@@ -222,20 +188,6 @@ def test_shut_down_mid_ride_keeps_the_ride_and_boots_clean(device):
 
 
 # ---- the battery -------------------------------------------------------------------------------
-
-def test_the_battery_level_and_charging_reach_the_app(device, link):
-    """The app's battery readout is the fuel gauge's: the level as it falls,
-    and the charging flag when the cable goes in."""
-    link.expect_result(live_subscribe=pb.LiveSubscribe(topics=[pb.LIVE_TOPIC_RIDE]))
-    device.battery(64)
-    link.wait_push("live", lambda f: f.HasField("ride") and f.ride.battery_pct == 64 and not f.ride.charging,
-                   timeout=10)
-    device.battery(9)
-    link.wait_push("live", lambda f: f.HasField("ride") and f.ride.battery_pct == 9, timeout=10)
-    device.battery(9, charging=True)
-    link.wait_push("live", lambda f: f.HasField("ride") and f.ride.charging and f.ride.battery_pct == 9,
-                   timeout=10)
-    assert device.status()["ride"]["battery"] == 9
 
 
 def test_a_flat_battery_mid_ride_is_recovered_on_the_next_boot(device):

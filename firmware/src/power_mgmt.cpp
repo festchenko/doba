@@ -9,20 +9,14 @@
 #include <esp_err.h>
 #include <driver/uart.h>
 
-#include <esp_bt.h>
 
 #include <atomic>
 
-#include "ble_sensors.h"
-#include "ble_server.h"
 #include "diag.h"
 #include "ride_recorder.h"
 #include "usb_storage.h"
 #include "board_power.h"
 
-#ifdef PM_BLE_XTAL
-extern "C" bool board_ble_xtal_clock_ready();
-#endif
 
 namespace power_mgmt {
 
@@ -130,10 +124,6 @@ bool begin() {
                   PM_SLEEP_CAP_MS, INT_WDT_TIMEOUT_MS, esp_err_to_name(te));
     }
 #endif
-#ifdef PM_BLE_XTAL
-    diag::log("pm: BLE clock MAIN_XTAL retained in light sleep; controller_ready=%d",
-              board_ble_xtal_clock_ready());
-#endif
 
 #ifdef PM_GPS_UART_WAKEUP
     // Optional wake source, not a lossless RX guarantee: the triggering bytes
@@ -198,83 +188,12 @@ void tick() {
         diag::log("pm: requested light_sleep=%d -> %s", cfg.light_sleep_enable,
                   esp_err_to_name(err));
     }
-    // Held during the boot grace window, while a serial host is attached, and
-    // for as long as the phone is connected (see the note above).
-    // Ask ble_server DIRECTLY, not via g_state. The shared state's copy is
-    // written by the UI task at 1 Hz and read here at 1 Hz, so it lagged the
-    // actual connection by up to two seconds — long enough for the link to time
-    // out before sleep was ever suppressed.
-    bool phoneUp = ble_server::isPhoneConnected();
-    // THE EXPERIMENT (2026-08-17): with the connection interval measured long
-    // (>= 100 ms, governor-relaxed while riding) the controller's sleep-clock
-    // drift budget is 10x what it was at the 30 ms interval that produced the
-    // 2026-08-02 supervision-timeout storm — so let the CPU sleep through a
-    // connected-but-idle link and find out. Three timeouts in a boot flips
-    // relaxedSleepAllowed() off and this degrades to the old always-hold.
-    bool phoneSleepReady = ble_server::linkRelaxed();
-#ifdef PM_BLE_XTAL
-    phoneSleepReady = board_ble_xtal_clock_ready();
-#endif
-    // The stable main crystal supports connection timing at fast intervals
-    // too. Retain the existing experiment switch and timeout fallback.
-    // A link still proving itself (encrypting, or pairing with the rider
-    // typing the code) counts as the phone too. phoneUp is only true once the
-    // link is ADMITTED, so this window used to run with the CPU free to sleep
-    // and the controller in modem sleep on the drifting RC clock — the
-    // conditions that killed fresh sensor links at supervision timeout
-    // (2026-08-22). Nothing else held the radio unless a sensor link did — no
-    // sensors, a long auto-pause, or the MAIN_XTAL build relaxing them — so a
-    // reconnect (mid-ride or parked) could die before it ever encrypted.
-    // Seconds at most: the server drops an unproven link at 20 s (90 s while
-    // pairing).
-    bool linkPending = ble_server::linkPending();
-    bool phone = linkPending || (phoneUp && !(phoneSleepReady &&
-                                              ble_server::relaxedSleepAllowed()));
-    s_phoneRelaxed = phoneUp && !phone;
-    // The SAME suppression the phone gets, for the same reason, extended to the
-    // sensor hunt.
-    //
-    // Sleep does not just cost packets on an established link — it costs
-    // DISCOVERY. Scanning only hears an advertisement if the controller is awake
-    // in its scan window, and with BT modem sleep waking on that ~5%-drift
-    // 150 kHz RC the windows land off-target, so a sensor that dropped out mid
-    // ride (a power meter that slept through a coffee stop, a strap that lost
-    // contact) advertised into a radio that was not listening and never came
-    // back. Symptom from the road, 2026-08-08: sensors would not reconnect after
-    // a break UNLESS the phone app was connected — because a connected phone is
-    // exactly what used to hold this off.
-    //
-    // Costs nothing in the steady state: radioBusy() is only true while a PAIRED
-    // sensor is missing and the device is actually looking for it. Once
-    // everything is connected the hunt stops and the CPU sleeps again.
-    bool hunting = ble_sensors::radioBusy();
-    // Historical RTC-slow-clock behavior below. The MAIN_XTAL candidate can
-    // now release this established-link hold; discovery stays protected.
-    // 2026-08-21, learned on the road: an ESTABLISHED sensor link dies under
-    // light sleep exactly like the phone's does. A ride ran 1h45m rock-solid
-    // while the connected phone held sleep off — then the phone left, sleep
-    // engaged, and the power meter dropped 40 s later, after which every
-    // reconnect lived only the few seconds the hunt's own hold bought it and
-    // died at supervision timeout, all the way home (connect/520 every ~30 s).
-    // So the CPU only sleeps when the BLE radio is COMPLETELY quiet: no phone,
-    // no sensor links, no hunt. Parked/idle — the state that actually drains
-    // the battery for hours — has none of those, and keeps the full win.
-    //
-    // Exception, by design: a ride parked in a LONG auto-pause (2 min — see
-    // ride_recorder::longAutoPaused) releases the sensor hold. The meter is
-    // sleeping itself at a stop like that and the links are going away either
-    // way; what matters is that the hold and the hunt come back the moment
-    // the ride resumes, which they do — this flag flips false on the resume
-    // tick, before the sensors have woken enough to reconnect.
-    bool sensorLinks = ble_sensors::anyConnected();
-    bool sensorReady = false;
-#ifdef PM_BLE_XTAL
-    sensorReady = board_ble_xtal_clock_ready() && ble_sensors::sleepAllowed();
-#endif
-    // Established links only: hunt/connect remains an unconditional hold.
-    // Preserve the old long-auto-pause behavior outside the new experiment.
-    bool sensors = sensorLinks && !ride_recorder::longAutoPaused() && !sensorReady;
-    s_sensorRelaxed = sensorLinks && sensorReady;
+    // Held during the boot grace window, and while a serial host or a USB
+    // computer is attached. (OTP also held it for its Bluetooth links; Doba
+    // has no Bluetooth.)
+    const bool phone = false, hunting = false, sensors = false;
+    s_phoneRelaxed = false;
+    s_sensorRelaxed = false;
     bool grace = millis() < USB_GRACE_MS;
     bool cdc = (bool)Serial;
     // VBUS is independent of DTR/RTS: an unopened console and a suspended
@@ -336,40 +255,6 @@ void tick() {
         }
     }
 
-    // Suppressing CPU light sleep is NOT enough on its own. The BT controller
-    // has its own modem sleep, and with CONFIG_BT_CTRL_LPCLK_SEL_RTC_SLOW it
-    // wakes for each connection event on the internal 150 kHz RC — the ~5%-drift
-    // clock. It widens its receive window by the sleep-clock accuracy it
-    // advertised, and that RC cannot hold to it, so events are missed and the
-    // link dies of supervision timeout no matter what the CPU is doing.
-    // Stop the controller sleeping while the phone is attached OR any sensor
-    // link is up; let it sleep again when the radio is quiet.
-    //
-    // The sensor term is what makes a resume-from-auto-pause STICK. The
-    // 2026-08-22 ride log shows the failure without it: the CPU hold ("sens")
-    // engaged on every reconnect, but the hunt ended, modem sleep re-armed,
-    // and the fresh link died of supervision timeout (reason 520) ~5 s after
-    // EVERY connect — HR and power flapping from the first phoneless
-    // auto-pause to the end of the ride. `sensors` already goes false in a
-    // long auto-pause, so a parked ride still lets the controller sleep.
-    static int btSleep = -1;                 // -1 unknown, 0 disabled, 1 enabled
-    int wantBtSleep = (phone || hunting || sensors) ? 0 : 1;
-    if (btSleep != wantBtSleep) {
-        esp_err_t e = wantBtSleep ? esp_bt_sleep_enable() : esp_bt_sleep_disable();
-        if (e == ESP_OK || e == ESP_ERR_INVALID_STATE) btSleep = wantBtSleep;
-        // At most one transition logged per minute: a duty-cycled sensor hunt
-        // flips this every few seconds, and logging each flip was tens of KB an
-        // hour out of the diag ring. The steady state is on every battery line
-        // now ("pm hunt"), so the per-flip record buys nothing.
-        static uint32_t lastLogMs = 0;
-        if (e == ESP_OK && (lastLogMs == 0 || millis() - lastLogMs > 60000)) {
-            lastLogMs = millis();
-            diag::log("pm: BT modem sleep %s (phone %s, sensor hunt %s, links %s)",
-                      wantBtSleep ? "on" : "OFF",
-                      s_phoneRelaxed ? "relaxed" : phoneUp ? "connected" : "gone",
-                      hunting ? "ON" : "off", s_sensorRelaxed ? "sleep eligible" : sensorLinks ? "up" : "none");
-        }
-    }
     if (usb && !s_usbHeld) {
         esp_pm_lock_acquire(s_usbLock);
         s_usbHeld = true;

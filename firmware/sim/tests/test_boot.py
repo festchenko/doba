@@ -7,8 +7,6 @@ from otpsim import SimDevice
 def test_boots_to_the_dashboard(device, tmp_path):
     st = device.wait_status(lambda s: s["screen"] == "dash" and s["paints"] > 0)
     assert st["page"] == 0
-    assert st["ble"]["advertising"]
-    assert not st["ble"]["bonds"]
     shot = device.screenshot(str(tmp_path / "dash.png"))
     assert open(shot, "rb").read(8) == b"\x89PNG\r\n\x1a\n"
 
