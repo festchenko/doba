@@ -59,7 +59,7 @@ jobs:
       - name: Tools
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q clang protobuf-compiler zlib1g-dev
-          pip install numpy pillow
+          pip install numpy pillow libzim pymupdf
       - name: Clone LilyGO board support
         run: git clone --depth 1 https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO vendor/T5S3-4.7-e-paper-PRO
       - name: MGRS/UTM maths
@@ -67,4 +67,19 @@ jobs:
       - name: Doba + map tests
         env:
           OTP_SIM_TIME_SCALE: "3"
-        run: sim/test.sh -q test_topo.py test_maps.py test_boot.py
+        run: sim/test.sh -q test_topo.py test_maps.py test_boot.py test_doba.py
+
+  content:
+    name: Library and map tools
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Packages
+        run: pip install pytest -r library/requirements.txt -r maps/requirements.txt
+      - name: Library tools
+        run: python3 -m pytest -q library/test
+      - name: Map tools
+        run: python3 -m pytest -q maps/test

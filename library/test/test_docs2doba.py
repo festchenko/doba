@@ -65,3 +65,12 @@ def test_printed_contents_lists_and_bookmark_ids_do_not_reach_the_device(tmp_pat
     assert "........" not in text
     assert "Press hard" not in text           # a leader line goes whole
     assert "Cool the burn" in text
+
+
+def test_broken_cp1251_font_maps_are_decoded():
+    """Two kinds of PDF text layers seen in the wild: cp1251 bytes shown as
+    Latin-1 (MON textbooks) and cp1251 bytes at U+017A + byte."""
+    assert docs2doba.unshift("êіëüêіñòü", 0xFF) == "кількість"
+    assert docs2doba.unshift("ɉɭɥɢ", 0x17A) == "Пули"
+    words = " ".join(["êіëüêіñòü ðåãóëÿòîðíèõ ãåíіâ"] * 80)
+    assert docs2doba.unreadable(words) and not docs2doba.unreadable(docs2doba.unshift(words, 0xFF))
