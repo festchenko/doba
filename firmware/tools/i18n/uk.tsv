@@ -311,8 +311,6 @@ off: the card is Doba's	вимк.: карта в Доби
 BLUETOOTH	BLUETOOTH
 Bluetooth	Bluetooth
 Wifi	Wi-Fi
-on: visible to phones	увімк.: видно телефонам
-off · switching restarts Doba	вимк. · зміна перезапускає Добу
 Wi-Fi	Wi-Fi
 allowed when something needs it	дозволено, коли потрібно
 off: never switched on	вимк.: ніколи не вмикається
@@ -440,7 +438,6 @@ NO SD CARD	НЕМАЄ SD-КАРТИ
 Insert an exFAT card for maps	Вставте карту exFAT для мап
 SD CARD UNREADABLE	SD-КАРТА НЕ ЧИТАЄТЬСЯ
 Reformat it as exFAT	Відформатуйте її в exFAT
-PHONE GPS	GPS ТЕЛЕФОНА
 grid 1 km	сітка 1 км
 grid 10 km	сітка 10 км
 grid 100 km	сітка 100 км
@@ -461,7 +458,6 @@ Switch on again with POWER.	Увімкнути знову: кнопка POWER.
 POWERED OFF	ВИМКНЕНО
 press POWER to switch on	натисніть POWER, щоб увімкнути
 press BOOT to wake	натисніть BOOT, щоб розбудити
-A track is recording — it will be saved first.	Записується трек — спершу його буде збережено.
 SHUT DOWN	ВИМКНУТИ
 CANCEL	СКАСУВАТИ
 GPS details	Деталі GPS
