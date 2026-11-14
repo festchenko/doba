@@ -57,6 +57,11 @@ void setBluetooth(bool on);
 bool wifi();
 // DOBA: the owner card on the power-off screen ("" = none).
 const char* owner();
+// The card as fields: 0 name, 1 born, 2 blood group, 3 allergies/illnesses, 4 contact.
+constexpr int OWNER_FIELDS = 5;
+const char* ownerField(int i);
+void setOwnerField(int i, const char* t);
+bool ownerSet();
 void setOwner(const char* t);
 void setWifi(bool on);
 

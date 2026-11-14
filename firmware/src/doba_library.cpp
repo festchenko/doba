@@ -1195,7 +1195,13 @@ void findDocs(int bi) {
     std::sort(g_docs, g_docs + g_docCount, [](const Doc& x, const Doc& y) { return naturalCmp(x.title, y.title) < 0; });
 }
 
-bool cyrillicBook(int bi) { return !strcmp(g_books[bi].dir, "wiki_uk") || !strcmp(g_books[bi].dir, "shelf_uk"); }
+// A Ukrainian book ("..._uk"): its A-Z is the Ukrainian alphabet and its search
+// opens on the Ukrainian keyboard, whatever language the interface is in.
+bool cyrillicBook(int bi) {
+    const char* d = g_books[bi].dir;
+    const size_t n = strlen(d);
+    return n > 3 && !strcmp(d + n - 3, "_uk");
+}
 const char* const kLatin[] = {"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","0-9"};
 const char* const kUkr[] = {"А","Б","В","Г","Ґ","Д","Е","Є","Ж","З","И","І","Ї","Й","К","Л","М","Н","О","П","Р","С","Т","У","Ф","Х","Ц","Ч","Ш","Щ","Ю","Я","0-9"};
 int letterCount(int bi) { return cyrillicBook(bi) ? 33 : 27; }
@@ -2345,7 +2351,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
                 Serial.printf("[lib] delete? %s %.1f GB\n", g_books[bi].dir, g_delBytes / 1e9);
                 return false;
             }
-            if (hit(kBookSearch, x, y)) { g_scope = -1; g_scopeBook = bi; g_searchFrom = V_BOOK; g_view = V_SEARCH; k.clear(); if (i18n::lang() == i18n::UK) k.layout = k.lastLetters = kbd::UA; return false; }
+            if (hit(kBookSearch, x, y)) { g_scope = -1; g_scopeBook = bi; g_searchFrom = V_BOOK; g_view = V_SEARCH; k.clear(); if (i18n::lang() == i18n::UK || cyrillicBook(bi)) k.layout = k.lastLetters = kbd::UA; return false; }
             findMenu(bi);
             if (!g_bookAZ && (g_menuCount || bigBook(bi))) {
                 if (bigBook(bi) && hit(kBigAZ, x, y)) { g_bookAZ = true; return false; }

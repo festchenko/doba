@@ -532,3 +532,12 @@ you are here	ви тут
 %.1f km %s of it	%.1f км на %s від нього
 %.0f km %s of it	%.0f км на %s від нього
 standing	на місці
+IF FOUND 1/5: NAME	ЯКЩО ЗНАЙШЛИ 1/5: ІМ’Я
+IF FOUND 2/5: DATE OF BIRTH	ЯКЩО ЗНАЙШЛИ 2/5: ДАТА НАРОДЖЕННЯ
+IF FOUND 3/5: BLOOD GROUP	ЯКЩО ЗНАЙШЛИ 3/5: ГРУПА КРОВІ
+IF FOUND 4/5: ALLERGIES, ILLNESSES	ЯКЩО ЗНАЙШЛИ 4/5: АЛЕРГІЇ, ХВОРОБИ
+IF FOUND 5/5: EMERGENCY CONTACT	ЯКЩО ЗНАЙШЛИ 5/5: КОНТАКТ
+Shown when Doba is off. SAVE goes to the next field.	Видно, коли Доба вимкнена. ЗБЕРЕГТИ веде до наступного поля.
+NEXT	ДАЛІ
+blood %s	кров %s
+contact: %s	контакт: %s

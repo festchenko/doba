@@ -1260,17 +1260,32 @@ void renderField(const char* caption, const char* note, kbd::Keyboard& k, const 
     frame(box, 3, fb);
     char shown[300];
     snprintf(shown, sizeof shown, "%s_", k.text);
-    ui::text(ui::font(ui::F_KEY), box.x + 16, box.y + 58, shown, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    // A long text scrolls: the end, where the typing is, stays in the box.
+    const char* vis = shown;
+    while (*vis && ui::textWidth(ui::font(ui::F_KEY), vis) > box.width - 32) {
+        ++vis;
+        while (((uint8_t)*vis & 0xC0) == 0x80) ++vis;
+    }
+    ui::text(ui::font(ui::F_KEY), box.x + 16, box.y + 58, vis, fb, EPD_DRAW_ALIGN_LEFT, INK);
     if (note) ui::text(ui::font(ui::F_TINY), 14, box.y + box.height + 34, TR(note), fb, EPD_DRAW_ALIGN_LEFT, INK);
     k.render(fb);
 }
 
 bool g_fieldOwner = false;   // the SETUP_NAME page edits the owner card instead
+int g_ownerField = 0;        // which of its fields: one after another, SAVE moves on
+const char* const kOwnerCap[settings::OWNER_FIELDS] = {
+    "IF FOUND 1/5: NAME", "IF FOUND 2/5: DATE OF BIRTH", "IF FOUND 3/5: BLOOD GROUP",
+    "IF FOUND 4/5: ALLERGIES, ILLNESSES", "IF FOUND 5/5: EMERGENCY CONTACT"};
 Go tapSetupName(int x, int y) {
     const kbd::Action a = g_nameKbd.tap(x, y);
     if (g_fieldOwner) {
-        while (strlen(g_nameKbd.text) > 120) kbd::popUtf8(g_nameKbd.text);
-        if (a == kbd::ENTER) { settings::setOwner(g_nameKbd.text); g_fieldOwner = false; return TO_MORE; }
+        while (strlen(g_nameKbd.text) > 60) kbd::popUtf8(g_nameKbd.text);
+        if (a == kbd::ENTER) {
+            settings::setOwnerField(g_ownerField, g_nameKbd.text);
+            if (++g_ownerField >= settings::OWNER_FIELDS) { g_fieldOwner = false; return TO_MORE; }
+            g_nameKbd.clear();
+            snprintf(g_nameKbd.text, sizeof g_nameKbd.text, "%s", settings::ownerField(g_ownerField));
+        }
         return STAY;
     }
     while (strlen(g_nameKbd.text) > 36) kbd::popUtf8(g_nameKbd.text);
@@ -2011,7 +2026,7 @@ void renderMore(const RideState& s, uint8_t* fb) {
             }
             case M_OWNER: {
                 char o[40];
-                snprintf(o, sizeof o, "%.30s%s", settings::owner(), strlen(settings::owner()) > 30 ? "..." : "");
+                snprintf(o, sizeof o, "%.30s", settings::ownerField(0)[0] ? settings::ownerField(0) : settings::ownerSet() ? "..." : "");
                 caption(y, SROW_H, "IF FOUND", o[0] ? o : TR("empty: tap to write"), fb);
                 button({CTRL_X, y + (SROW_H - CTRL_H) / 2, CTRL_W, CTRL_H}, "Edit  \xE2\x80\xBA", false, fb);
                 break;
@@ -2069,7 +2084,8 @@ Go tapMore(int x, int y) {
     if (r == M_BATT && x >= CTRL_X) return TO_BATTERY;
     if (r == M_OWNER) {
         g_nameKbd.clear();
-        snprintf(g_nameKbd.text, sizeof g_nameKbd.text, "%s", settings::owner());
+        g_ownerField = 0;
+        snprintf(g_nameKbd.text, sizeof g_nameKbd.text, "%s", settings::ownerField(0));
         g_fieldOwner = true;
         return TO_SETUP_NAME;
     }
@@ -2264,31 +2280,29 @@ void renderOffCard(const RideState& s, bool powerKey, uint8_t* fb) {
         y += 104 + 10;
     }
 
-    // --- the owner card
-    if (settings::owner()[0]) {
-        // up to two lines, broken at a space
+    // --- the owner card: a line per kind of fact, empty ones left out
+    if (settings::ownerSet()) {
         const EpdFont* f = ui::font(ui::F_SMALL);
         const int tw = W - 32 - 36;
-        char l1[128], l2[128];
-        snprintf(l1, sizeof l1, "%s", settings::owner());
-        l2[0] = 0;
-        if (ui::textWidth(f, l1) > tw) {
-            int best = 0;
-            for (int i = 1; l1[i]; ++i) {
-                if (l1[i] != ' ') continue;
-                char t[128];
-                memcpy(t, l1, i); t[i] = 0;
-                if (ui::textWidth(f, t) <= tw) best = i; else break;
-            }
-            if (best) { snprintf(l2, sizeof l2, "%s", l1 + best + 1); l1[best] = 0; }
-            fitTextTo(f, l1, tw);
-            fitTextTo(f, l2, tw);
+        char ln[3][160];
+        int n = 0;
+        const char* nm = settings::ownerField(0); const char* born = settings::ownerField(1);
+        const char* blood = settings::ownerField(2); const char* med = settings::ownerField(3);
+        const char* ice = settings::ownerField(4);
+        if (nm[0] || born[0]) snprintf(ln[n++], sizeof ln[0], "%s%s%s", nm, nm[0] && born[0] ? " \xC2\xB7 " : "", born);
+        if (blood[0] || med[0]) {
+            char b[80] = "";
+            if (blood[0]) snprintf(b, sizeof b, TR("blood %s"), blood);
+            snprintf(ln[n++], sizeof ln[0], "%s%s%s", b, b[0] && med[0] ? " \xC2\xB7 " : "", med);
         }
-        const int h = l2[0] ? 108 : 80;
+        if (ice[0]) snprintf(ln[n++], sizeof ln[0], TR("contact: %s"), ice);
+        const int h = 44 + n * 28;
         const EpdRect r = card(y, h);
         label(r.x + 18, r.y + 26, "IF FOUND");
-        ui::text(f, r.x + 18, r.y + 58, l1, fb, EPD_DRAW_ALIGN_LEFT, INK);
-        if (l2[0]) ui::text(f, r.x + 18, r.y + 88, l2, fb, EPD_DRAW_ALIGN_LEFT, INK);
+        for (int k = 0; k < n; ++k) {
+            fitTextTo(f, ln[k], tw);
+            ui::text(f, r.x + 18, r.y + 56 + k * 28, ln[k], fb, EPD_DRAW_ALIGN_LEFT, INK);
+        }
         y += h + 10;
     }
 
@@ -2332,7 +2346,8 @@ void render(Page p, const RideState& s, uint8_t* fb) {
         case SETUP:   renderSetup(s, fb); break;
         case SETUP_NAME:
             if (g_fieldOwner)
-                renderField("IF FOUND  (shown when Doba is off)", "Name, blood group, allergies, a phone", g_nameKbd, "SAVE", fb);
+                renderField(kOwnerCap[g_ownerField], "Shown when Doba is off. SAVE goes to the next field.", g_nameKbd,
+                            g_ownerField + 1 < settings::OWNER_FIELDS ? "NEXT" : "SAVE", fb);
             else
                 renderField("CALLSIGN  (how the mesh sees you)", "Short name: first four letters", g_nameKbd, "SAVE", fb);
             break;

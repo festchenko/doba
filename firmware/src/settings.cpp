@@ -28,7 +28,8 @@ bool clk24 = true;   // true = 24-hour clock, false = 12-hour
 bool usbDrv = true;
 bool btOn = false;    // DOBA: Bluetooth off unless asked for
 bool wifiOn = false;  // DOBA: WiFi off unless asked for
-char ownerText[128] = "";   // DOBA: "if found" card on the power-off screen  // true = expose SD as USB drive when plugged into a host
+char ownerText[128] = "";
+char ownerF[5][64] = {};    // DOBA: name, born, blood, medical, contact   // DOBA: "if found" card on the power-off screen  // true = expose SD as USB drive when plugged into a host
 // false = a field whose sensor is unpaired is dropped from the dashboard and
 // the rest re-pack; true = it stays, showing no data. ON by default: a new
 // device should show the layout the rider configured, gaps and all, rather
@@ -101,6 +102,10 @@ void begin() {
 #endif
     wifiOn = prefs.getBool("wifi", false);
     prefs.getString("owner", ownerText, sizeof ownerText);
+    for (int i = 0; i < 5; ++i) {
+        char k[8]; snprintf(k, sizeof k, "own%d", i);
+        prefs.getString(k, ownerF[i], sizeof ownerF[i]);
+    }
     showOff = prefs.getBool("showoff", true);
     mapLayerMask = prefs.getUShort("maplayers", 0x003F);
     autoPause = prefs.getInt("apause", 10);
@@ -229,6 +234,14 @@ bool bluetooth() { return btOn; }
 void setBluetooth(bool on) { btOn = on; prefs.putBool("bt", on); }
 bool wifi() { return wifiOn; }
 const char* owner() { return ownerText; }
+const char* ownerField(int i) { return i >= 0 && i < 5 ? ownerF[i] : ""; }
+void setOwnerField(int i, const char* t) {
+    if (i < 0 || i >= 5) return;
+    snprintf(ownerF[i], sizeof ownerF[i], "%s", t ? t : "");
+    char k[8]; snprintf(k, sizeof k, "own%d", i);
+    prefs.putString(k, ownerF[i]);
+}
+bool ownerSet() { for (auto& f : ownerF) if (f[0]) return true; return false; }
 void setOwner(const char* t) {
     snprintf(ownerText, sizeof ownerText, "%s", t ? t : "");
     prefs.putString("owner", ownerText);

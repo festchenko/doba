@@ -3519,8 +3519,16 @@ static void runConsoleLine(char* line) {
         char t[160] = "";
         const char* rest = arg ? strtok(nullptr, "") : nullptr;
         if (arg) snprintf(t, sizeof t, "%s%s%s", arg, rest ? " " : "", rest ? rest : "");
-        settings::setOwner(t);
-        Serial.printf("[cmd] owner '%s'\n", t);
+        // fields split at "|": name|born|blood|medical|contact
+        int fi = 0;
+        char* p = t;
+        for (; fi < settings::OWNER_FIELDS; ++fi) {
+            char* bar = p ? strchr(p, '|') : nullptr;
+            if (bar) *bar = 0;
+            settings::setOwnerField(fi, p ? p : "");
+            p = bar ? bar + 1 : nullptr;
+        }
+        Serial.printf("[cmd] owner set (%s)\n", settings::ownerField(0));
     } else if (!strcasecmp(cmd, "screen")) {
         if (!arg) { Serial.println("[cmd] screen <map|dash|menu|settings|gps|layers>"); return; }
         if      (!strcasecmp(arg, "map"))      screen = SCREEN_MAP;

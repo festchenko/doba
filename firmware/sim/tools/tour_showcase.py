@@ -59,7 +59,7 @@ screen("sos"); shot("sos")
 screen("setup"); shot("settings")
 screen("more"); shot("more")
 screen("battery"); shot("battery")
-dev.console("owner Name Surname · blood A(II)+ · no allergies · ICE +00 000 000 000" if lang == "en"
-            else "owner Ім'я Прізвище · кров A(II)+ · алергій немає · +00 000 000 000", 500)
+dev.console("owner Name Surname|01.01.1990|A(II)+|no allergies|+00 000 000 000" if lang == "en"
+            else "owner Ім'я Прізвище|01.01.1990|A(II)+|алергій немає|+00 000 000 000", 500)
 dev.console("farewell", 800); shot("off", 4)
 dev.stop()
