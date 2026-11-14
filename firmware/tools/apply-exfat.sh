@@ -14,7 +14,7 @@ set -e
 FW=${FRAMEWORK:-$HOME/.platformio/packages/framework-arduinoespressif32}
 SDK=$FW/tools/sdk/esp32s3
 CONF=$SDK/include/fatfs/src/ffconf.h
-if grep -q "^#define FF_FS_EXFAT[[:space:]]*1" "$CONF"; then
+if grep -q "^#define FF_FS_EXFAT[[:space:]]*1" "$CONF" && grep -q "^#define FF_USE_LFN    3  /\* Doba" "$CONF"; then
   echo "apply-exfat: framework already has exFAT"; exit 0
 fi
 CC=$(ls "$HOME"/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-gcc)
@@ -30,6 +30,12 @@ for f in $SRC; do
 done
 sed -i.bak 's/^#define FF_FS_EXFAT\t\t0/#define FF_FS_EXFAT\t\t1/' "$W/src/ffconf.h"
 grep -q "^#define FF_FS_EXFAT[[:space:]]*1" "$W/src/ffconf.h" || { echo "apply-exfat: could not switch exFAT on" >&2; exit 1; }
+# exFAT needs LFN (the framework has it, 255 chars, UTF-8) and grows the LFN
+# working buffer by ~608 bytes. The framework keeps that buffer on the STACK of
+# whichever task touches the card; put it on the heap instead, so no task's
+# stack has to find 600 more bytes. (FF_USE_LFN 2 vs 3 changes no structure.)
+sed -i.bak2 's/^#define FF_USE_LFN    2$/#define FF_USE_LFN    3  \/\* Doba: heap, not stack (apply-exfat.sh) \*\//' "$W/src/ffconf.h"
+grep -q "^#define FF_USE_LFN    3  /\* Doba" "$W/src/ffconf.h" || { echo "apply-exfat: could not move LFN to the heap" >&2; exit 1; }
 # The framework's own include paths, as its build script lists them.
 INC=$(grep -o 'join(FRAMEWORK_DIR, "tools", "sdk", "esp32s3", "include"[^)]*)' "$FW/tools/platformio-build-esp32s3.py" |
       sed 's/join(FRAMEWORK_DIR, //; s/)$//; s/", "/\//g; s/"//g' | sed "s#^#-I$FW/#" | tr '\n' ' ')
@@ -41,11 +47,11 @@ for f in src/ff.c src/ffunicode.c port/freertos/ffsystem.c diskio/diskio.c diski
   # shellcheck disable=SC2086
   "$CC" $FLAGS -I"$W/src" -I"$W/diskio" -I"$W/vfs" $INC -I"$SDK/qio_opi/include" -c "$W/$f" -o "$W/out/$(basename "$f").obj"
 done
-cp "$SDK/lib/libfatfs.a" "$SDK/lib/libfatfs.a.noexfat"
+[ -f "$SDK/lib/libfatfs.a.noexfat" ] || cp "$SDK/lib/libfatfs.a" "$SDK/lib/libfatfs.a.noexfat"
 rm -f "$W/libfatfs.a"
 "$(dirname "$CC")/xtensa-esp32s3-elf-ar" rcs "$W/libfatfs.a" "$W"/out/*.obj
 cp "$W/libfatfs.a" "$SDK/lib/libfatfs.a"
-cp "$CONF" "$CONF.noexfat"
+[ -f "$CONF.noexfat" ] || cp "$CONF" "$CONF.noexfat"
 cp "$W/src/ffconf.h" "$CONF"
 rm -rf "$W"
 echo "apply-exfat: libfatfs.a rebuilt with exFAT (backups: *.noexfat)"
