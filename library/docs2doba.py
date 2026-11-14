@@ -17,6 +17,8 @@ Then copy out/<book> to /doba/lib/<book> on the card
 import argparse
 import html
 import os
+import urllib.parse
+import io
 import re
 import struct
 import sys
@@ -25,6 +27,7 @@ import zlib
 
 import dobapic
 from dobafold import KEY_BYTES, display, fold, key
+import zim2doba
 from zim2doba import HDR, LINK_A, LINK_B, LINK_C, REC, to_text
 
 MAX_ARTICLE = 1_400_000          # bytes of text; the device holds 1.5 MB inflated
@@ -301,11 +304,30 @@ def read_epub(path, title):
     if not order:
         order = sorted(n for n in names if n.endswith((".xhtml", ".html", ".htm")))
     labels = epub_toc(z, names)
+    zim2doba.MAX_PICS = 400      # a book's own pictures: all of them, not an encyclopedia's ration
     body = []
     for n in order:
         if n not in names:
             continue
-        t = strip_links(to_text("", z.read(n).decode("utf-8", "replace")))
+        def picture(src, attrs, chapter=n):
+            """An <img> of this chapter -> 'name w h' (stored in the book's img/)."""
+            if not WITH_IMAGES or not src or src.startswith("data:"):
+                return None
+            f = os.path.normpath(os.path.join(os.path.dirname(chapter), urllib.parse.unquote(src.split("#")[0]))).replace("\\", "/")
+            if f not in names:   # some books keep the %20 in the file's own name
+                f = os.path.normpath(os.path.join(os.path.dirname(chapter), src.split("#")[0])).replace("\\", "/")
+            if f not in names or f.lower().endswith(".svg"):
+                return None
+            try:
+                from PIL import Image
+                img = Image.open(io.BytesIO(z.read(f)))
+                img.load()
+                if img.width < 90 or img.height < 60:      # ornaments, bullets, rules
+                    return None
+                return to_dgi(img)
+            except Exception:
+                return None
+        t = strip_links(to_text("", z.read(n).decode("utf-8", "replace"), picture))
         lines = [ln for ln in t.split("\n")[1:] if ln]
         # A chapter file without a heading of its own still gets one, from the
         # book's table of contents: the reader's CONTENTS is built from them.

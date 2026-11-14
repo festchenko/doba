@@ -58,10 +58,26 @@ int32_t onRead(uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
     uint8_t* buf = (uint8_t*)buffer;
     uint32_t count = bufsize / 512;
     sdLock();
-    for (uint32_t i = 0; i < count; ++i) {
-        if (!SD.readRAW(buf + i * 512, lba + i)) { sdUnlock(); return -1; }
+    // DOBA: one bad sector read used to fail the host's whole command (and the
+    // Mac then refuses to mount the card). Try again before giving up, and say
+    // which sector it was.
+    uint32_t badLba = 0; int retries = 0; bool failed = false;
+    for (uint32_t i = 0; i < count && !failed; ++i) {
+        bool ok = false;
+        for (int t = 0; t < 4 && !ok; ++t) {
+            ok = SD.readRAW(buf + i * 512, lba + i);
+            if (!ok) { ++retries; badLba = lba + i; delay(2); }
+        }
+        if (!ok) failed = true;
     }
     sdUnlock();
+    if (retries) {
+        static uint32_t logged = 0;
+        if (logged++ < 20)
+            diag::log("usb storage: read lba=%lu %s after %d retr%s (cmd lba=%lu n=%lu)", (unsigned long)badLba,
+                      failed ? "FAILED" : "ok", retries, retries == 1 ? "y" : "ies", (unsigned long)lba, (unsigned long)count);
+    }
+    if (failed) return -1;
     return count * 512;
 }
 

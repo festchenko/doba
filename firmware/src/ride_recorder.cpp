@@ -525,8 +525,13 @@ bool mountLocked(bool logFailures) {
     // card costs ~2.3 s of settle on top of SD.begin()'s own timeouts. Boot is
     // never blocked on the result — a failed mount just disables recording.
     static const struct { uint32_t settleMs; uint32_t freq; } kAttempts[] = {
-        {0,    4000000},
-        {100,  4000000},
+        // DOBA: the library and the maps READ a lot (a book page is a 64 KB
+        // chunk, a map screen a dozen tiles). At 4 MHz the bus moves ~0.4 MB/s
+        // and every page turn waits on it. SD cards in SPI mode are specified
+        // to 25 MHz; 20 first, then the old safe clocks if the card or the
+        // wiring will not have it.
+        {0,    20000000},
+        {100,  10000000},
         {400,  4000000},
         {800,  4000000},
         {1000, 1000000},   // last-ditch, slow clock for a marginal card

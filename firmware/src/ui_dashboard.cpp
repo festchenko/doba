@@ -1383,7 +1383,13 @@ void handleTap(int x, int y) {
         case SCREEN_POINT: case SCREEN_POINT_NEW: case SCREEN_MAPOPTS: case SCREEN_SOS: case SCREEN_SUN: case SCREEN_MORE: case SCREEN_BATTERY:
         case SCREEN_ARTICLE: {  // DOBA
             const int bl = settings::backlight();
-            dobaGo(doba_ui::tap(dobaPage(), x, y, g_state.snapshot()));
+            {   // DOBA: what a tap cost before the redraw (opening a book page reads the card)
+                const uint32_t t0 = micros();
+                const int pg = (int)dobaPage();
+                dobaGo(doba_ui::tap(dobaPage(), x, y, g_state.snapshot()));
+                const uint32_t ms = (micros() - t0) / 1000;
+                if (ms > 30) Serial.printf("[perf] tap on page %d (%d,%d) took %lu ms\n", pg, x, y, (unsigned long)ms);
+            }
             if (settings::backlight() != bl) applyBacklight(settings::backlight());
             break;
         }
