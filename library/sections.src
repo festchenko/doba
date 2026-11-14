@@ -30,7 +30,7 @@ section firstaid | FIRST AID | firstaid | med_en,medicine,tccc_uk,gov,manuals,mi
   - Drowning              | rescue breaths first                  | med_en:Drowning ; wiki_en:Drowning
   - Army first aid manual | casualty care, step by step           | gov:ATP 4-02.11 Casualty* ; gov:FM 4-25.11 First Aid* ; manuals:First aid*
   - Heat and cold injuries| heat stroke to frostbite              | gov:ATP 4-02.11 — Chapter 17* ; med_en:Heat illness
-  - Tactical medicine     | TCCC course, in Ukrainian             | tccc_uk:Skill Card: 5 навичок, що рятують життя ; tccc_uk:Вступ до тактичної медицини*
+  - Tactical medicine     | TCCC course, in Ukrainian             | tccc_uk:Skill Card: 5 навичок* ; tccc_uk:Вступ до тактичної мед*
 
 section water | WATER | water | water,gov,med_en,disaster,manuals,mine,wiki_en
   * Make water safe       | boil, filter, disinfect               | gov:Making Water Safe* ; water:Water purification ; wiki_en:Portable water purification
@@ -150,7 +150,7 @@ section hazards | HAZARDS | hazard | gov,disaster,dsns_uk,med_en,manuals,mine,wi
   - Tsunami               | strong quake at the coast: go high    | gov:Tsunamis* ; wiki_en:Tsunami
   - Mold                  | cleaning up after water               | gov:Mold* ; wiki_en:Mold health issues
   - Avalanche             | rescue in the first 15 minutes        | wiki_en:Avalanche rescue ; wiki_en:Avalanche
-  - Shelling, air raids   | DSNS memos, in Ukrainian              | dsns_uk:Дії при надзвичайних ситуаціях, артобстріл ; dsns_uk:Інструкції для захисту населення*
+  - Shelling, air raids   | DSNS memos, in Ukrainian              | dsns_uk:Дії при надзвичайних* ; dsns_uk:Інструкції для захисту*
 
 section weather | WEATHER | weather | gov,manuals,mine,wiki_en
   * Lightning             | no safe place outside                 | gov:Lightning Safety (NOAA* ; wiki_en:Lightning safety*
