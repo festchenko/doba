@@ -49,16 +49,9 @@ def test_gps_fix_and_time(device):
     assert abs(st["ride"]["lat"] - 37.7749) < 1e-4
     assert abs(st["ride"]["lon"] + 122.4194) < 1e-4
     assert st["ride"]["time_valid"]
-    # gps_service sets the clock at most once a minute, and not before the
-    # first minute of uptime (lastClockSet starts at 0): run the clock fast.
-    device.set_speed(10)
-    st = device.wait_status(lambda s: s["wall_unix"] > 1_700_000_000, timeout=15)
-    assert st["uptime_ms"] > 60000
+    device.wait_status(lambda s: s["wall_unix"] > 1_700_000_000, timeout=15)
 
 
-@pytest.mark.xfail(reason="gps_service only sets the clock after 60 s of uptime "
-                          "(lastClockSet starts at 0); a fix in the first minute leaves it unset",
-                   strict=True)
 def test_gps_sets_the_clock_on_the_first_fix(device):
     device.gps(37.7749, -122.4194)
     device.wait_status(lambda s: s["ride"]["gps_fix"], timeout=10)

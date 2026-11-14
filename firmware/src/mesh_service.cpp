@@ -745,12 +745,18 @@ void handleFrame(const uint8_t* frame, size_t len, float rssi, float snr) {
         }
         memset(key, 0, sizeof(key));
     }
-    if (!decoded && ch >= 0) {
+    // The hash is an 8-bit hint, not an identity: every channel that carries
+    // it gets a try with its own key, as stock Router::perhapsDecode does. The
+    // first match alone left a private channel whose hash collides with the
+    // primary's (1 in 256) deaf.
+    for (int c = ch; !decoded && c >= 0 && c < mesh::MAX_CHANNELS; ++c) {
+        if (!chans[c].used || chans[c].hash != h.channelHash) continue;
         memcpy(payload, frame + mesh::HEADER_LEN, plen);
-        mesh::ctrCrypt(chans[ch].key, chans[ch].keyLen, h.sender, h.id, 0, payload,
+        mesh::ctrCrypt(chans[c].key, chans[c].keyLen, h.sender, h.id, 0, payload,
                        plen);
         d = mesh::Data();
         decoded = mesh::decodeData(payload, plen, d) && d.portnum != mesh::PORT_UNKNOWN;
+        if (decoded) ch = c;
     }
     if (!decoded) {
         if (maybePki) {

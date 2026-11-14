@@ -188,11 +188,6 @@ def test_a_channel_with_the_wrong_key_is_ignored_not_shown_as_garbage(mesh):
     assert s.rx == 0 and s.rx_other_channel == 10 and s.rx_dropped == 60
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: chanForHash() (mesh_service.cpp) returns the FIRST channel whose 8-bit hash matches and "
-    "handleFrame tries only that key; stock Meshtastic (Router::perhapsDecode) tries every channel with "
-    "the hash. A private channel whose hash collides with the primary's (1 in 256) is then deaf: every "
-    "message on it fails the primary's key and is dropped, silently"))
 def test_a_private_channel_whose_hash_collides_with_the_primary_is_still_heard(mesh):
     """The channel byte is an 8-bit hint, not an identity: two of the
     rider's channels can share one. The primary winning a tie is fine;

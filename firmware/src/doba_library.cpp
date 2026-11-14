@@ -1197,7 +1197,7 @@ void tidyDocName(char* t) {
     char* c = t;
     while (*c == '.' || *c == ' ') ++c;
     if (c != t) memmove(t, c, strlen(c) + 1);
-    if (t[0] >= 'a' && t[0] <= 'z') t[0] -= 32;
+    ui::capFirst(t);
 }
 // "2 Water" before "10 Fire": numbers by value, the rest by letters.
 int naturalCmp(const char* a, const char* b) {
@@ -1878,7 +1878,7 @@ void renderRecent(uint8_t* fb) {
 void renderHome(uint8_t* fb) {
     tabs(1, fb);
     char lbl[48];
-    snprintf(lbl, sizeof lbl, TRN(shelfBooks(), "Search the %d book", "Search all %d books"), shelfBooks());
+    snprintf(lbl, sizeof lbl, TRN(shelfBooks(), "Search %d book", "Search %d books"), shelfBooks());
     searchBar(kAllSearch, lbl, fb);
     // EMERGENCY: straight to the page that matters.
     if (g_emergCount) {

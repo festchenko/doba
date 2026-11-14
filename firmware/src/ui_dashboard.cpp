@@ -1197,6 +1197,9 @@ void handleTap(int x, int y) {
             }
             break;
         }
+        case SCREEN_DIRECTIONS:   // a tap anywhere goes back to where it came from
+            screen = directionsFrom;
+            break;
         case SCREEN_ROUTES: {
             if (listPagerTap(x, y)) break;
             int row = (y - kMenuRowTop) / kMenuRowH;
@@ -3106,6 +3109,7 @@ static void runConsoleLine(char* line) {
         Serial.printf("[cmd] owner set (%s)\n", settings::ownerField(0));
     } else if (!strcasecmp(cmd, "screen")) {
         if (!arg) { Serial.println("[cmd] screen <map|dash|menu|settings|gps|layers>"); return; }
+        powerOverlay = false;   // a jump closes the power sheet, as Back does
         if      (!strcasecmp(arg, "map"))      screen = SCREEN_MAP;
         else if (!strcasecmp(arg, "dash"))     screen = SCREEN_DASH;
         else if (!strcasecmp(arg, "menu"))     screen = SCREEN_MENU;

@@ -10,7 +10,7 @@
 
 namespace routes {
 
-constexpr int MAX_NAME = 32;
+constexpr int MAX_NAME = 96;   // a long file name ("2026-10-28 Morning coast loop.gpx") stays whole
 
 bool begin();  // ensures /routes exists (needs SD mounted)
 

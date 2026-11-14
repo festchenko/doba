@@ -7,7 +7,7 @@
 set -e
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
-OUT=sim/build
+OUT=${OUT:-sim/build}   # SAN="-fsanitize=address,undefined" OUT=sim/build-san: a checked build
 mkdir -p "$OUT/obj"
 VENDOR=${OTP_VENDOR:-$ROOT/vendor}
 [ -d "$VENDOR/T5S3-4.7-e-paper-PRO" ] || { echo "vendor/ missing (set OTP_VENDOR)"; exit 1; }
@@ -17,8 +17,8 @@ GPS=$VENDOR/T5S3-4.7-e-paper-PRO/lib/TinyGPSPlus/src
 INC="-I sim/shim -I sim/host -I src -I third_party/h3/include -I third_party/nanopb -I $GPS -I $EPDIY -I tools/preview/shim -I third_party/h3"
 DEFS="-DVFONT -DOTP_SIM=1 -DPB_ENABLE_MALLOC=0 -DARDUINO=10819 -DESP32=1 -DBOARD_HAS_PSRAM=1"
 WARN="-Wno-unused-parameter -Wno-unused-variable -Wno-unused-function -Wno-deprecated-declarations -Wno-c99-designator -Wno-writable-strings -Wno-format -Wno-unused-but-set-variable"
-CXXFLAGS="-include sim/linux/linux_compat.h -std=gnu++17 -g -O1 $WARN $INC $DEFS"
-CFLAGS="-include sim/linux/linux_compat.h -std=gnu11 -g -O1 $WARN $INC $DEFS"
+CXXFLAGS="-include sim/linux/linux_compat.h -std=gnu++17 -g -O1 $WARN $INC $DEFS ${SAN:-}"
+CFLAGS="-include sim/linux/linux_compat.h -std=gnu11 -g -O1 $WARN $INC $DEFS ${SAN:-}"
 
 # Firmware sources compiled as-is. Everything else in src/ is hardware and
 # has a stand-in in sim/host/.
@@ -66,5 +66,5 @@ for f in sim/host/*.cpp; do [ -f "$f" ] && compile "${f%.cpp}" clang++ "$CXXFLAG
 for f in sim/host/*.c; do [ -f "$f" ] && compile "${f%.c}" clang "$CFLAGS" c; done
 wait
 [ -f "$OUT/failed" ] && exit 1
-clang++ $objs -lz -o "$OUT/otp-sim"
+clang++ ${SAN:-} $objs -lz -o "$OUT/otp-sim"
 echo "built $OUT/otp-sim"

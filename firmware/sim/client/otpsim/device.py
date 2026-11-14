@@ -8,7 +8,7 @@ import threading
 import time
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-BINARY = os.path.join(ROOT, "sim", "build", "otp-sim")
+BINARY = os.environ.get("OTP_SIM_BINARY") or os.path.join(ROOT, "sim", "build", "otp-sim")
 
 
 def free_port():

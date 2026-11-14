@@ -33,6 +33,7 @@
 #include "ui_render.h"
 
 namespace doba_ui {
+static void fitTextTo(const EpdFont* f, char* t, int w);
 namespace {
 
 constexpr int W = 540, H = 960;
@@ -299,10 +300,17 @@ void section(int y, const char* name, uint8_t* fb) {
     ui::text(ui::font(ui::F_TINY), 24, y + 26, up, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
 
-void caption(int y, int h, const char* name, const char* hint, uint8_t* fb) {
+// The hint stops short of the control on its right ("full" rows have none):
+// a long one ran under the button ("порожньо: торкніться, щоб напис|Змінити").
+void caption(int y, int h, const char* name, const char* hint, uint8_t* fb, bool full = false) {
     char n[96];
     ui::text(ui::font(ui::F_LABEL), 24, y + (hint ? h / 2 - 2 : h / 2 + 10), ui::sentence(TR(name), n, sizeof n), fb, EPD_DRAW_ALIGN_LEFT, INK);
-    if (hint) ui::text(ui::font(ui::F_TINY), 24, y + h / 2 + 24, TR(hint), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    if (hint) {
+        char t[128];
+        snprintf(t, sizeof t, "%s", TR(hint));
+        fitTextTo(ui::font(ui::F_TINY), t, (full ? W - 24 : CTRL_X - 12) - 24);
+        ui::text(ui::font(ui::F_TINY), 24, y + h / 2 + 24, t, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+    }
 }
 
 // n labels side by side, the chosen one filled.
@@ -823,7 +831,7 @@ void renderChat(uint8_t* fb) {
     fit(ui::font(ui::F_TITLE), t, onMap ? kOnMap.x - 40 : W - 48);
     fit(small, sub, onMap ? kOnMap.x - 40 : W - 48);
     ui::text(ui::font(ui::F_TITLE), 24, TOP + 38, t, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    if (sub[0] >= 'a' && sub[0] <= 'z') sub[0] -= 32;
+    ui::capFirst(sub);
     ui::text(small, 24, TOP + 68, sub, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     epd_fill_rect({24, TOP + 84, W - 48, 1}, ui::HAIR, fb);
 
@@ -1255,8 +1263,8 @@ void renderField(const char* caption, const char* note, kbd::Keyboard& k, const 
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     k.top = H - k.height();
     k.enterLabel = enter;
-    ui::text(ui::font(ui::F_SMALL), 14, TOP + 40, TR(caption), fb, EPD_DRAW_ALIGN_LEFT, INK);
-    const EpdRect box = {10, TOP + 60, W - 20, 90};
+    ui::text(ui::font(ui::F_SMALL), 24, TOP + 40, TR(caption), fb, EPD_DRAW_ALIGN_LEFT, INK);
+    const EpdRect box = {24, TOP + 60, W - 48, 90};   // the page margin, as every other screen
     frame(box, 3, fb);
     char shown[300];
     snprintf(shown, sizeof shown, "%s_", k.text);
@@ -1267,7 +1275,7 @@ void renderField(const char* caption, const char* note, kbd::Keyboard& k, const 
         while (((uint8_t)*vis & 0xC0) == 0x80) ++vis;
     }
     ui::text(ui::font(ui::F_KEY), box.x + 16, box.y + 58, vis, fb, EPD_DRAW_ALIGN_LEFT, INK);
-    if (note) ui::text(ui::font(ui::F_TINY), 14, box.y + box.height + 34, TR(note), fb, EPD_DRAW_ALIGN_LEFT, INK);
+    if (note) ui::text(ui::font(ui::F_TINY), 24, box.y + box.height + 34, TR(note), fb, EPD_DRAW_ALIGN_LEFT, INK);
     k.render(fb);
 }
 
@@ -1895,7 +1903,7 @@ Go tapSos(int x, int y, const RideState& s) {
 // --- SUN ---------------------------------------------------------------------------
 
 void hhmm(time_t utc, char* out, size_t n) {
-    const time_t t = utc + settings::tzMinutes() * 60;
+    const time_t t = utc + settings::tzMinutes() * 60 + 30;   // to the nearest minute
     struct tm g;
     gmtime_r(&t, &g);
     snprintf(out, n, "%02d:%02d", g.tm_hour, g.tm_min);
@@ -1944,12 +1952,14 @@ void renderSun(const RideState& s, uint8_t* fb) {
             ui::text(ui::font(ui::F_SMALL), 20, y + 120, TR("until sunrise"), fb, EPD_DRAW_ALIGN_LEFT, INK);
         }
     }
-    // The day's table.
+    // The day's table: after sunset it is tomorrow's — tonight's past times
+    // under a "until sunrise" countdown read as the morning ahead.
+    const doba_sun::Day td = (d.setOk && s.utc >= d.set) ? doba_sun::day(s.latitude, s.longitude, s.utc + 86400) : d;
     y = TOP + 200;
     epd_fill_rect({24, y, W - 48, 1}, ui::HAIR, fb);
     struct Row { const char* name; bool ok; time_t t; } rows[] = {
-        {"FIRST LIGHT", d.dawnOk, d.dawn}, {"SUNRISE", d.riseOk, d.rise},
-        {"SUNSET", d.setOk, d.set},        {"LAST LIGHT", d.duskOk, d.dusk},
+        {"FIRST LIGHT", td.dawnOk, td.dawn}, {"SUNRISE", td.riseOk, td.rise},
+        {"SUNSET", td.setOk, td.set},        {"LAST LIGHT", td.duskOk, td.dusk},
     };
     for (int i = 0; i < 4; ++i) {
         const int ry = y + 16 + i * 72;
@@ -1976,7 +1986,7 @@ void renderSun(const RideState& s, uint8_t* fb) {
     epd_draw_circle(mx, my, mr, INK, fb);
     char mn[32];
     snprintf(mn, sizeof mn, "%s", TR(doba_sun::moonName(s.utc)));
-    if (mn[0] >= 'a' && mn[0] <= 'z') mn[0] -= 32;
+    ui::capFirst(mn);
     ui::text(ui::font(ui::F_KEY), 170, y + 66, mn, fb, EPD_DRAW_ALIGN_LEFT, INK);
     snprintf(line, sizeof line, TR("%d%% lit · day %d of 29"), (int)lround(lit * 100), (int)age);
     ui::text(ui::font(ui::F_SMALL), 170, y + 104, line, fb, EPD_DRAW_ALIGN_LEFT, INK);
@@ -2011,7 +2021,7 @@ void renderMore(const RideState& s, uint8_t* fb) {
                 toggle(y, SROW_H, settings::bluetooth(), fb);
                 break;
             case M_WIFI:
-                caption(y, SROW_H, "WIFI", settings::wifi() ? "on: allowed when something needs it" :
+                caption(y, SROW_H, "Wi-Fi", settings::wifi() ? "on: allowed when something needs it" :
                         "off: never switched on", fb);
                 toggle(y, SROW_H, settings::wifi(), fb);
                 break;
@@ -2045,19 +2055,19 @@ void renderMore(const RideState& s, uint8_t* fb) {
                 break;
             case M_CARD:
                 snprintf(sub, sizeof sub, s.sdCard == SD_CARD_OK ? TRN(doba_lib::count(), "%d book", "%d books") : TR("no card"), doba_lib::count());
-                caption(y, SROW_H, "CARD", sub, fb);
+                caption(y, SROW_H, "CARD", sub, fb, true);
                 break;
             case M_ABOUT:
                 {
                     char about[96];
                     snprintf(about, sizeof about, "%s%s", TR("offline backcountry assistant \xC2\xB7 "), __DATE__);
-                    caption(y, SROW_H, "DOBA", about, fb);
+                    caption(y, SROW_H, "DOBA", about, fb, true);
                 }
                 break;
         }
         epd_fill_rect({24, y + SROW_H - 1, W - 48, 1}, ui::HAIR, fb);
     }
-    ui::text(ui::font(ui::F_TINY), W / 2, H - 24, TR("USB DRIVE: copy books and maps from a computer"), fb,
+    ui::text(ui::font(ui::F_TINY), W / 2, H - 24, TR("USB drive: copy books and maps from a computer"), fb,
              EPD_DRAW_ALIGN_CENTER, INK);
 }
 

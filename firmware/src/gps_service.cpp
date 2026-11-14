@@ -877,10 +877,14 @@ void task(void*) {
         // Keep the ESP32 system clock in sync with GPS time. It survives deep
         // sleep, so after a shutdown/wake we can seed the receiver with an
         // accurate time (warm start) even before the first fix.
+        // The first fix sets it at once: "lastClockSet = 0" plus a 60 s gap
+        // left the clock unset for the whole first minute after boot.
+        static bool clockSet = false;
         static uint32_t lastClockSet = 0;
         static uint32_t lastRtcWrite = 0;
         if (gps.date.isValid() && gps.time.isValid() && gps.date.year() >= 2025 &&
-            millis() - lastClockSet > 60000) {
+            (!clockSet || millis() - lastClockSet > 60000)) {
+            clockSet = true;
             lastClockSet = millis();
             time_t u = gpsUnix();
             struct timeval tv = {u, 0};
@@ -888,7 +892,9 @@ void task(void*) {
             // Also push GPS time into the coin-cell RTC (every ~10 min), so it
             // stays accurate across a full power-off and can seed time-aiding
             // on the next cold boot.
-            if (lastRtcWrite == 0 || millis() - lastRtcWrite > 600000) {
+            static bool rtcWritten = false;
+            if (!rtcWritten || millis() - lastRtcWrite > 600000) {
+                rtcWritten = true;
                 lastRtcWrite = millis();
                 rtc_clock::write(u);
                 // The RTC now holds GPS-sourced UTC, so it's safe to seed

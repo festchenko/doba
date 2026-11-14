@@ -162,7 +162,26 @@ void Keyboard::render(uint8_t* fb) const {
         if (!k.label[0]) continue;
         const EpdFont* f = ui::font(k.kind == 0 ? ui::F_KEY : ui::F_SMALL);
         char lb[32];
-        ui::text(f, k.x + k.w / 2, k.y + k.h / 2 + (k.kind == 0 ? 12 : 8), k.kind == 0 ? k.label : ui::sentence(TR(k.label), lb, sizeof lb), fb,
+        const char* t = k.kind == 0 ? k.label : ui::sentence(TR(k.label), lb, sizeof lb);
+        // A word key narrower than its word steps down ("Стерти" ran off the
+        // 12-key Ukrainian row's DEL key).
+        if (k.kind != 0 && ui::textWidth(f, t) > r.width - 6) f = ui::font(ui::F_TINY);
+        if (k.kind == 2 && ui::textWidth(f, t) > r.width - 6) {
+            // Still too wide: the backspace sign, as a phone draws it.
+            const int cx = k.x + k.w / 2, cy = k.y + k.h / 2, hw = 9, hh = 8;
+            const uint8_t ink = dark ? 0xFF : 0x00;
+            for (int e = 0; e < 2; ++e) {
+                epd_draw_line(cx - hw - 6, cy + e, cx - hw + 2, cy - hh + e, ink, fb);
+                epd_draw_line(cx - hw - 6, cy + e, cx - hw + 2, cy + hh + e, ink, fb);
+                epd_draw_line(cx - hw + 2, cy - hh + e, cx + hw + 2, cy - hh + e, ink, fb);
+                epd_draw_line(cx - hw + 2, cy + hh - e, cx + hw + 2, cy + hh - e, ink, fb);
+                epd_draw_line(cx + hw + 2 - e, cy - hh, cx + hw + 2 - e, cy + hh, ink, fb);
+                epd_draw_line(cx - 3 + e, cy - 5, cx + 7 + e, cy + 5, ink, fb);
+                epd_draw_line(cx - 3 + e, cy + 5, cx + 7 + e, cy - 5, ink, fb);
+            }
+            continue;
+        }
+        ui::text(f, k.x + k.w / 2, k.y + k.h / 2 + (k.kind == 0 ? 12 : 8), t, fb,
                  EPD_DRAW_ALIGN_CENTER, dark ? 0xFF : 0x00);
     }
 }

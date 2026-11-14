@@ -233,9 +233,13 @@ bool ensureBuffers() {
 struct GpxScanner {
     int stride = 1;      // decimation: keep every stride-th point
     int seen = 0;
+    double lastLat = 0, lastLon = 0;
+    bool lastKept = false;   // the newest point made it into the arrays
 
     void addPoint(double lat, double lon) {
+        lastLat = lat; lastLon = lon; lastKept = false;
         if (seen++ % stride) return;
+        lastKept = true;
         if (nPts >= MAX_PTS) {
             // halve in place, double the stride, keep going
             for (int i = 0; i < MAX_PTS / 2; ++i) {
@@ -247,6 +251,17 @@ struct GpxScanner {
         }
         latArr[nPts] = (float)lat;
         lonArr[nPts] = (float)lon;
+        nPts++;
+    }
+
+    // Thinning drops every point but each stride-th — the finish too, so a
+    // long track ended up to stride-1 points (60 m on a 20k-point GPX) short
+    // of where it really ends. The finish always stays.
+    void finish() {
+        if (!seen || lastKept) return;
+        if (nPts >= MAX_PTS) nPts = MAX_PTS - 1;
+        latArr[nPts] = (float)lastLat;
+        lonArr[nPts] = (float)lastLon;
         nPts++;
     }
 };
@@ -289,7 +304,7 @@ int list(char names[][MAX_NAME], int maxNames) {
 bool load(const char* filename) {
     if (!ensureBuffers()) return false;
 
-    char path[64];
+    char path[routes::MAX_NAME + 16];
     snprintf(path, sizeof(path), ROUTE_DIR "/%s", filename);
     sdLock();
     File f = SD.open(path, FILE_READ);
@@ -306,21 +321,26 @@ bool load(const char* filename) {
 
     // Chunked scan with carryover so attributes split across chunk
     // boundaries aren't lost.
-    static char buf[2048 + 64];
+    // +1: the terminating NUL after a full carry + chunk (buf[2112] was one
+    // past the end — found by AddressSanitizer).
+    static char buf[2048 + 64 + 1];
     int carry = 0;
     bool havePt = false;
     double lat = 0;
 
     while (true) {
         int rd = f.read((uint8_t*)buf + carry, 2048);
-        if (rd <= 0) break;
+        const bool eof = rd <= 0;   // one last pass over what was carried
+        if (eof && carry == 0) break;
+        if (rd < 0) rd = 0;
         int len = carry + rd;
         buf[len] = 0;
 
         char* p = buf;
+        char* done = buf;   // everything before this is parsed
         while ((p = strstr(p, havePt ? "lon=\"" : "lat=\"")) != nullptr) {
             // don't parse an attribute that may be cut off at the end
-            if (p + 24 > buf + len) break;
+            if (p + 24 > buf + len && !eof) break;
             double v = strtod(p + 5, nullptr);
             if (!havePt) {
                 lat = v;
@@ -330,14 +350,22 @@ bool load(const char* filename) {
                 havePt = false;
             }
             p += 5;
+            done = p;
         }
 
-        // keep the tail in case an attribute straddles the boundary
-        carry = len > 64 ? 64 : len;
-        memmove(buf, buf + len - carry, carry);
+        // Keep the tail in case an attribute straddles the boundary — but
+        // never bytes already parsed: re-reading the last 64 bytes found the
+        // same lat= or lon= twice and paired coordinates of different points.
+        char* from = p ? p : buf + len - (len > 4 ? 4 : len);   // a cut-off attribute, or a cut "lat="
+        if (from < done) from = done;
+        carry = (int)(buf + len - from);
+        if (carry > 64) carry = 64, from = buf + len - 64;
+        memmove(buf, from, carry);
+        if (eof) break;
     }
     f.close();
     sdUnlock();
+    sc.finish();
 
     if (nPts < 2) {
         Serial.printf("[route] %s: no points found\n", filename);
@@ -380,6 +408,7 @@ bool loadFromMemory(const char* name, const char* gpx, size_t len) {
         }
         p += 5;
     }
+    sc.finish();
 
     if (nPts < 2) {
         Serial.println("[route] uploaded GPX had no points");

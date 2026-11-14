@@ -155,6 +155,7 @@ const EpdFont* font(FontRole r);
 // Capitals, Cyrillic too ("місця" -> "МІСЦЯ").
 void upper(const char* in, char* out, size_t n);
 const char* sentence(const char* in, char* out, size_t n);
+void capFirst(char* t);
 // DOBA: digits at a given ink height: mono (JetBrains Mono 700) or heavy (800).
 const EpdFont* monoFont(int digitPx);
 const EpdFont* valueFont(int digitPx);

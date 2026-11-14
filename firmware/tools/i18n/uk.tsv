@@ -313,7 +313,7 @@ Bluetooth	Bluetooth
 Wifi	Wi-Fi
 on: visible to phones	увімк.: видно телефонам
 off · switching restarts Doba	вимк. · зміна перезапускає Добу
-WIFI	WI-FI
+Wi-Fi	Wi-Fi
 allowed when something needs it	дозволено, коли потрібно
 off: never switched on	вимк.: ніколи не вмикається
 fix · %u satellites	є GPS · супутників %u
@@ -326,7 +326,7 @@ no card	немає карти
 CARD	Карта
 DOBA	ДОБА
 offline backcountry assistant \xC2\xB7 	офлайн-помічник у дорозі \xC2\xB7 
-USB DRIVE: copy books and maps from a computer	USB: копіюйте книги й мапи з комп’ютера
+USB drive: copy books and maps from a computer	USB: копіюйте книги й мапи з комп’ютера
 CALLSIGN  (how the mesh sees you)	ПОЗИВНИЙ  (як вас бачить mesh)
 Short name: first four letters	Коротке ім’я: перші чотири літери
 SAVE	Зберегти
@@ -369,7 +369,6 @@ Books	Книги
 Topics	Теми
 Recent	Недавні
 Search %d book	Пошук у %d книзі|Пошук у %d книгах|Пошук у %d книгах
-Search the %d book	Пошук у %d книзі|Пошук у всіх %d книгах|Пошук у всіх %d книгах
 In the %d book	У %d книзі|У всіх %d книгах|У всіх %d книгах
 Picked for survival	Вибране для виживання
 Documents	Документи

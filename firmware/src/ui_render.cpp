@@ -1868,17 +1868,20 @@ static int sheetHead(const char* label, const char* hero, const char* detail,
     // route filename ("mission_dolores.gpx") drew as a row of blanks. Uppercase
     // it, turn separators into spaces and drop the extension — which is also
     // how a rider would read the name aloud.
-    char clean[48];
+    // DOBA: the vector faces carry Cyrillic, so other scripts stay (they were
+    // dropped, and "ВИМКНУТИ?" drew as a lone "?"); capitals as ui::upper().
+    char sep[96];
     size_t n = 0;
-    for (const char* p = hero; *p && n < sizeof(clean) - 1; ++p) {
+    for (const char* p = hero; *p && n < sizeof(sep) - 1; ++p) {
         char c = *p;
         if (c == '.' && (strcasecmp(p, ".gpx") == 0)) break;
         if (c == '_' || c == '-' || c == '.') c = ' ';
-        if (c >= 'a' && c <= 'z') c -= 32;
-        if (c < ' ' || c > 'Z') continue;      // outside the compiled charset
-        clean[n++] = c;
+        if ((unsigned char)c < ' ') continue;
+        sep[n++] = c;
     }
-    clean[n] = 0;
+    sep[n] = 0;
+    char clean[96];
+    ui::upper(sep, clean, sizeof clean);
 
     // Step the hero DOWN to fit rather than truncating it: a route called
     // "MISSION DOL.." tells the rider less than the same name a size smaller.
@@ -1889,7 +1892,7 @@ static int sheetHead(const char* label, const char* hero, const char* detail,
     const EpdFont* hf = &Impact_T;
     for (const EpdFont* f : heroSteps)
         if (ui::textWidth(f, clean) <= W - 2 * ui::MARGIN) { hf = f; break; }
-    char fit[48];
+    char fit[96];
     fitText(hf, clean, W - 2 * ui::MARGIN, fit, sizeof(fit));
     const int heroH = epdc_digit_height(hf);
     ui::text(hf, x, y + heroH, fit, fb, EPD_DRAW_ALIGN_LEFT, ui::INK);
@@ -2378,9 +2381,66 @@ void ui::upper(const char* in, char* out, size_t n) {
     out[o] = 0;
 }
 
+// A Cyrillic letter at p (two UTF-8 bytes): its case, and in place to lower.
+static bool cyrUpper(const unsigned char* p) {
+    return (p[0] == 0xD0 && ((p[1] >= 0x90 && p[1] <= 0xAF) || p[1] == 0x84 || p[1] == 0x86 || p[1] == 0x87)) ||
+           (p[0] == 0xD2 && p[1] == 0x90);
+}
+static bool cyrLower(const unsigned char* p) {
+    return (p[0] == 0xD0 && p[1] >= 0xB0 && p[1] <= 0xBF) || (p[0] == 0xD1 && p[1] >= 0x80 && p[1] <= 0x9F) ||
+           (p[0] == 0xD2 && p[1] == 0x91);
+}
+static void cyrToLower(unsigned char* p) {
+    if (p[0] == 0xD0 && p[1] >= 0x90 && p[1] <= 0x9F) p[1] += 0x20;
+    else if (p[0] == 0xD0 && p[1] >= 0xA0 && p[1] <= 0xAF) { p[0] = 0xD1; p[1] -= 0x20; }
+    else if (p[0] == 0xD0 && (p[1] == 0x84 || p[1] == 0x86 || p[1] == 0x87)) { p[0] = 0xD1; p[1] += 0x10; }
+    else if (p[0] == 0xD2 && p[1] == 0x90) p[1] = 0x91;
+}
+
+// First letter to a capital, Latin or Cyrillic ("молодий місяць" -> "Молодий...").
+void ui::capFirst(char* t) {
+    unsigned char* p = (unsigned char*)t;
+    if (p[0] >= 'a' && p[0] <= 'z') { p[0] -= 32; return; }
+    if (p[0] == 0xD0 && p[1] >= 0xB0 && p[1] <= 0xBF) p[1] -= 0x20;
+    else if (p[0] == 0xD1 && p[1] >= 0x80 && p[1] <= 0x8F) { p[0] = 0xD0; p[1] += 0x20; }
+    else if (p[0] == 0xD1 && (p[1] == 0x94 || p[1] == 0x96 || p[1] == 0x97)) { p[0] = 0xD0; p[1] -= 0x10; }
+    else if (p[0] == 0xD2 && p[1] == 0x91) p[1] = 0x90;
+}
+
 const char* ui::sentence(const char* in, char* out, size_t n) {
     snprintf(out, n, "%s", in ? in : "");
     for (const char* c = out; *c; ++c) if (*c >= 'a' && *c <= 'z') return out;   // already mixed
+    // DOBA: Ukrainian too — "БАТАРЕЯ" -> "Батарея", "ЯКЩО ЗНАЙШЛИ" -> "Якщо знайшли".
+    {
+        bool cyr = false;
+        for (const unsigned char* c = (const unsigned char*)out; c[0] && c[1]; ++c) {
+            if (cyrLower(c)) return out;   // already mixed
+            if (cyrUpper(c)) cyr = true;
+        }
+        if (cyr) {
+            static const char* const kKeepUk[] = {"ДСНС", "МОН", "ЗСУ", "НС", "ГПС"};
+            bool first = true;
+            unsigned char* w = (unsigned char*)out;
+            while (*w) {
+                if (!(w[1] && (cyrUpper(w) || cyrLower(w)))) {
+                    if ((*w >= 'A' && *w <= 'Z') || (*w >= '0' && *w <= '9')) first = false;
+                    ++w;
+                    continue;
+                }
+                unsigned char* e = w;
+                while (e[0] && e[1] && (cyrUpper(e) || cyrLower(e) || (e[0] == 0xE2 && e[1] == 0x80 && e[2] == 0x99))) e += (e[0] == 0xE2 ? 3 : 2);
+                bool keep = false;
+                for (const char* k : kKeepUk)
+                    if ((size_t)(e - w) == strlen(k) && !strncmp((const char*)w, k, e - w)) keep = true;
+                if (!keep)
+                    for (unsigned char* c = first ? w + 2 : w; c < e; c += (c[0] == 0xE2 ? 3 : 2))
+                        if (cyrUpper(c)) cyrToLower(c);
+                first = false;
+                w = e;
+            }
+            return out;
+        }
+    }
     static const char* const kKeep[] = {"GPS", "USB", "SOS", "UTC", "MGRS", "EU", "UA", "US", "RU", "BT",
                                         "SD", "LED", "ID", "OK", "AZ", "DEM", "MHZ", "LORA", "QR", "DM", "UK"};
     bool first = true;

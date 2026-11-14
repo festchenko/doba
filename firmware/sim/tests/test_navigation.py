@@ -99,10 +99,6 @@ def upload(link, name, data):
 # -- storage: what the app sends is what the card keeps ----------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: routes.cpp list() copies each name into char[routes::MAX_NAME] (32 B), so a .gpx with a "
-    "longer name is listed cut short in NAVIGATE and tapping it fails ('[route] can't open "
-    "/routes/2026-10-28 Morning coast loop.g'): nothing loads, no message on the panel."))
 def test_a_long_file_name_copied_onto_the_card_can_be_ridden(device):
     """A rider copies a .gpx onto the card over USB under whatever name the
     planner exported — FAT keeps long names, and 33+ characters is ordinary
@@ -257,13 +253,6 @@ def route_north_on_the_map(device, link, tmp_path, step_m):
 
 # -- long routes ---------------------------------------------------------------------------------
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: routes.cpp GpxScanner thins a track over 4096 points by keeping every stride-th point "
-    "(stride doubling at each halving) and never keeps the last one, so the route ends up to "
-    "stride-1 points short of its finish (7 at 16k+ points): this 20,005-point GPX (a 200 km "
-    "track at 10 m) ends 60 m before the destination, and 100 m out the device says 40 m are "
-    "left. (The apps' importers keep the last point when they thin; the device doesn't. The "
-    "chunk re-scan bug above shifts which points survive, so the shortfall varies 0-70 m.)"))
 def test_a_very_long_track_from_the_card_still_ends_at_its_finish(device):
     """A 200 km track recorded at 10 m (20,000 points, ~0.9 MB) copied onto
     the card. The device keeps 4096 points at most and thins the rest; the

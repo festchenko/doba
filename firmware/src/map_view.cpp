@@ -1046,7 +1046,7 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
             if (map.placeSub[0]) {
                 char sub[40];
                 snprintf(sub, sizeof sub, "%s", map.placeSub);
-                if (sub[0] >= 'a' && sub[0] <= 'z') sub[0] -= 32;
+                ui::capFirst(sub);
                 ui::text(ui::font(ui::F_TINY), 24, y0 + 44, sub, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
             }
         } else {
