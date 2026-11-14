@@ -12,7 +12,7 @@ Writes, under --out (default sim/fixtures/appmaps):
     area.json              the area: centre, box, and each cell's id + bbox
 
 The cells are the ones the apps' own H3 cover (h3cover.c, built here from
-companion-ios/Sources/H3) gives for a box of +-DLAT/DLON around the centre:
+third_party/h3) gives for a box of +-DLAT/DLON around the centre:
 a selection anywhere inside it gets only fixture hexes, so the apps never
 fall back to Overpass for it. Each file is checked against its index entry
 (size, and sha256[:16] = the hash, tools/tiles/build_region.mjs).
@@ -47,7 +47,7 @@ def get(url):
 
 
 def build_h3cover(tmp):
-    h3 = os.path.join(ROOT, "companion-ios", "Sources", "H3")
+    h3 = os.path.join(ROOT, "third_party", "h3")
     out = os.path.join(tmp, "h3cover")
     srcs = [os.path.join(os.path.dirname(__file__), "h3cover.c"), os.path.join(h3, "h3shim.c")]
     srcs += sorted(os.path.join(h3, "lib", f) for f in os.listdir(os.path.join(h3, "lib")) if f.endswith(".c"))

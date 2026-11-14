@@ -265,19 +265,19 @@ std::string meshJson() {
         mesh_service::Node nd;
         if (!mesh_service::nodeAt(i, nd)) continue;
         o << (k++ ? "," : "") << "{\"num\":" << nd.num << ",\"short_name\":" << json::esc(nd.shortName)
-          << ",\"long_name\":" << json::esc(nd.longName) << ",\"snr\":" << (int)nd.snr << ",\"rssi\":" << (int)nd.rssi
+          << ",\"long_name\":" << json::esc(nd.longName) << ",\"age_ms\":" << (millis() - nd.lastHeardMs) << ",\"snr\":" << (int)nd.snr << ",\"rssi\":" << (int)nd.rssi
           << ",\"hops\":" << (nd.hops == mesh_service::HOPS_UNKNOWN ? -1 : (int)nd.hops)
           << ",\"has_position\":" << (nd.hasPosition ? "true" : "false");
         if (nd.hasPosition)
             o << ",\"position\":{\"lat_e7\":" << (int32_t)(nd.latitude * 1e7) << ",\"lon_e7\":" << (int32_t)(nd.longitude * 1e7)
-              << ",\"alt_m\":" << nd.altitudeM << ",\"sats\":" << (int)nd.satsInView << ",\"precision_bits\":" << (int)nd.precisionBits << "}";
+              << ",\"age_ms\":" << (millis() - nd.positionMs) << ",\"alt_m\":" << nd.altitudeM << ",\"sats\":" << (int)nd.satsInView << ",\"precision_bits\":" << (int)nd.precisionBits << "}";
         o << "}";
     }
     o << "],\"history\":[";
     for (int i = 0, k = 0; i < mesh_service::messageCount(); ++i) {
         mesh_service::Message m;
         if (!mesh_service::messageAt(i, m)) continue;
-        o << (k++ ? "," : "") << "{\"id\":" << m.id << ",\"from\":" << m.from << ",\"to\":" << m.to
+        o << (k++ ? "," : "") << "{\"id\":" << m.id << ",\"age_ms\":" << (millis() - m.ms) << ",\"utc\":" << (long long)m.utc << ",\"from\":" << m.from << ",\"to\":" << m.to
           << ",\"text\":" << json::esc(m.text) << ",\"channel\":" << (int)m.channel
           << ",\"outgoing\":" << (m.outgoing ? "true" : "false") << ",\"delivery\":" << (int)m.status
           << ",\"hops\":" << (m.hops == mesh_service::HOPS_UNKNOWN ? -1 : (int)m.hops)
@@ -300,21 +300,6 @@ std::string meshJson() {
 std::string meshCommand(const json::Value& r) {
     const std::string op = r.str("op");
     if (op == "radio") { mesh_service::setEnabled(r.boolean("on", true)); return "\"ok\":true"; }
-    if (op == "send") {
-        const uint32_t id = mesh_service::queueText((uint32_t)r.num("dest", 0xFFFFFFFF), r.str("text").c_str(),
-                                                    (uint8_t)r.num("channel", 0));
-        return "\"ok\":true,\"id\":" + std::to_string(id);
-    }
-    if (op == "set_channel") {
-        std::string hex = r.str("psk");
-        uint8_t psk[mesh::MAX_PSK_LEN] = {};
-        size_t n = 0;
-        for (size_t i = 0; i + 1 < hex.size() && n < sizeof psk; i += 2) psk[n++] = (uint8_t)strtoul(hex.substr(i, 2).c_str(), nullptr, 16);
-        const bool ok = mesh_service::setPrivateChannel((uint8_t)r.num("index"), r.str("name").c_str(), psk, n);
-        return std::string("\"ok\":") + (ok ? "true" : "false");
-    }
-    if (op == "share") { mesh_service::setSharesLocation((uint8_t)r.num("index"), r.boolean("on", true)); return "\"ok\":true"; }
-    if (op == "names") { mesh_service::setNames(r.str("long").c_str(), r.str("short").c_str()); return "\"ok\":true"; }
     return "\"ok\":true,\"mesh\":" + meshJson();
 }
 

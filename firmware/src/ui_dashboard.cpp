@@ -2730,6 +2730,39 @@ static void runConsoleLine(char* line) {
             const uint32_t id = mesh_service::queueText(mesh::BROADCAST_ADDR, text);
             if (id) Serial.printf("[cmd] queued packet 0x%08x: %s\n", (unsigned)id, text);
             else    Serial.println("[cmd] NOT queued (radio off, or outbox full)");
+        } else if (arg && !strcasecmp(arg, "tx")) {
+            // mesh tx <dest hex|all> <channel> <text>: a message to anyone, on any slot.
+            char* d = strtok(nullptr, " \t");
+            char* c = strtok(nullptr, " \t");
+            char* text = strtok(nullptr, "");
+            while (text && *text == ' ') ++text;
+            if (!d || !c || !text || !*text) { Serial.println("[cmd] mesh tx <dest hex|all> <channel> <text>"); return; }
+            const uint32_t dest = !strcasecmp(d, "all") ? mesh::BROADCAST_ADDR : (uint32_t)strtoul(d, nullptr, 16);
+            const uint32_t id = mesh_service::queueText(dest, text, (uint8_t)atoi(c));
+            Serial.printf("[cmd] mesh tx id=%u\n", (unsigned)id);
+        } else if (arg && !strcasecmp(arg, "preset")) {
+            const char* i = strtok(nullptr, " \t");
+            if (i) mesh_service::setPreset((uint8_t)atoi(i));
+            Serial.printf("[cmd] mesh preset %s\n", mesh_service::presetName());
+        } else if (arg && !strcasecmp(arg, "share")) {
+            const char* i = strtok(nullptr, " \t");
+            const char* on = strtok(nullptr, " \t");
+            if (i && on) mesh_service::setSharesLocation((uint8_t)atoi(i), !strcasecmp(on, "on"));
+            Serial.printf("[cmd] mesh share %s %s\n", i ? i : "?", on ? on : "?");
+        } else if (arg && !strcasecmp(arg, "chan")) {
+            // mesh chan <slot> <hex psk> <name, spaces allowed>: a private channel with a given key.
+            const char* i = strtok(nullptr, " \t");
+            const char* hx = strtok(nullptr, " \t");
+            char* nm = strtok(nullptr, "");
+            while (nm && *nm == ' ') ++nm;
+            uint8_t psk[mesh::MAX_PSK_LEN] = {};
+            size_t n = 0;
+            for (size_t k = 0; hx && hx[k] && hx[k + 1] && n < sizeof psk; k += 2) {
+                char two[3] = {hx[k], hx[k + 1], 0};
+                psk[n++] = (uint8_t)strtoul(two, nullptr, 16);
+            }
+            const bool ok = i && nm && mesh_service::setPrivateChannel((uint8_t)atoi(i), nm, psk, n);
+            Serial.printf("[cmd] mesh chan %s\n", ok ? "ok" : "refused");
         } else if (arg && !strcasecmp(arg, "private")) {
             // Create a private channel with a random 256-bit key. The same thing
             // the app's QR flow does, reachable without a phone.
@@ -3290,7 +3323,10 @@ TRC("loop");         bool host = usb_storage::hostActive();
         // Wake with BOOT.
         if (autoSleepEnabled && millis() - lastActivityMs > AUTO_SLEEP_MS &&
             !ride_recorder::isRecording() && !routes::navActive() &&
-            true) {
+            // DOBA: a radio that is listening is a pager: switching off would
+            // miss the message or the SOS it is on for. (OTP held this for a
+            // connected phone; Doba holds it while the mesh is on.)
+            !mesh_service::enabled()) {
             uint8_t* fb = epdc_framebuffer();
             shutdownDevice(fb, "auto-sleep (idle timeout)");   // does not return
         }

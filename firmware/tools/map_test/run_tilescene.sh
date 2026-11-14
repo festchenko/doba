@@ -18,7 +18,7 @@ shift 2 2>/dev/null || shift $#
 
 ROOT=../..
 EPDIY=$ROOT/vendor/T5S3-4.7-e-paper-PRO/lib/epdiy/src
-H3=$ROOT/companion-ios/Sources/H3
+H3=$ROOT/third_party/h3
 CXXFLAGS="-std=c++17 -O2 -I ../preview/shim -I $EPDIY -I $ROOT/src -I $H3 -I $H3/include"
 
 # Same source list as tools/preview/render_preview.sh (ui_render.cpp pulls in

@@ -82,16 +82,30 @@ class Mesh:
                           "the announcement after switching on", timeout=15)
 
     def send(self, text, dest=BROADCAST, channel=0):
-        return self._mesh(op="send", text=text, dest=dest, channel=channel)
+        """As Doba's composer: the message queued on the UI task (console `mesh tx`)."""
+        d = "all" if dest == BROADCAST else "%x" % dest
+        lines = self.dev.console("mesh tx %s %d %s" % (d, channel, text), 400)
+        ids = [int(l.split("id=")[1]) for l in lines if "mesh tx id=" in l]
+        pid = ids[0] if ids else 0
+        return _Queued(_Msg(packet_id=pid) if pid else None)
 
     def set_private(self, index, name, psk):
-        self._mesh(op="set_channel", index=index, name=name, psk=bytes(psk).hex())
+        self.dev.console("mesh chan %d %s %s" % (index, bytes(psk).hex() or "-", name), 400)
         self.dev_wait(lambda: any(c.index == index and c.name == name for c in self.device_channels()),
                       "private channel %d applied" % index)
         self.channels.append(M.Channel(name, psk))
 
+    def command(self, preset=None, delete_channel=None, radio_on=None):
+        """What the old phone link's MeshCommand did, through the sim's control."""
+        if preset is not None:
+            self.dev.console("mesh preset %d" % preset, 400)
+        if delete_channel is not None:
+            self.dev.console("mesh forget %d" % delete_channel, 400)
+        if radio_on is not None:
+            self._mesh(op="radio", on=radio_on)
+
     def share(self, index, on):
-        self._mesh(op="share", index=index, on=on)
+        self.dev.console("mesh share %d %s" % (index, "on" if on else "off"), 400)
 
     # -- the air ---------------------------------------------------------------------------
 
@@ -217,6 +231,16 @@ def is_port(h, port):
 
 def lock_warnings(dev):
     return [l for l in dev.log() if "WITHOUT sdLock" in l or "LOCK ORDER INVERSION" in l]
+
+
+class _Queued:
+    """The old link's answer to a send: mesh_queued with the packet id."""
+
+    def __init__(self, q):
+        self.mesh_queued = q
+
+    def WhichOneof(self, _):
+        return "mesh_queued" if self.mesh_queued else "result"
 
 
 class _Msg(SimpleNamespace):

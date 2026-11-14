@@ -20,7 +20,7 @@ import time
 import pytest
 
 from conftest import ARTIFACTS, TIME_SCALE
-from otpsim import SimDevice
+from otpsim import SimDevice, cards
 from test_regressions_rides import HISTORY_ROW, fit_crc, read_png
 from test_rides import SAVE_BUTTON, check_fit, line_track, record_ride
 

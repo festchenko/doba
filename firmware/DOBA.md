@@ -114,3 +114,15 @@ white on the real panel: check with `greytest` on day one.
   so the OpenTrailPaper phone app keeps working with the device (mesh chat,
   settings). Mesh chat now also works on the device itself (COMMS).
 - Links, images and tables inside library articles are dropped.
+
+## Bike-computer features removed (November 2026)
+Doba grew out of the OpenTrailPaper bike computer. What Doba never used is
+gone, about 27 000 lines: structured workouts, Strava segments, phone music
+control, the bike radar, Bluetooth sensors (heart rate, power, cadence, wheel
+speed), the Bluetooth companion link (pairing, protobuf link, firmware over
+Bluetooth) and the NimBLE stack itself, with their screens, settings, tools
+and sim suites. The firmware is ~400 KB smaller and has no Bluetooth or Wi-Fi
+at all: the LoRa radio is the only transmitter. Track recording (FIT), routes,
+the ride page and the mesh stay. The sim reads the mesh through its `mesh`
+control command, and Doba's console gained `mesh tx|preset|share|chan`.
+Auto-sleep is held while the mesh is on (a listening radio is a pager).

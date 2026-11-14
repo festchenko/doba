@@ -25,7 +25,7 @@ Doba is firmware and a data pipeline for the **LilyGo T5 E-Paper S3 Pro**: a 4.7
 - **text messaging without any network** over LoRa, compatible with **Meshtastic**;
 - **a paper card when switched off**: e-ink keeps the image with no power, so the off screen shows where you were, tomorrow's daylight, an *if found* card and an emergency crib.
 
-There is no account, no cloud, no app, and nothing transmits unless you switch the radio on. Bluetooth and Wi-Fi are off by default.
+There is no account, no cloud, no app, and nothing transmits unless you switch the radio on. The radio is the only thing that can transmit: there is no Bluetooth and no Wi-Fi in the firmware.
 
 > **Status:** personal project, in active use. Built and tested on the simulator and on real hardware (H752-01). The interface is in **English and Ukrainian**.
 
