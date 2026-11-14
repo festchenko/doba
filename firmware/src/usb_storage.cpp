@@ -1,13 +1,7 @@
 #include "usb_storage.h"
 
 #include <Arduino.h>
-// DOBA: the card's FatFs drive number, for multi-sector reads (CMD18) straight
-// through the SD driver; SDFS keeps it private.
-#define private public
-#define protected public
 #include <SD.h>
-#undef private
-#undef protected
 #include "ff.h"
 #include "diskio.h"
 DRESULT ff_sd_read(uint8_t pdrv, uint8_t* buffer, DWORD sector, UINT count);
@@ -27,6 +21,7 @@ namespace {
 USBMSC msc;
 volatile bool g_hostActive = false;     // computer has the drive mounted
 volatile bool g_reclaimPending = false; // host gone -> remount FAT (in poll)
+bool g_lent = false;                    // Doba's own volume unmounted for the host
 volatile uint32_t g_lastActivityMs = 0;
 bool g_ready = false;
 bool g_driveEnabled = true;             // SD exposed to a host as a USB drive
@@ -76,7 +71,7 @@ int32_t onRead(uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
     int tries = 0;
     sdLock();
     while (!ok && tries < 4) {
-        ok = ff_sd_read(SD._pdrv, buf, lba, count) == RES_OK;
+        ok = ff_sd_read(ride_recorder::sdDrive(), buf, lba, count) == RES_OK;
         if (!ok) { ++tries; delay(2); }
     }
     sdUnlock();
@@ -98,7 +93,7 @@ int32_t onWrite(uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t bufsize
     int tries = 0;
     sdLock();
     while (!ok && tries < 3) {
-        ok = ff_sd_write(SD._pdrv, buffer, lba, count) == RES_OK;
+        ok = ff_sd_write(ride_recorder::sdDrive(), buffer, lba, count) == RES_OK;
         if (!ok) { ++tries; delay(2); }
     }
     sdUnlock();
@@ -189,6 +184,8 @@ void poll() {
         g_loggedActive = true;
         diag::log("usb storage: host has the SD (device reports no SD until released)");
     }
+    // One writer per filesystem: the firmware lets go of its own volume.
+    if (g_hostActive && !g_lent && !g_reclaimPending) g_lent = ride_recorder::lendToHost();
 
     // Nothing from the host for a long time and no eject: assume it's gone.
     // Skipped during a ride — recording is the one time being wrong about this
@@ -212,6 +209,7 @@ void poll() {
 
     g_reclaimPending = false;
     bool ok = ride_recorder::remount("usb host released");
+    g_lent = false;
     g_hostActive = false;
     g_loggedActive = false;
     diag::log("usb storage: host released, SD %s", ok ? "reclaimed" : "REMOUNT FAILED");

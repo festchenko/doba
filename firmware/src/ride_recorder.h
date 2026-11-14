@@ -11,6 +11,12 @@ namespace ride_recorder {
 bool begin();  // mounts SD, ensures RIDE_DIR exists
 // DOBA: bumped on every successful mount: open File handles from before are dead.
 uint32_t mountGeneration();
+// The mounted card's FatFs drive number, for raw sector access (USB storage);
+// 0xFF before the first mount.
+uint8_t sdDrive();
+// The USB host has the card: unmount the firmware's volume (driver kept).
+// false during a ride (the host gets it once the ride ends). remount() undoes it.
+bool lendToHost();
 
 void startRide();
 

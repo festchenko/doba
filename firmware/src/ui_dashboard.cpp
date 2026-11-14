@@ -3050,6 +3050,10 @@ static void runConsoleLine(char* line) {
         int cur = settings::autoPauseSec();
         if (cur) Serial.printf("[autopause] after %d s stopped\n", cur);
         else     Serial.println("[autopause] off");
+    } else if (!strcasecmp(cmd, "sdwait")) {   // who keeps the card busy while others wait
+#ifndef OTP_SIM
+        sdWaitReport();
+#endif
     } else if (!strcasecmp(cmd, "reboot")) {
         Serial.println("[cmd] rebooting");
         Serial.flush(); delay(80); esp_restart();
@@ -3326,7 +3330,10 @@ TRC("loop");         bool host = usb_storage::hostActive();
             // DOBA: a radio that is listening is a pager: switching off would
             // miss the message or the SOS it is on for. (OTP held this for a
             // connected phone; Doba holds it while the mesh is on.)
-            !mesh_service::enabled()) {
+            !mesh_service::enabled() &&
+            // A computer that has the card (copying maps or books) is a user too:
+            // sleeping would unmount the card and drop off USB mid-copy.
+            !usb_storage::hostActive()) {
             uint8_t* fb = epdc_framebuffer();
             shutdownDevice(fb, "auto-sleep (idle timeout)");   // does not return
         }

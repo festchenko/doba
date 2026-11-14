@@ -32,8 +32,26 @@ extern SemaphoreHandle_t g_sdMutex;
 // map save, every queued SD user was pinning the CPU awake before doing any
 // work. The PM lock only needs to cover actual bus transactions, and those
 // only happen while the mutex is held.
+#ifndef OTP_SIM
+// Who made whom wait for the bus (sd_bus.cpp): a wait behind another task is
+// counted per holder, and a long one by the UI task is logged with the
+// holder's name — the evidence for what keeps a tap waiting.
+void sdNoteWait(uint32_t waitedMs, TaskHandle_t holder);
+void sdWaitReport();
+#endif
+
 inline void sdLock()   {
-    if (g_sdMutex) xSemaphoreTakeRecursive(g_sdMutex, portMAX_DELAY);
+    if (g_sdMutex) {
+#ifndef OTP_SIM
+        TaskHandle_t holder = xSemaphoreGetMutexHolder(g_sdMutex);
+        if (holder && holder != xTaskGetCurrentTaskHandle()) {
+            const TickType_t t0 = xTaskGetTickCount();
+            xSemaphoreTakeRecursive(g_sdMutex, portMAX_DELAY);
+            sdNoteWait((uint32_t)((xTaskGetTickCount() - t0) * portTICK_PERIOD_MS), holder);
+        } else
+#endif
+        xSemaphoreTakeRecursive(g_sdMutex, portMAX_DELAY);
+    }
     power_mgmt::busyAcquire();
 }
 inline void sdUnlock() {

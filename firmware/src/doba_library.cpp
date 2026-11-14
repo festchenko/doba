@@ -152,8 +152,14 @@ void scan() {
     File root = SD.open(kRoot);
     if (root && root.isDirectory()) {
         File d;
-        while ((d = root.openNextFile()) && g_bookCount < MAX_BOOKS) {
+        while ((d = root.openNextFile())) {
             if (!d.isDirectory()) { d.close(); continue; }
+            if (g_bookCount >= MAX_BOOKS) {   // never silently: say what is left out
+                Serial.printf("[lib] LIMIT: more than %d books on the card; '%s' and any after it are not shown\n",
+                              MAX_BOOKS, d.name());
+                d.close();
+                break;
+            }
             Book& b = g_books[g_bookCount];
             const char* nm = strrchr(d.name(), '/');
             snprintf(b.dir, sizeof b.dir, "%s", nm ? nm + 1 : d.name());
@@ -1194,7 +1200,7 @@ void findDocs(int bi) {
     sdLock();
     File f = SD.open(path, FILE_READ);
     uint8_t rec[REC];
-    for (uint32_t i = 0; f && i < g_books[bi].count && g_docCount < MAX_DOCS; ++i) {
+    for (uint32_t i = 0; f && i < g_books[bi].count; ++i) {
         if (!readRec(f, i, rec)) break;
         char t[KEY + 1];
         memcpy(t, rec + KEY, KEY);
@@ -1206,6 +1212,11 @@ void findDocs(int bi) {
         for (int k = g_docCount - 1; k >= 0 && k >= g_docCount - 40; --k)
             if (!strcmp(g_docs[k].raw, t)) { seen = true; break; }
         if (seen) continue;
+        if (g_docCount >= MAX_DOCS) {
+            Serial.printf("[lib] LIMIT: %s has more than %d documents; the list shows the first %d (search finds the rest)\n",
+                          g_books[bi].dir, MAX_DOCS, MAX_DOCS);
+            break;
+        }
         Doc& d = g_docs[g_docCount++];
         snprintf(d.raw, sizeof d.raw, "%s", t);
         snprintf(d.title, sizeof d.title, "%s", t);
@@ -1296,7 +1307,15 @@ int g_menuCount = 0, g_menuBook = -1;
 bool g_menuPicks = false;        // the menu came from picks/topics (a big book's)
 
 void addMenu(const char* title, const char* sub, bool header, int32_t rec = -1) {
-    if (g_menuCount >= MAX_MENU || !title[0]) return;
+    if (!title[0]) return;
+    if (g_menuCount >= MAX_MENU) {
+        static int warned = -1;
+        if (warned != g_menuBook) {
+            warned = g_menuBook;
+            Serial.printf("[lib] LIMIT: menu.txt of book %d has more than %d rows; the rest are not shown\n", g_menuBook, MAX_MENU);
+        }
+        return;
+    }
     if (!header)
         for (int k = 0; k < g_menuCount; ++k)
             if (!g_menu[k].header && !strcmp(g_menu[k].title, title)) return;

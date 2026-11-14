@@ -68,8 +68,28 @@ char meshShort[8] = "";
 
 namespace settings {
 
+// The stored settings' format. Bump it with a migration step below whenever a
+// key changes meaning or goes away, so a newer firmware never reads an older
+// value as something else.
+constexpr uint32_t kSettingsVersion = 1;
+
+void migrate() {
+    const uint32_t v = prefs.getUInt("cfgver", 0);
+    if (v == kSettingsVersion) return;
+    if (v < 1) {
+        // 0 -> 1: Doba without the bike computer. Keys nothing reads any more.
+        static const char* const gone[] = {"ftp", "wheelmm", "wkpstep", "phname", "phid",
+            "sens_hr", "sens_pwr", "sens_cad", "sens_rdr", "sens_spd",
+            "snm_hr", "snm_pwr", "snm_cad", "snm_rdr", "snm_spd"};
+        for (const char* k : gone) if (prefs.isKey(k)) prefs.remove(k);
+    }
+    prefs.putUInt("cfgver", kSettingsVersion);
+    Serial.printf("[cfg] settings format %u -> %u\n", (unsigned)v, (unsigned)kSettingsVersion);
+}
+
 void begin() {
     prefs.begin("bike", false);
+    migrate();
     compassOff = prefs.getFloat("cmpoff", NAN);
     tz = prefs.getInt("tz", TIMEZONE_OFFSET_MINUTES);
     bl = prefs.getInt("bl", 0);

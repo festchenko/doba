@@ -728,3 +728,16 @@ def test_a_translated_twin_opens_the_same_article_at_the_same_place(doba, book, 
     since = doba.log_seq()
     doba.tap(100, TOP + 204 + 75)
     doba.wait_log(r"\[lib\] book field$", since=since)
+
+
+def test_a_computer_gets_the_card_alone_and_doba_takes_it_back(doba):
+    """USB drive: while a computer has the card, Doba's own FAT volume is
+    unmounted (one writer per filesystem); when the computer lets go, Doba
+    mounts it again."""
+    boot(doba)
+    since = doba.log_seq()
+    doba.usb_host(True)
+    doba.wait_log(r"sd: lent to the USB host", since=since, timeout=10)
+    since = doba.log_seq()
+    doba.usb_host(False)
+    doba.wait_log(r"sd: remount \(usb host released\) -> ok", since=since, timeout=10)

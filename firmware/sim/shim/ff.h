@@ -13,6 +13,8 @@ extern "C" {
 FRESULT f_opendir(FF_DIR* dp, const char* path);
 FRESULT f_readdir(FF_DIR* dp, FILINFO* fno);
 FRESULT f_closedir(FF_DIR* dp);
+typedef struct { int unused; } FATFS;
+static inline FRESULT f_mount(FATFS* fs, const char* path, uint8_t opt) { (void)fs; (void)path; (void)opt; return FR_OK; }
 #ifdef __cplusplus
 }
 #endif

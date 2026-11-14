@@ -1,4 +1,5 @@
 #include "ride_recorder.h"
+#include "diskio_impl.h"   // ff_diskio_get_drive
 
 #include <Arduino.h>
 #include <SD.h>
@@ -510,6 +511,7 @@ SdProbe sdSpiForceIdle() {
 }
 
 uint32_t g_mountGen = 0;
+uint8_t g_sdDrive = 0xFF;   // the card's FatFs drive number (sdDrive())
 bool mountLocked(bool logFailures) {
     // settleMs is waited BEFORE the attempt. The old schedule (three tries, 50 ms
     // apart) gave the card ~100 ms to come up and then declared it absent, which
@@ -558,7 +560,13 @@ bool mountLocked(bool logFailures) {
         // for a map tile, a route, a diag flush and a BLE download at the same
         // time without opens starting to fail mid-ride.
         diag::storageStage(3, attempt, probe.r1);
+        // The FatFs drive SD.begin() is about to take: the first free one
+        // (sdcard_init() asks ff_diskio_get_drive() too). USB storage reads
+        // and writes sectors through it; SDFS keeps its own copy private.
+        BYTE drive = 0xFF;
+        if (ff_diskio_get_drive(&drive) != ESP_OK) drive = 0xFF;
         bool mounted = SD.begin(BOARD_SD_CS, SPI, f, "/sd", 10);
+        if (mounted) g_sdDrive = drive;
         diag::storageStage(mounted ? 4 : 5, attempt, probe.r1);
         diag::drainDriverLogs();
         if (mounted) {
@@ -592,6 +600,7 @@ bool mountLocked(bool logFailures) {
 }  // namespace
 
 uint32_t mountGeneration() { return g_mountGen; }
+uint8_t sdDrive() { return g_sdDrive; }
 
 bool begin() {
     sdLock();
@@ -791,6 +800,23 @@ RideSummary summary() {
     r.useMiles = g_state.snapshot().useMiles;
     r.cardFull = cardFull;
     return r;
+}
+
+// A computer took the card over USB: unmount Doba's own FatFs volume so that
+// nothing in the firmware can read stale tables or, worse, write while the
+// host's filesystem driver writes too (two writers on one FAT is how cards get
+// corrupted). The SD driver underneath stays up: USB storage reads and writes
+// raw sectors through it. Every SD.open() fails cleanly until remount(), and
+// the mount generation moves on so caches drop their open files.
+bool lendToHost() {
+    if (rideActive || g_sdDrive == 0xFF) return false;
+    sdLock();
+    char drv[3] = {(char)('0' + g_sdDrive), ':', 0};
+    const FRESULT r = f_mount(nullptr, drv, 0);
+    ++g_mountGen;
+    sdUnlock();
+    diag::log("sd: lent to the USB host (FatFs volume %s unmounted: %d)", drv, (int)r);
+    return r == FR_OK;
 }
 
 bool remount(const char* why) {

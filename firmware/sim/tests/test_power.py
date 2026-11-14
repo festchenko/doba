@@ -122,11 +122,6 @@ def test_riding_without_recording_keeps_it_on_and_stopping_starts_the_countdown(
     assert_switched_off_after_idle(off, t)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: the auto-sleep check in ui_dashboard.cpp ignores usb_storage::hostActive(): with the card "
-    "mounted on a computer over USB (copying maps or rides, nobody touching the panel) the device "
-    "deep-sleeps after ten minutes, unmounts the card (SD.end) and drops off the USB bus under the "
-    "computer — an unsafe eject mid-copy"))
 def test_a_computer_holding_the_card_keeps_it_on(device):
     device.usb_host(True)
     stays_on(device, 25)
