@@ -7,6 +7,7 @@
 //   ui    — e-paper dashboard + touch
 
 #include <Arduino.h>
+#include "esp_freertos_hooks.h"
 #include <Wire.h>
 #include <ExtensionIOXL9555.hpp>
 #include <bq27220.h>
@@ -700,6 +701,27 @@ void setup() {
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 
+    {   // DOBA: who starves CPU 0? The task watchdog only says "IDLE0 did not
+        // run"; this watcher on core 1 names the task holding core 0 when the
+        // idle hook has not run for 2 s, into the log tail a crash report keeps.
+        static volatile uint32_t idle0 = 0;
+        esp_register_freertos_idle_hook_for_cpu([]() -> bool { ++idle0; return true; }, 0);
+        xTaskCreatePinnedToCore([](void*) {
+            uint32_t last = idle0, stuckSince = 0;
+            for (;;) {
+                vTaskDelay(pdMS_TO_TICKS(500));
+                const uint32_t now = idle0;
+                if (now != last) { last = now; stuckSince = 0; continue; }
+                if (!stuckSince) stuckSince = millis();
+                if (millis() - stuckSince >= 1500) {
+                    TaskHandle_t t = xTaskGetCurrentTaskHandleForCPU(0);
+                    diag::log("cpu0 starved %lu ms: running '%s' prio %u", (unsigned long)(millis() - stuckSince),
+                              t ? pcTaskGetName(t) : "?", t ? (unsigned)uxTaskPriorityGet(t) : 0u);
+                    stuckSince = millis();
+                }
+            }
+        }, "cpu0watch", 3072, nullptr, configMAX_PRIORITIES - 2, nullptr, 1);
+    }
     diag::log("boot: all tasks started (internal RAM free=%u largest=%u)",
               (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));

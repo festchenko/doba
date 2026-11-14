@@ -3589,6 +3589,29 @@ static void runConsoleLine(char* line) {
         const char* rest = strtok(nullptr, "");
         snprintf(t, sizeof t, "%s%s%s", arg, rest ? " " : "", rest ? rest : "");
         if (doba_lib::openTitle(t)) screen = SCREEN_ARTICLE;
+    } else if (!strcasecmp(cmd, "ls") || !strcasecmp(cmd, "cat")) {   // DOBA: ls <dir> / cat <file> on the card
+        const bool list = !strcasecmp(cmd, "ls");
+        sdLock();
+        File f = SD.open(arg ? arg : "/", FILE_READ);
+        if (!f) Serial.printf("[%s] cannot open %s\n", cmd, arg ? arg : "/");
+        else if (list && f.isDirectory()) {
+            for (File e = f.openNextFile(); e; e = f.openNextFile()) {
+                Serial.printf("[ls] %s %lu\n", e.name(), (unsigned long)e.size());
+                e.close();
+            }
+        } else {
+            uint8_t buf[256];
+            size_t total = 0;
+            while (total < 64 * 1024) {
+                const int n = f.read(buf, sizeof buf);
+                if (n <= 0) break;
+                Serial.write(buf, n);
+                total += n;
+            }
+            Serial.printf("\n[cat] %u bytes\n", (unsigned)total);
+        }
+        if (f) f.close();
+        sdUnlock();
     } else if (!strcasecmp(cmd, "owner")) {   // DOBA: owner <text>: the IF FOUND card ("owner" alone clears it)
         char t[160] = "";
         const char* rest = arg ? strtok(nullptr, "") : nullptr;

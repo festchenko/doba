@@ -259,7 +259,25 @@ def read_html(path, title):
     if mm:
         raw = mm.group(0)
     raw = re.sub(r"<(header|aside|form)\b.*?</\1>", " ", raw, flags=re.S | re.I)
-    return [(title, strip_links(to_text(title, raw)))]
+
+    def picture(src, attrs):
+        """A local <img> beside the page (a saved web page's own files)."""
+        if not WITH_IMAGES or not src or src.startswith(("data:", "http:", "https:")):
+            return None
+        f = os.path.join(os.path.dirname(path), urllib.parse.unquote(src.split("#")[0].split("?")[0]))
+        if not os.path.isfile(f) or f.lower().endswith(".svg"):
+            return None
+        try:
+            from PIL import Image
+            img = Image.open(f)
+            img.load()
+            if img.width < 90 or img.height < 60:
+                return None
+            return to_dgi(img)
+        except Exception:
+            return None
+    zim2doba.MAX_PICS = 60
+    return [(title, strip_links(to_text(title, raw, picture)))]
 
 
 def epub_toc(z, names):
@@ -380,7 +398,31 @@ def pretty_title(t):
     return t[:1].upper() + t[1:] if t else t
 
 
+SHIFTED = False     # the PDF's Cyrillic sits 0x17A above its cp1251 codes ("ɉɭɥɢ" = "Пули")
+
+
+def unshift(t):
+    """Undo a broken font map that put each cp1251 byte at U+017A + byte."""
+    out = []
+    for c in t:
+        o = ord(c) - 0x17A
+        if 0x80 <= o <= 0xFF:
+            try:
+                c = bytes([o]).decode("cp1251")
+            except UnicodeDecodeError:
+                pass
+        out.append(c)
+    return "".join(out)
+
+
 def page_blocks(page):
+    out = _page_blocks(page)
+    if SHIFTED:
+        out = [(sz, unshift(t), bb, st) for sz, t, bb, st in out]
+    return out
+
+
+def _page_blocks(page):
     """(size, text, bbox, [(size, chars)]) for each paragraph of a PDF page, in
     reading order. A two-column page whose lines run across the gutter (old
     scans with an OCR layer) is rebuilt column by column from its words."""
@@ -592,7 +634,12 @@ def read_pdf(path, title):
     import pymupdf
     doc = pymupdf.open(path)
     sample = " ".join(doc[i].get_text() for i in range(min(len(doc), 40)))
-    if unreadable(sample):
+    global SHIFTED
+    SHIFTED = False
+    if unreadable(sample) and not unreadable(unshift(sample)):
+        SHIFTED = True
+        print(f"   {os.path.basename(path)}: shifted cp1251 font map, decoded", file=sys.stderr)
+    elif unreadable(sample):
         print(f"!! {os.path.basename(path)}: its text layer is in a broken encoding; skipped "
               "(find another copy, or OCR it)", file=sys.stderr)
         return []
@@ -684,7 +731,7 @@ def read_pdf(path, title):
                 out.append(("P", t))
         return out
 
-    toc = [(lvl, bookmark_name(t), p - 1) for lvl, t, p in doc.get_toc(simple=True) if clean(t) and p >= 1]
+    toc = [(lvl, bookmark_name(unshift(t) if SHIFTED else t), p - 1) for lvl, t, p in doc.get_toc(simple=True) if clean(t) and p >= 1]
     # Broken bookmarks ("eli", "Tra", "d a") say nothing about the chapters.
     junk = [m for m in toc if not m[1]]
     if toc and len(junk) > len(toc) * 0.3:

@@ -39,7 +39,9 @@ constexpr int MAX_BOOKS = 32;   // one bit each in a uint32 mask
 constexpr int RESULTS = 6;
 const char* kRoot = "/doba/lib";
 
-struct Book { char dir[32]; char name[40]; char source[64]; uint32_t count; uint32_t shown; char unit[16]; char about[100]; };
+struct Book { char dir[32]; char name[40]; char source[64]; uint32_t count; uint32_t shown; char unit[16]; char about[100];
+              int8_t twin;      // the same book in the other language (<dir>_uk with twin.map), or -1
+              bool isTwin; };   // a translation: reached from its source, not shown on the shelf
 PsArr<Book, MAX_BOOKS> g_books;
 int g_bookCount = -1;      // -1 = not scanned yet
 int g_book = 0;
@@ -190,11 +192,26 @@ void scan() {
                 if (!num[0]) field("\narticles=", num, sizeof num);
                 b.shown = num[0] ? (uint32_t)strtoul(num, nullptr, 10) : 0;
             }
+            b.twin = -1;
+            snprintf(path, sizeof path, "%s/%s/twin.map", kRoot, b.dir);
+            b.isTwin = SD.exists(path);
             ++g_bookCount;
         }
     }
     if (root) root.close();
     sdUnlock();
+    // A twin "water_uk" belongs to "water": each finds the other.
+    for (int t = 0; t < g_bookCount; ++t) {
+        if (!g_books[t].isTwin) continue;
+        const size_t n = strlen(g_books[t].dir);
+        if (n < 4) continue;
+        for (int s = 0; s < g_bookCount; ++s)
+            if (s != t && !g_books[s].isTwin && strlen(g_books[s].dir) == n - 3
+                && !strncmp(g_books[s].dir, g_books[t].dir, n - 3)) {
+                g_books[s].twin = (int8_t)t;
+                g_books[t].twin = (int8_t)s;
+            }
+    }
 }
 
 // Prefix search in one book, appending to g_results (up to RESULTS in all).
@@ -962,14 +979,18 @@ void monogram(int bi, char* out, size_t n) {
 }
 // Shelf order: the table's, unknown books after.
 int g_order[MAX_BOOKS];
+int g_shelfCount = 0;   // books on the shelf: translations are reached from their source
+bool onShelf(int bi) { return !(g_books[bi].isTwin && g_books[bi].twin >= 0); }
 void sortShelf() {
     int n = 0;
     for (int l = 0; l < N_LOOKS; ++l)
         for (int bi = 0; bi < g_bookCount; ++bi)
-            if (!strcmp(kLooks[l].dir, g_books[bi].dir)) g_order[n++] = bi;
+            if (!strcmp(kLooks[l].dir, g_books[bi].dir) && onShelf(bi)) g_order[n++] = bi;
     for (int bi = 0; bi < g_bookCount; ++bi)
-        if (lookOf(bi) < 0) g_order[n++] = bi;
+        if (lookOf(bi) < 0 && onShelf(bi)) g_order[n++] = bi;
+    g_shelfCount = n;
 }
+int shelfBooks() { sortShelf(); return g_shelfCount; }
 // Cut `t` to `w` px with "..." (whole UTF-8 characters).
 void fitText(const EpdFont* f, char* t, int w) {
     if (ui::textWidth(f, t) <= w) return;
@@ -1010,7 +1031,7 @@ EpdRect coverRect(int i) {   // the cover; its name and count go under it
     const int k = i % (COLS * ROWS);
     return {24 + (k % COLS) * (cw + CELL_GAP), SHELF_TOP + (k / COLS) * (CELL_H + 22), cw, COVER_H};
 }
-int shelfPages() { return (g_bookCount + COLS * ROWS - 1) / (COLS * ROWS); }
+int shelfPages() { sortShelf(); return (g_shelfCount + COLS * ROWS - 1) / (COLS * ROWS); }
 
 const char* const kTabNames[3] = {"Books", "Topics", "Recent"};
 int tabX(int t) {
@@ -1076,14 +1097,14 @@ void pagerRow(int page, int pages, uint8_t* fb);
 void renderShelf(uint8_t* fb) {
     libHead(0, fb);
     char lbl[48];
-    snprintf(lbl, sizeof lbl, TRN(g_bookCount, "Search %d book", "Search %d books"), g_bookCount);
+    snprintf(lbl, sizeof lbl, TRN(shelfBooks(), "Search %d book", "Search %d books"), shelfBooks());
     searchBar(kAllSearch, lbl, fb);
     sortShelf();
     const int pages = shelfPages(), per = COLS * ROWS;
     if (g_shelfPage >= pages) g_shelfPage = pages - 1;
     for (int k = 0; k < per; ++k) {
         const int i = g_shelfPage * per + k;
-        if (i >= g_bookCount) break;
+        if (i >= g_shelfCount) break;
         cover(g_order[i], coverRect(k), fb);
     }
     pagerRow(g_shelfPage, pages, fb);
@@ -1095,7 +1116,7 @@ int shelfHit(int x, int y) {   // book index, -1 nothing
         r.height = CELL_H;
         if (!hit(r, x, y)) continue;
         const int i = g_shelfPage * per + k;
-        return i < g_bookCount ? g_order[i] : -1;
+        return i < g_shelfCount ? g_order[i] : -1;
     }
     return -1;
 }
@@ -1807,7 +1828,7 @@ void renderRecent(uint8_t* fb) {
 void renderHome(uint8_t* fb) {
     tabs(1, fb);
     char lbl[48];
-    snprintf(lbl, sizeof lbl, TRN(g_bookCount, "Search the %d book", "Search all %d books"), g_bookCount);
+    snprintf(lbl, sizeof lbl, TRN(shelfBooks(), "Search the %d book", "Search all %d books"), shelfBooks());
     searchBar(kAllSearch, lbl, fb);
     // EMERGENCY: straight to the page that matters.
     if (g_emergCount) {
@@ -1983,7 +2004,7 @@ void renderSearchView(kbd::Keyboard& k, uint8_t* fb) {
     k.enterLabel = "OPEN";
     char line[96];
     if (g_scopeBook >= 0) snprintf(line, sizeof line, TR("In %s  \xC2\xB7  search all books instead"), shortName(g_scopeBook));
-    else if (g_scope < 0) snprintf(line, sizeof line, TRN(g_bookCount, "In the %d book", "In all %d books"), g_bookCount);
+    else if (g_scope < 0) snprintf(line, sizeof line, TRN(shelfBooks(), "In the %d book", "In all %d books"), shelfBooks());
     else snprintf(line, sizeof line, TR("In %s  \xC2\xB7  search all books instead"), TR(g_secs[g_scope].name));
     fitText(ui::font(ui::F_SMALL), line, kScope.width - 8);
     ui::text(ui::font(ui::F_SMALL), kScope.x + 4, kScope.y + 34, line, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
@@ -2061,6 +2082,56 @@ namespace {
 
 constexpr int BODY_TOP = TOP + 66;
 const EpdRect kSizeBtn = {W - 86, TOP + 6, 78, 42};   // "Aa": the text size
+const EpdRect kTwinBtn = {W - 86 - 70, TOP + 6, 62, 42};   // "UA" / "EN": the same article translated
+// The book in the other language for the open article, or -1.
+int articleTwin() { return g_book >= 0 && g_book < g_bookCount ? g_books[g_book].twin : -1; }
+// The open article in its twin book, at the same place (twin.map pairs them:
+// u16 source chunk, u16, u32 source off, u32 source len, u32 twin off,
+// u32 twin len, source title[56], twin title[56]).
+bool openArticle(const Result& r);
+bool switchTwin() {
+    const int from = g_book, to = articleTwin();
+    if (to < 0) return false;
+    const bool toTwin = g_books[to].isTwin;
+    char path[96];
+    snprintf(path, sizeof path, "%s/%s/twin.map", kRoot, g_books[toTwin ? to : from].dir);
+    constexpr int E = 132;
+    Result r;
+    bool found = false;
+    sdLock();
+    File f = SD.open(path, FILE_READ);
+    uint8_t h[12];
+    if (f && f.read(h, 12) == 12 && !memcmp(h, "DOBATW1", 7)) {
+        const uint32_t n = rd32(h + 8);
+        static uint8_t buf[E * 32];
+        for (uint32_t i = 0; i < n && !found;) {
+            const uint32_t k = n - i < 32 ? n - i : 32;
+            if (f.read(buf, k * E) != (int)(k * E)) break;
+            for (uint32_t j = 0; j < k && !found; ++j) {
+                const uint8_t* e = buf + j * E;
+                const uint16_t sch = (uint16_t)(e[0] | e[1] << 8);
+                const bool hit = toTwin ? (sch == g_current.chunk && rd32(e + 4) == g_current.off)
+                                        : rd32(e + 12) == g_current.off;
+                if (!hit) continue;
+                if (toTwin) { r.chunk = 0; r.off = rd32(e + 12); r.len = rd32(e + 16); memcpy(r.title, e + 76, KEY); }
+                else { r.chunk = sch; r.off = rd32(e + 4); r.len = rd32(e + 8); memcpy(r.title, e + 20, KEY); }
+                r.title[KEY] = 0;
+                found = true;
+            }
+            i += k;
+        }
+    }
+    if (f) f.close();
+    sdUnlock();
+    if (!found) { g_note = TR("no translation of this article"); return false; }
+    r.book = (int8_t)to;
+    const float at = g_pageCount > 1 ? (float)g_page / (float)g_pageCount : 0.f;
+    if (!openArticle(r)) return false;
+    g_page = (int)(at * g_pageCount + 0.5f);
+    if (g_page >= g_pageCount) g_page = g_pageCount - 1;
+    Serial.printf("[lib] %s -> %s '%s' page %d\n", g_books[from].dir, g_books[to].dir, g_title, g_page + 1);
+    return true;
+}
 
 int pageOfLine(int k) {
     int lo = 0, hi = g_pageCount - 1;
@@ -2193,7 +2264,8 @@ void renderArticle(uint8_t* fb) {
         snprintf(crumb, sizeof crumb, "%s", g_title);
     // Never under the button: cut at a character, mark the cut.
     const EpdFont* cf = ui::font(ui::F_SMALL);
-    const int room = kSizeBtn.x - 14 - 12;
+    const bool twin = articleTwin() >= 0;
+    const int room = (twin ? kTwinBtn.x : kSizeBtn.x) - 14 - 12;
     if (ui::textWidth(cf, crumb) > room) {
         size_t n = strlen(crumb);
         while (n > 0) {
@@ -2206,6 +2278,12 @@ void renderArticle(uint8_t* fb) {
     }
     ui::text(cf, MARGIN, TOP + 32, crumb, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     ui::text(ui::font(ui::F_LABEL), kSizeBtn.x + kSizeBtn.width - 4, kSizeBtn.y + 28, TR("Aa"), fb, EPD_DRAW_ALIGN_RIGHT, INK);
+    if (twin) {   // the language to switch to, in a small frame
+        const EpdRect t = {kTwinBtn.x, kTwinBtn.y + 4, kTwinBtn.width, kTwinBtn.height - 6};
+        frame(t, 2, fb);
+        ui::text(ui::font(ui::F_SMALL), t.x + t.width / 2, t.y + 26, g_books[articleTwin()].isTwin ? "UA" : "EN", fb,
+                 EPD_DRAW_ALIGN_CENTER, INK);
+    }
     // A hairline that is also the progress: black for the part read.
     epd_fill_rect({MARGIN, TOP + 50, W - 2 * MARGIN, 1}, ui::HAIR, fb);
     epd_fill_rect({MARGIN, TOP + 49, (W - 2 * MARGIN) * (g_page + 1) / g_pageCount, 3}, INK, fb);
@@ -2682,7 +2760,11 @@ bool tapArticle(int x, int y) {
         }
         return false;
     }
-    if (hit({kSizeBtn.x - 8, TOP, kSizeBtn.width + 16, kSizeBtn.height + 14}, x, y)) { cycleSize(); return false; }
+    if (hit({kSizeBtn.x - 2, TOP, kSizeBtn.width + 10, kSizeBtn.height + 14}, x, y)) { cycleSize(); return false; }
+    if (articleTwin() >= 0 && hit({kTwinBtn.x - 8, TOP, kTwinBtn.width + 12, kTwinBtn.height + 14}, x, y)) {
+        switchTwin();
+        return false;
+    }
     if (y >= H - FOOT_H) {            // the footer: back, contents, on
         if (x < W / 3) { if (g_page > 0) --g_page; }
         else if (x >= W * 2 / 3) {

@@ -456,6 +456,7 @@ static const Entry kUk[] = {
     {"no fix · %d", "немає GPS · %d"},
     {"no places file on the card", "на карті немає файлу місць"},
     {"no position yet", "позиції ще немає"},
+    {"no translation of this article", "цієї статті немає в перекладі"},
     {"no transmit, still hears", "не передає, але чує"},
     {"nobody heard yet", "поки нікого не чути"},
     {"nodes show here as their radios are heard", "вузли з’являться тут, щойно їх почуємо"},

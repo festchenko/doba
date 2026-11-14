@@ -1,7 +1,17 @@
 #include "usb_storage.h"
 
 #include <Arduino.h>
+// DOBA: the card's FatFs drive number, for multi-sector reads (CMD18) straight
+// through the SD driver; SDFS keeps it private.
+#define private public
+#define protected public
 #include <SD.h>
+#undef private
+#undef protected
+#include "ff.h"
+#include "diskio.h"
+DRESULT ff_sd_read(uint8_t pdrv, uint8_t* buffer, DWORD sector, UINT count);
+DRESULT ff_sd_write(uint8_t pdrv, const uint8_t* buffer, DWORD sector, UINT count);
 #include "USB.h"
 #include "USBMSC.h"
 
@@ -56,41 +66,45 @@ int32_t onRead(uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
     (void)offset;
     noteHostTraffic();
     uint8_t* buf = (uint8_t*)buffer;
-    uint32_t count = bufsize / 512;
+    const uint32_t count = bufsize / 512;
+    // DOBA: one multi-block read for the whole request (was a command per
+    // sector), a few retries before failing it, and then a 1 ms rest: a Mac
+    // mounting a 1 TB card reads without pause for minutes, and the USB task
+    // reading back-to-back starved the idle task until the task watchdog
+    // restarted Doba (two crash reports, both "host has the SD" seconds before).
+    bool ok = false;
+    int tries = 0;
     sdLock();
-    // DOBA: one bad sector read used to fail the host's whole command (and the
-    // Mac then refuses to mount the card). Try again before giving up, and say
-    // which sector it was.
-    uint32_t badLba = 0; int retries = 0; bool failed = false;
-    for (uint32_t i = 0; i < count && !failed; ++i) {
-        bool ok = false;
-        for (int t = 0; t < 4 && !ok; ++t) {
-            ok = SD.readRAW(buf + i * 512, lba + i);
-            if (!ok) { ++retries; badLba = lba + i; delay(2); }
-        }
-        if (!ok) failed = true;
+    while (!ok && tries < 4) {
+        ok = ff_sd_read(SD._pdrv, buf, lba, count) == RES_OK;
+        if (!ok) { ++tries; delay(2); }
     }
     sdUnlock();
-    if (retries) {
+    if (tries) {
         static uint32_t logged = 0;
         if (logged++ < 20)
-            diag::log("usb storage: read lba=%lu %s after %d retr%s (cmd lba=%lu n=%lu)", (unsigned long)badLba,
-                      failed ? "FAILED" : "ok", retries, retries == 1 ? "y" : "ies", (unsigned long)lba, (unsigned long)count);
+            diag::log("usb storage: read lba=%lu n=%lu %s after %d retr%s", (unsigned long)lba, (unsigned long)count,
+                      ok ? "ok" : "FAILED", tries, tries == 1 ? "y" : "ies");
     }
-    if (failed) return -1;
-    return count * 512;
+    vTaskDelay(1);
+    return ok ? (int32_t)(count * 512) : -1;
 }
 
 int32_t onWrite(uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t bufsize) {
     (void)offset;
     noteHostTraffic();
-    uint32_t count = bufsize / 512;
+    const uint32_t count = bufsize / 512;
+    bool ok = false;
+    int tries = 0;
     sdLock();
-    for (uint32_t i = 0; i < count; ++i) {
-        if (!SD.writeRAW(buffer + i * 512, lba + i)) { sdUnlock(); return -1; }
+    while (!ok && tries < 3) {
+        ok = ff_sd_write(SD._pdrv, buffer, lba, count) == RES_OK;
+        if (!ok) { ++tries; delay(2); }
     }
     sdUnlock();
-    return count * 512;
+    if (!ok) diag::log("usb storage: write lba=%lu n=%lu FAILED", (unsigned long)lba, (unsigned long)count);
+    vTaskDelay(1);
+    return ok ? (int32_t)(count * 512) : -1;
 }
 
 // SCSI START/STOP UNIT: the host issues this on mount (start) and eject.

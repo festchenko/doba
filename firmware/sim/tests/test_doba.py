@@ -695,3 +695,37 @@ def test_the_power_off_screen_is_a_paper_card(doba):
     doba.console("farewell", 800)
     time.sleep(3)
     doba.screenshot(os.path.join(doba.dir, "offcard.png"))
+
+
+def test_a_translated_twin_opens_the_same_article_at_the_same_place(doba, book, tmp_path):
+    """<book>_uk made by translate_book.py is not a book of its own on the
+    shelf: an article of <book> has a UA button that opens the same article
+    in the twin at the same page, and EN goes back."""
+    twin = str(tmp_path / "field_uk")
+    subprocess.run([sys.executable, os.path.join(LIB, "translate_book.py"), book, twin, "--fake"],
+                   check=True, capture_output=True)
+    assert os.path.exists(os.path.join(twin, "twin.map"))
+    lib = os.path.join(doba.sd, "doba", "lib")
+    shutil.copytree(book, os.path.join(lib, "field"))
+    shutil.copytree(twin, os.path.join(lib, "field_uk"))
+    boot(doba)
+    t = "Твори (Франко, 1956–1962)/13/Захар Беркут/I"
+    since = doba.log_seq()
+    doba.console("libopen " + t, 800)
+    doba.wait_log(r"\[lib\] open 'Захар Беркут / I' pages=\d+", since=since)
+    doba.tap(450, 500)                                    # to page 2
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(W - 86 - 70 + 31, TOP + 26)                  # UA
+    line = doba.wait_log(r"\[lib\] field -> field_uk '.*' page \d+", since=since)
+    assert "page 2" in line, line         # (a Ukrainian test book: nothing to translate)
+    doba.screenshot(os.path.join(doba.dir, "twin_ua.png"))
+    since = doba.log_seq()
+    doba.tap(W - 86 - 70 + 31, TOP + 26)                  # EN
+    doba.wait_log(r"\[lib\] field_uk -> field 'Захар Беркут / I' page 2", since=since)
+    # The shelf has one book: the twin is reached from it.
+    doba.console("screen library", 800)
+    time.sleep(0.6)
+    since = doba.log_seq()
+    doba.tap(100, TOP + 204 + 75)
+    doba.wait_log(r"\[lib\] book field$", since=since)
