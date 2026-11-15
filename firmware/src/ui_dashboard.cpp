@@ -409,7 +409,8 @@ volatile bool touchWasDown = false;   // DOBA: written by touchTask
 volatile int16_t touchStartX = 0, touchStartY = 0, touchNowX = 0, touchNowY = 0;
 void touchTask(void*) {
     int16_t x0 = 0, y0 = 0, lx = 0, ly = 0;
-    uint32_t downAt = 0;
+    uint32_t downAt = 0, lastSeen = 0;
+    int empty = 0;
     bool down = false;
     for (;;) {
         // While a finger is on the glass: every 15 ms. Otherwise wait for the
@@ -420,6 +421,20 @@ void touchTask(void*) {
         const bool now = touch.getPoint(x, y, 1) > 0;
         i2cUnlock();
         touchIrq = false;
+        // The GT911 driver reads its point count without waiting for a fresh
+        // frame, so a read between two frames can say "no finger" while the
+        // finger is still down. Polled every 15 ms that happened often: one
+        // tap became two or three (the library opened a book and an article
+        // at once, BACK went back twice). A finger is up only once it has
+        // been missing for 3 reads in a row and 60 ms.
+        if (!now && down) {
+            ++empty;
+            if (empty < 3 || millis() - lastSeen < 60) {
+                touchWasDown = true;
+                continue;
+            }
+        }
+        if (now) { empty = 0; lastSeen = millis(); }
         if (now) {
             const int16_t px = lx, py = ly;
             lx = x[0]; ly = y[0];
@@ -1992,6 +2007,8 @@ TRC("touch");         if (touchOk && g_touchQ) {
             static uint32_t lastTapMs = 0;
             while (xQueueReceive(g_touchQ, &ev, 0) == pdTRUE) {
                 touchDownAt = ev.downMs;
+                Serial.printf("[touch] %d,%d -> %d,%d held=%lu at=%lu scr=%d\n", ev.x0, ev.y0, ev.x1, ev.y1,
+                              (unsigned long)(ev.upMs - ev.downMs), (unsigned long)ev.upMs, (int)screen);
                 if (mapDrag(ev.x0, ev.y0, ev.x1, ev.y1)) {
                     noteActivity();   // DOBA: a finger drawn across the map moves it
                     continue;
