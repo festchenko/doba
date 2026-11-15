@@ -24,7 +24,6 @@ bool usbDrv = true;
 bool btOn = false;    // DOBA: Bluetooth switch (nothing uses it yet)
 bool wifiOn = false;  // DOBA: Wi-Fi switch (nothing uses it yet)
 char ownerF[5][64] = {};    // DOBA: name, born, blood, medical, contact   // DOBA: "if found" card on the power-off screen  // true = expose SD as USB drive when plugged into a host
-bool panelScanOn = false;   // paint through epd_scan.cpp, not the driver's path
 // Per kind, a ';'-separated list of paired addresses, most recent first (max
 // SENSOR_MAX_PAIRED). Stored under the same NVS key as the old single address,
 // which parses as a one-entry list — no migration.
@@ -78,8 +77,9 @@ void migrate() {
     }
     if (v < 3) {
         // 2 -> 3: miles, the 12-hour clock, the vector map's layers and the
-        // one-line owner text had no switch on Doba (the owner card has fields).
-        static const char* const gone[] = {"miles", "clk24", "maplayers", "owner"};
+        // one-line owner text had no switch on Doba (the owner card has fields),
+        // and the experimental panel scan is gone.
+        static const char* const gone[] = {"miles", "clk24", "maplayers", "owner", "pscan"};
         for (const char* k : gone) if (prefs.isKey(k)) prefs.remove(k);
     }
     prefs.putUInt("cfgver", kSettingsVersion);
@@ -104,7 +104,6 @@ void begin() {
         char k[8]; snprintf(k, sizeof k, "own%d", i);
         prefs.getString(k, ownerF[i], sizeof ownerF[i]);
     }
-    panelScanOn = prefs.getBool("pscan", false);
     lastLat = prefs.getDouble("lastlat", 0);
     lastLon = prefs.getDouble("lastlon", 0);
     rtcSynced = prefs.getBool("rtcok", false);
@@ -140,11 +139,6 @@ void begin() {
 }
 
 
-bool panelScan() { return panelScanOn; }
-void setPanelScan(bool on) {
-    panelScanOn = on;
-    prefs.putBool("pscan", on);
-}
 
 // DOBA: by default the zone comes from the last GPS position (tz_auto), summer
 // time included; a manual offset is kept for when that is wrong or unknown.

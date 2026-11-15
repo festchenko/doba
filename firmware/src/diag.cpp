@@ -1,6 +1,5 @@
 #include "diag.h"
 #include "crash_report.h"
-#include "memfault_service.h"
 
 #include <Arduino.h>
 #include <SD.h>
@@ -126,7 +125,6 @@ void log(const char* fmt, ...) {
     line[n++] = '\n';
     line[n] = 0;
     crash_report::recordLine(line, n);
-    memfault_service::recordLine(line, n);
     Serial.print(line);
 
     if (!buf || !mtx) return;

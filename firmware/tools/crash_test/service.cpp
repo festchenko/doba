@@ -11,11 +11,6 @@
 #include <algorithm>
 #include "crash_record.h"
 #include "crash_report.h"
-#include "memfault_service.h"
-int memfaultDeliveries=0;
-#if OT_MEMFAULT
-namespace memfault_service {bool pending(size_t* p){if(p)*p=4096;return true;}const char* pendingId(){return "test-id";}void deliverNow(const char*){++memfaultDeliveries;}}
-#endif
 #define RTC_NOINIT_ATTR
 #define CONFIG_IDF_TARGET_ESP32S3 1
 #define CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH 1
@@ -88,16 +83,16 @@ int main(){
  clean();tick();assert(nvs.empty()&&files.empty());
 
  crash_report::recordLine("last GPS window clean\n",22);reboot(5);
- assert(reports()==1&&current.valid());assert(std::string(current.text).find("last GPS window clean")!=std::string::npos);assert(std::string(current.text).find(OT_MEMFAULT ? "crash_backend=Memfault" : "No decodable core dump")!=std::string::npos);
+ assert(reports()==1&&current.valid());assert(std::string(current.text).find("last GPS window clean")!=std::string::npos);assert(std::string(current.text).find("No decodable core dump")!=std::string::npos);
  tick();assert(reports()==1);reboot();mounted=true;tick();assert(nvs.empty()&&files.size()==1);
  // A short SD write and a failed rename preserve NVS. Retry verifies content.
  clean();reboot(5);mounted=true;sdLimit=10;tick();assert(reports()==1);sdLimit=SIZE_MAX;renameOK=false;tick();assert(reports()==1);renameOK=true;tick();assert(nvs.empty()&&files.size()==1);
  // Completed file + failed NVS remove is replayed without duplicate append.
  clean();reboot(5);mounted=true;removeOK=false;tick();assert(reports()==1);auto saved=files;reboot();removeOK=true;tick();assert(nvs.empty()&&saved==files);
  // Missing NVS still permits direct SD persistence; no premature core erase.
- clean();nvsOK=false;coreResult=0;reboot(5);assert(erases==0&&currentPending);mounted=true;tick();assert(erases==(OT_MEMFAULT ? 0 : 1)&&!currentPending&&files.size()==1);
+ clean();nvsOK=false;coreResult=0;reboot(5);assert(erases==0&&currentPending);mounted=true;tick();assert(erases==1&&!currentPending&&files.size()==1);
  // A durable flash report protects summary before acknowledging core payload.
- clean();coreResult=0;reboot(4);assert(erases==(OT_MEMFAULT ? 0 : 1)&&reports()==1);assert(std::string(current.text).find(OT_MEMFAULT ? "crash_backend=Memfault" : "42012345")!=std::string::npos);
+ clean();coreResult=0;reboot(4);assert(erases==1&&reports()==1);assert(std::string(current.text).find("42012345")!=std::string::npos);
  // Four crashes with no card fill four slots; a fifth keeps the OLDEST and
  // replaces the newest, so it survives a reset instead of staying RAM-only.
  clean();uint32_t ids[5];for(int i=0;i<5;++i){reboot(5);ids[i]=current.id;}
@@ -108,8 +103,8 @@ int main(){
   for(int i=0;i<6;++i){for(int j=0;j<10;++j)crash_report::recordLine(big.c_str(),big.size());reboot(5);bigIds[i]=current.id;
    assert(reportBytes()<=NVS_BYTE_CAP&&currentDurable);}
   assert(reports()==2);mounted=true;tick();assert(files.size()==2&&delivered(bigIds[0])&&delivered(bigIds[5]));}
- // Mount hook delivers immediately (no 30 s wait) and also kicks Memfault.
- clean();reboot(5);memfaultDeliveries=0;mounted=true;crash_report::onSdMounted("boot mount");assert(nvs.empty()&&files.size()==1&&memfaultDeliveries==OT_MEMFAULT&&!sdDepth&&!powerDepth);
+ // Mount hook delivers immediately (no 30 s wait).
+ clean();reboot(5);mounted=true;crash_report::onSdMounted("boot mount");assert(nvs.empty()&&files.size()==1&&!sdDepth&&!powerDepth);
  // Mount hook never touches the card while a USB host owns it.
  clean();reboot(5);mounted=host=true;crash_report::onSdMounted("late mount");assert(files.empty()&&reports()==1);host=false;
  // Pending work retries every ~3 s, then backs off to 30 s.

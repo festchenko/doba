@@ -1,7 +1,6 @@
 #pragma once
 
-// NVS-backed persistent settings: rider config + paired sensor addresses.
-// config.h values are the first-boot defaults.
+// NVS-backed persistent settings. config.h values are the first-boot defaults.
 
 #include <cstddef>
 #include <cstdint>
@@ -9,10 +8,6 @@
 namespace settings {
 
 void begin();
-
-// Structured workout: hold at every block boundary until resumed.
-bool panelScan();
-void setPanelScan(bool on);
 
 int tzMinutes();            // DOBA: from the GPS position when tzAuto()
 void setTzMinutes(int m);   // the manual offset

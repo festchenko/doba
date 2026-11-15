@@ -30,7 +30,6 @@
 #include "mesh_service.h"
 #include "diag.h"
 #include "crash_report.h"
-#include "memfault_service.h"
 
 static TaskHandle_t g_uiTask = nullptr;   // for the stack high-water log
 #include <esp_sleep.h>
@@ -366,7 +365,6 @@ void setup() {
         esp_sleep_wakeup_cause_t wc = esp_sleep_get_wakeup_cause();
         diag::log("woke by: %s [%d]", wakeCauseStr(wc), (int)wc);
     }
-    memfault_service::begin((int)rr);
     crash_report::begin((int)rr, resetReasonStr(rr), FIRMWARE_VERSION);
     diag::log("cpu %d MHz", getCpuFrequencyMhz());
     // Undo the SD CS latch used for deep sleep before any driver touches SPI.
@@ -704,7 +702,6 @@ void loop() {
     power_mgmt::tick();    // hold light sleep off while the USB console is open
     sd_diagnostics::tick();
     crash_report::tick();
-    memfault_service::tick();
     delay(1000);
 }
 

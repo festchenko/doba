@@ -23,7 +23,6 @@
 #include "mesh_service.h"
 #include "diag.h"
 #include "crash_report.h"
-#include "memfault_service.h"
 #include "sim.h"
 #include "sim_clock.h"
 
@@ -102,7 +101,6 @@ void setup() {
     diag::begin();
     esp_reset_reason_t rr = esp_reset_reason();
     diag::log("boot firmware %s (sim) (reset: %s [%d])", FIRMWARE_VERSION, resetReasonStr(rr), (int)rr);
-    memfault_service::begin((int)rr);
     crash_report::begin((int)rr, resetReasonStr(rr), FIRMWARE_VERSION);
     g_state.begin();
     g_i2cMutex = xSemaphoreCreateMutex();
@@ -191,7 +189,6 @@ void loop() {
     power_mgmt::tick();
     sd_diagnostics::tick();
     crash_report::tick();
-    memfault_service::tick();
     delay(1000);
 }
 

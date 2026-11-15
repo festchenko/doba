@@ -1,4 +1,4 @@
-"""Small changes to EPD_Painter for src/epd_scan.cpp and the hybrid update bench.
+"""Small changes to EPD_Painter for the hybrid update bench.
 
 Both have to use the driver's own sendRow(), DMA buffers, paint lock and panel power
 handling, all of which are private, so they get a friend declaration. And the bench's

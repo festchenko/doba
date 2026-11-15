@@ -1,5 +1,4 @@
 #include "crash_report.h"
-#include "memfault_service.h"
 #include "crash_record.h"
 #include "diag.h"
 #include "sd_bus.h"
@@ -56,11 +55,9 @@ bool readSlot(Preferences& prefs,int slot,crash_record::Record& out) {
 }
 void acknowledgeCore() {
     if(!coreAwaitingDurability)return;
-#if !OT_MEMFAULT
     esp_err_t result=esp_core_dump_image_erase();
     diag::log("crash report: core summary durable; dump erase -> %s",esp_err_to_name(result));
     if(result==ESP_OK)coreAwaitingDurability=false;
-#endif
 }
 bool persistCurrent() {
     if(!currentPending || currentDurable){if(currentDurable)acknowledgeCore();return true;}
@@ -159,19 +156,12 @@ void crash_report::begin(int reason,const char* reasonName,const char* firmware)
                reason==ESP_RST_WDT || reason==ESP_RST_BROWNOUT;
     if(crash){
         current={};current.id=esp_random();if(!current.id)current.id=1;
-        add("OpenTrailPaper crash report\nid=%08lx reset=%s [%d]\nboot_firmware=%s build=%s %s\n",
+        add("Doba crash report\nid=%08lx reset=%s [%d]\nboot_firmware=%s build=%s %s\n",
             (unsigned long)current.id,reasonName,reason,firmware,__DATE__,__TIME__);
         add("boot_unix_utc=%lld (may precede RTC/GPS clock restoration)\n",(long long)time(nullptr));
         const auto* app=esp_ota_get_app_description();
         add("boot_image_elf_sha256=");for(auto b:app->app_elf_sha256)add("%02x",b);add("\n");
-#if OT_MEMFAULT
-        size_t memfaultSize=0;
-        bool memfaultPending=memfault_service::pending(&memfaultSize);
-        add("crash_backend=Memfault pending=%d bytes=%u id=%s\n",memfaultPending,
-            unsigned(memfaultSize),memfault_service::pendingId());
-        add("Memfault chunks contain registers, stacks, and logs; retained in flash until SD export verifies.\n");
-        add("A previously pending dump is preserved if another crash occurs before export; it may describe an earlier crash.\n");
-#elif CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
         auto* summary=static_cast<esp_core_dump_summary_t*>(calloc(1,sizeof(esp_core_dump_summary_t)));
         esp_err_t result=summary?esp_core_dump_get_summary(summary):ESP_ERR_NO_MEM;
         add("core_summary=%s (%d)\n",esp_err_to_name(result),int(result));
@@ -280,7 +270,6 @@ void crash_report::onSdMounted(const char* why) {
     // reports and dump out within the few seconds it lives.
     failedAttempts=0;
     schedule(deliver(false,why));
-    memfault_service::deliverNow(why);
 }
 void crash_report::tick() {
     int action=statusRequested.exchange(0);

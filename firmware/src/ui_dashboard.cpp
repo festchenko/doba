@@ -47,7 +47,6 @@
 #include "aux_sensors.h"
 #include "diag.h"
 #include "crash_report.h"
-#include "memfault_service.h"
 #include "power_mgmt.h"
 #include "live_view.h"
 
@@ -559,8 +558,6 @@ bool tickDue(Screen sc, uint32_t lastDraw) {
 // still leaving an unchanged half-screen alone.
 constexpr int kDirtyClearTolerance = 24 * 960;
 
-// Set for one refresh() when a zoom needs its water scrubbed: where that water is.
-const uint8_t* scrubBits = nullptr;
 
 bool refresh(bool screenChanged, bool fastInPage, bool listFast,
              bool forceClean = false, bool gc16 = false, bool fullFlash = false) {
@@ -601,10 +598,6 @@ bool refresh(bool screenChanged, bool fastInPage, bool listFast,
     // on the way out, not when the power sheet opens over it, and not on the
     // 1 Hz map redraws.
     if (fullFlash) epdc_clear_dirty(kDirtyClearTolerance);
-    if (scrubBits) {
-        epdc_scrub_bits(scrubBits);
-        scrubBits = nullptr;
-    }
     doba_batt::notePaint();   // DOBA: the battery page counts repaints
     epdc_paint();
 
@@ -1328,8 +1321,6 @@ bool beginPanel() {
 
     EPDC_STEP("panel up");
 
-    if (settings::panelScan()) epdc_scan_enable(true);
-
     // Backlight — level set in Settings, applied here at boot.
     pinMode(BOARD_BL_EN, OUTPUT);
     applyBacklight(settings::backlight());
@@ -1496,9 +1487,6 @@ bool begin() {
     // Hand the panel over to the dashboard: further bootStatus() calls no-op,
     // and the task's first refresh() paints the real UI over the boot screen.
     bootScreenLive = false;
-    // The boot screen has sat there for seconds, in greys, and shows through a scrub.
-    // A boot already flashes, so one more costs nothing.
-    if (epdc_scan_enabled()) epdc_clear();
     return true;
 }
 
@@ -1715,7 +1703,6 @@ static void printConsoleHelp() {
     Serial.println("  sd                   SD mount/USB ownership state (see diag for failures)");
     Serial.println("  sdtest [seconds|status] SD/sleep/phone verification, 30..1800s (default 180)");
     Serial.println("  crashlog [panic]     report status; panic deliberately reboots (no active ride)");
-    Serial.println("  memfault [export]    offline crash status or non-destructive SDK chunk export");
     Serial.println("  diag                dump retained boot/recent/flash diagnostics (no SD needed)");
     Serial.println("  diag sd [file] [bytes] [offset]  read an SD log over serial (default:");
     Serial.println("                      today's, last 128 KiB; offset reads from there)");
@@ -1786,10 +1773,6 @@ static void runConsoleLine(char* line) {
         agnssRxRemaining = n;
         gps_service::agnssBegin();
         Serial.printf("[cmd] AGNSS: send %ld raw bytes now\n", n);
-    } else if (!strcasecmp(cmd, "memfault")) {
-        if (!arg || !strcasecmp(arg,"status")) memfault_service::requestStatus();
-        else if (!strcasecmp(arg,"export")) memfault_service::requestStatus(true);
-        else Serial.println("[memfault] use memfault [status|export]");
     } else if (!strcasecmp(cmd, "crashlog")) {
         if(arg && !strcasecmp(arg,"panic"))crash_report::requestTestPanic();
         else if(!arg || !strcasecmp(arg,"status"))crash_report::requestStatus();
@@ -2006,24 +1989,6 @@ static void runConsoleLine(char* line) {
                       (unsigned)mapPrerendersCut,
                       (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
                       (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
-    } else if (!strcasecmp(cmd, "panelscan")) {
-        if (arg && !strcasecmp(arg, "tune")) {
-            const char* drive = strtok(nullptr, " \t");
-            const char* prime = strtok(nullptr, " \t");
-            if (!drive || !prime || !epdc_scan_tune(atoi(drive), atoi(prime))) {
-                Serial.println("[cmd] panelscan tune <draw passes> <erase prime>, with scan on");
-                return;
-            }
-        } else if (arg) {
-            if (strcasecmp(arg, "on") && strcasecmp(arg, "off")) {
-                Serial.println("[cmd] panelscan [on|off|tune <draw> <prime>]");
-                return;
-            }
-            const bool on = !strcasecmp(arg, "on");
-            if (epdc_scan_enable(on)) settings::setPanelScan(on);
-        }
-        Serial.printf("[panelscan] %s\n", epdc_scan_enabled() ? "on" : "off");
-        epdc_scan_report();
     } else if (!strcasecmp(cmd, "autosleep")) {
         if (arg) {
             if (strtok(nullptr, " \t") ||
@@ -2658,14 +2623,8 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
             const bool bandCleared = prevBand && !bandDrawnThisFrame;
             prevBand = bandDrawnThisFrame;
 
-            // Only changed pixels are driven, so what stays black between two screens
-            // keeps its old history and shows inside anything solid on the new one:
-            // settings toggles in the start button, for one. A scrub takes every pixel
-            // in the changed area through white, so on the scan path any change of
-            // screen earns one, not just the transitions listed above.
-            const bool scanScrub = epdc_scan_enabled() && screen != prevScreen;
             refresh(screenChanged, fastInPage, listFast, wantClean, false,
-                    mapTransition || bandCleared || scanScrub);
+                    mapTransition || bandCleared);
         }
 
         // The epdiy path managed panel rails by hand here — poweron before an
