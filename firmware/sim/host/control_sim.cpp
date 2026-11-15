@@ -5,7 +5,7 @@
 #include <Arduino.h>
 #include <TouchDrvGT911.hpp>
 
-#include "ride_state.h"
+#include "device_state.h"
 #include "live_view.h"
 #include "mesh_service.h"
 #include "settings.h"
@@ -27,7 +27,7 @@
 #include <thread>
 #include <unistd.h>
 
-extern SharedRideState g_state;
+extern SharedDeviceState g_state;
 std::string loraCommand(const json::Value& r);     // lora_sim.cpp (mesh radio)
 
 // ---- the log --------------------------------------------------------------------------
@@ -179,7 +179,7 @@ std::string sdJson(bool recount) {
 }
 
 std::string statusJson() {
-    RideState s = g_state.snapshot();
+    DeviceState s = g_state.snapshot();
     LiveView v;
     live_view::read(v);
     std::ostringstream o;
@@ -197,9 +197,7 @@ std::string statusJson() {
       << ",\"battery\":" << (int)s.batteryPercent
       << "},\"reset_reason\":" << sim::resetReason()
       << ",\"settings\":{\"tz_min\":" << settings::tzMinutes()
-      << ",\"miles\":" << (settings::useMiles() ? "true" : "false") << ",\"clock24h\":" << (settings::clock24h() ? "true" : "false")
-      << ",\"backlight\":" << settings::backlight()
-      << ",\"map_layers\":" << settings::mapLayers() << "}"
+      << ",\"backlight\":" << settings::backlight() << "}"
       << ",\"sd_present\":" << (sim::sdPresent() ? "true" : "false")
       << ",\"sd\":" << sdJson(false)
       << ",\"gps\":" << sim::gpsStatusJson()

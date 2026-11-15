@@ -13,7 +13,7 @@
 #include <ctime>
 
 #include "config.h"
-#include "ride_state.h"
+#include "device_state.h"
 #include "speed_source.h"
 // Faces at the design system's ACTUAL sizes. The drop's specimens are drawn 1:1
 // with the panel, so its CSS px are device px — and the previously compiled
@@ -34,7 +34,7 @@
 namespace {
 // Defined further down with the other formatters; declared here so the status
 // bar and the CLOCK dashboard field share one implementation.
-void formatClock(char* out, size_t len, const RideState& s);
+void formatClock(char* out, size_t len, const DeviceState& s);
 }
 
 namespace ui {
@@ -147,7 +147,7 @@ namespace {
 // rather than a glyph: "14:25  SAT 10  REC ... TITLE ... BAT 87%". The
 // OpenTrailPaper band (clock, signal dots, sensor chips, battery icon) is kept
 // below as statusBarOtp() for reference.
-void statusBarOtp(const RideState& s, uint8_t* fb, const char* title);
+void statusBarOtp(const DeviceState& s, uint8_t* fb, const char* title);
 
 // DOBA: a crossed-out eye left of the clock while stealth is on.
 static int stealthMark(int rightEdge, int cy, uint8_t fg, uint8_t* fb) {
@@ -163,7 +163,7 @@ static int stealthMark(int rightEdge, int cy, uint8_t fg, uint8_t* fb) {
 // DOBA: the light band from the design canvas — no black bar. A sub-page:
 // "‹ Back" on the left (the tap target, x < BACK_W), its name in the middle,
 // clock and battery in grey on the right.
-void statusBarBack(const RideState& s, uint8_t* fb, const char* title) {
+void statusBarBack(const DeviceState& s, uint8_t* fb, const char* title) {
     const int W = epd_rotated_display_width();
     const int H = STATUS_H;
     const uint8_t FG = 0x00, DIM = GREY;
@@ -200,7 +200,7 @@ void statusBarBack(const RideState& s, uint8_t* fb, const char* title) {
     stealthMark(rx, cy, FG, fb);
 }
 
-void statusBar(const RideState& s, uint8_t* fb, const char* title) {
+void statusBar(const DeviceState& s, uint8_t* fb, const char* title) {
     const int W = epd_rotated_display_width();
     const int H = STATUS_H;
     const uint8_t FG = 0x00, DIM = GREY;
@@ -393,19 +393,13 @@ void upperCopy(char* out, size_t len, const char* in) {
 // Local time of day, 24 h or 12 h per the rider's setting. Shared by the status
 // bar and the CLOCK dashboard field so the two can never disagree about the
 // format — they are inches apart on the same screen.
-void formatClock(char* out, size_t len, const RideState& s) {
+void formatClock(char* out, size_t len, const DeviceState& s) {
     snprintf(out, len, "--:--");
     if (!s.timeValid) return;
     time_t local = s.utc + (time_t)s.tzMin * 60;
     struct tm tmv;
     gmtime_r(&local, &tmv);
-    if (s.clock24h) {
-        snprintf(out, len, "%d:%02d", tmv.tm_hour, tmv.tm_min);
-    } else {
-        int h = tmv.tm_hour % 12;
-        if (h == 0) h = 12;
-        snprintf(out, len, "%d:%02d%c", h, tmv.tm_min, tmv.tm_hour < 12 ? 'a' : 'p');
-    }
+    snprintf(out, len, "%d:%02d", tmv.tm_hour, tmv.tm_min);
 }
 
 }  // namespace

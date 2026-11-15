@@ -28,7 +28,7 @@
 #include "doba_dem.h"
 #include "doba_sun.h"
 #include <time.h>
-#include "ride_state.h"
+#include "device_state.h"
 #include "settings.h"
 #include "ui_render.h"
 
@@ -101,7 +101,7 @@ void clockOf(uint32_t utc, char* out, size_t n) {
 struct Tile { EpdRect r; const char* title; Go go; };
 void sosSubtitle(char* out, size_t n);
 void renderStealthBar(uint8_t* fb);
-void sunSubtitle(const RideState& s, char* out, size_t n);
+void sunSubtitle(const DeviceState& s, char* out, size_t n);
 // The design canvas's home: 24 px margins, 14 px gaps, rounded tiles.
 constexpr int MARGIN = 24, TILE_GAP = 14;
 constexpr int TILE_W = (W - 2 * MARGIN - TILE_GAP) / 2;
@@ -125,7 +125,7 @@ const Tile kTiles[8] = {
     {tileRect(0, 3), "Settings", TO_SETUP},  {tileRect(1, 3), "Power", TO_POWER},
 };
 
-void renderHome(const RideState& s, uint8_t* fb) {
+void renderHome(const DeviceState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     char sub[64];
     for (int i = 0; i < 8; ++i) {
@@ -238,7 +238,7 @@ Go tapHome(int x, int y) {
 // --- shared bits for the pages below -------------------------------------------
 
 // The current position, if there is one worth using.
-bool here(const RideState& s, double& lat, double& lon) {
+bool here(const DeviceState& s, double& lat, double& lon) {
     if (!s.gpsFix && !s.everHadFix) return false;
     lat = s.latitude;
     lon = s.longitude;
@@ -246,7 +246,7 @@ bool here(const RideState& s, double& lat, double& lon) {
 }
 
 // Height: barometer, else the card's DEM, else GPS.
-float groundAlt(const RideState& s) {
+float groundAlt(const DeviceState& s) {
     return s.baroValid ? s.baroAltM : s.mapElevationValid ? s.mapElevationM : s.altitudeM;
 }
 
@@ -370,7 +370,7 @@ int setupRowAt(int y) {
     return -1;
 }
 
-void renderSetup(const RideState& s, uint8_t* fb) {
+void renderSetup(const DeviceState& s, uint8_t* fb) {
     (void)s;
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     section(setupRowY(R_STEALTH) - SEC_H, "RADIO", fb);
@@ -916,7 +916,7 @@ void sendToChat(const char* text) {
     Serial.printf("[comms] send to %s%lx: %s\n", g_chatDm ? "!" : "ch", (unsigned long)(g_chatDm ? g_chatDm : g_chatCh), text);
 }
 
-void renderComms(const RideState& s, uint8_t* fb) {
+void renderComms(const DeviceState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     g_myPos = s.gpsFix || s.everHadFix;
     g_myLat = s.latitude;
@@ -1037,7 +1037,7 @@ bool commsBack() {
 
 // --- COMPOSE -----------------------------------------------------------------
 
-void renderCompose(const RideState& s, uint8_t* fb) {
+void renderCompose(const DeviceState& s, uint8_t* fb) {
     (void)s;
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     g_compose.top = H - g_compose.height();
@@ -1077,9 +1077,9 @@ Go tapCompose(int x, int y) {
 
 // --- MAPOPTS: what the map shows, and its legend --------------------------------------
 
-constexpr int MROW_TOP = TOP + 20, MROW_H = 90, MROWS = 4;
-const EpdRect kOpenLegend = {24, TOP + 20 + 4 * 90 + 30, W - 48, 64};
-const EpdRect kOpenPoints = {24, TOP + 20 + 4 * 90 + 30 + 64 + 16, W - 48, 64};
+constexpr int MROW_TOP = TOP + 20, MROW_H = 90, MROWS = 3;
+const EpdRect kOpenLegend = {24, TOP + 20 + MROWS * 90 + 30, W - 48, 64};
+const EpdRect kOpenPoints = {24, TOP + 20 + MROWS * 90 + 30 + 64 + 16, W - 48, 64};
 bool g_legend = false;
 
 // A row that opens a page: the words left, a chevron right, in a hairline box.
@@ -1108,7 +1108,7 @@ void poiTag(int cx, int cy, int kind, uint8_t* fb) {
     ui::text(f, cx, cy + 6, c, fb, EPD_DRAW_ALIGN_CENTER, PAPER);
 }
 
-void renderLegend(const RideState& s, uint8_t* fb) {
+void renderLegend(const DeviceState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     double lat = 50, lon = 30;
     float mpp = 8;
@@ -1198,15 +1198,11 @@ void renderLegend(const RideState& s, uint8_t* fb) {
     }
 }
 
-void renderMapOpts(const RideState& s, uint8_t* fb) {
+void renderMapOpts(const DeviceState& s, uint8_t* fb) {
     if (g_legend) { renderLegend(s, fb); return; }
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
-    static const char* const kO[] = {"NORTH", "COURSE"};
+    // No "up is north / course": the topo tiles are drawn as they are, north up.
     int y = MROW_TOP;
-    caption(y, MROW_H, "UP IS", mapTrackUp() ? "the map turns with you" : "north always up", fb);
-    segments(y, MROW_H, kO, 2, mapTrackUp() ? 1 : 0, fb);
-    epd_fill_rect({24, y + MROW_H - 1, W - 48, 1}, ui::HAIR, fb);
-    y += MROW_H;
     caption(y, MROW_H, "MGRS GRID", "1 km lines, 10 km zoomed out", fb);
     toggle(y, MROW_H, milspec::gridOn(), fb);
     epd_fill_rect({24, y + MROW_H - 1, W - 48, 1}, ui::HAIR, fb);
@@ -1221,9 +1217,8 @@ void renderMapOpts(const RideState& s, uint8_t* fb) {
     linkRow(kOpenPoints, "Saved points", nullptr, fb);
     const char* tips[] = {"Hold a finger on the map 1 s to drop a point.",
                           "Drag the map: the strip reads the cross.",
-                          "Tap the cross to measure from there.",
-                          "Tap the compass: north-up or course-up."};
-    for (int i = 0; i < 4; ++i)
+                          "Tap the cross to measure from there."};
+    for (int i = 0; i < 3; ++i)
         ui::text(ui::font(ui::F_SMALL), 24, kOpenPoints.y + kOpenPoints.height + 56 + i * 36,
                  TR(tips[i]), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
@@ -1234,10 +1229,9 @@ Go tapMapOpts(int x, int y) {
     if (hit(kOpenPoints, x, y)) return TO_POINTS;
     const int r = (y - MROW_TOP) / MROW_H;
     if (y < MROW_TOP || r >= MROWS) return STAY;
-    if (r == 0) { const int i = segmentHit(x, 2); if (i >= 0) setMapTrackUp(i == 1); }
-    if (r == 1 && toggleHit(x)) milspec::setGridOn(x >= CTRL_X + CTRL_W - 75);
-    if (r == 2 && toggleHit(x)) milspec::setPointsOn(x >= CTRL_X + CTRL_W - 75);
-    if (r == 3 && toggleHit(x)) milspec::setPoisOn(x >= CTRL_X + CTRL_W - 75);
+    if (r == 0 && toggleHit(x)) milspec::setGridOn(x >= CTRL_X + CTRL_W - 75);
+    if (r == 1 && toggleHit(x)) milspec::setPointsOn(x >= CTRL_X + CTRL_W - 75);
+    if (r == 2 && toggleHit(x)) milspec::setPoisOn(x >= CTRL_X + CTRL_W - 75);
     return STAY;
 }
 
@@ -1340,7 +1334,7 @@ void nearLine(const doba_pois::Poi& p, char* out, size_t n) {
 }
 int nearPerPage() { return (H - 90 - NEAR_TOP) / NEAR_ROW; }
 
-void renderNearby(const RideState& s, uint8_t* fb) {
+void renderNearby(const DeviceState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     double lat, lon;
     if (!here(s, lat, lon)) {
@@ -1422,7 +1416,7 @@ void renderNearby(const RideState& s, uint8_t* fb) {
     }
 }
 
-Go tapNearby(int x, int y, const RideState& s) {
+Go tapNearby(int x, int y, const DeviceState& s) {
     const int per = nearPerPage();
     if (hit(kUp, x, y)) { if (g_nearPage > 0) --g_nearPage; return STAY; }
     if (hit(kDown, x, y)) { ++g_nearPage; return STAY; }   // clamped when drawn
@@ -1452,7 +1446,7 @@ Go tapNearby(int x, int y, const RideState& s) {
     return TO_POINT;
 }
 
-void renderPoints(const RideState& s, uint8_t* fb) {
+void renderPoints(const DeviceState& s, uint8_t* fb) {
     if (g_nearby) { renderNearby(s, fb); return; }
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     double lat, lon;
@@ -1556,7 +1550,7 @@ kbd::Keyboard g_newGrid, g_newName;
 bool g_newFocusName = false;
 const char* g_newError = nullptr;
 
-Go tapPoints(int x, int y, const RideState& s) {
+Go tapPoints(int x, int y, const DeviceState& s) {
     if (g_nearby) return tapNearby(x, y, s);
     if (y >= PROW_TOP - 46 && y < PROW_TOP + 4 && x > W / 2) { g_nearby = 1; g_nearPage = 0; return STAY; }
     double lat, lon;
@@ -1607,7 +1601,7 @@ void arrow(int cx, int cy, int r, float deg, uint8_t c, uint8_t* fb) {
     epd_fill_triangle(tx, ty, bx - px, by - py, cx, cy, c, fb);
 }
 
-void renderPoint(const RideState& s, uint8_t* fb) {
+void renderPoint(const DeviceState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     const doba_points::Point* p = doba_points::at(g_pointSel);
     if (!p) return;
@@ -1728,7 +1722,7 @@ bool parseGrid(const char* t, double& la, double& lo) {
 const EpdRect kGridBox = {24, TOP + 64, W - 48, 76};
 const EpdRect kNameBox = {24, TOP + 200, W - 48, 76};
 
-void renderPointNew(const RideState& s, uint8_t* fb) {
+void renderPointNew(const DeviceState& s, uint8_t* fb) {
     (void)s;
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     kbd::Keyboard& k = g_newFocusName ? g_newName : g_newGrid;
@@ -1793,7 +1787,7 @@ void wrapAt(const EpdFont* f, int x, int y, int maxW, int lh, const char* text, 
     });
 }
 
-void sosMessage(const RideState& s, char* out, size_t n) {
+void sosMessage(const DeviceState& s, char* out, size_t n) {
     char where[32] = "position unknown";
     if (s.gpsFix || s.everHadFix) milgeo::mgrs(s.latitude, s.longitude, where, sizeof where);
     char when[16] = "";
@@ -1807,7 +1801,7 @@ void sosMessage(const RideState& s, char* out, size_t n) {
              s.gpsFix ? "" : (s.everHadFix ? " (last fix)" : ""));
 }
 
-void sosSend(const RideState& s) {
+void sosSend(const DeviceState& s) {
     // Calling for help is the one thing that ends stealth by itself.
     if (stealth::active()) stealth::set(false);
     if (!mesh_service::enabled()) mesh_service::setEnabled(true);
@@ -1824,7 +1818,7 @@ void sosSubtitle(char* out, size_t n) {
     else snprintf(out, n, TR("Hold 5 s to send"));
 }
 
-void renderSos(const RideState& s, uint8_t* fb) {
+void renderSos(const DeviceState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     char msg[200];
     sosMessage(s, msg, sizeof msg);
@@ -1858,7 +1852,7 @@ void renderSos(const RideState& s, uint8_t* fb) {
     button(kSosCancel, "CANCEL SOS", false, fb);
 }
 
-Go tapSos(int x, int y, const RideState& s) {
+Go tapSos(int x, int y, const DeviceState& s) {
     if (!g_sosOn) {
         if (!hit(kSosBtn, x, y)) { g_sosArmed = false; return STAY; }
         // Sent only with a finger held 5 s: never by a brush or a pocket.
@@ -1892,7 +1886,7 @@ void hhmm(time_t utc, char* out, size_t n) {
     snprintf(out, n, "%02d:%02d", g.tm_hour, g.tm_min);
 }
 
-void sunSubtitle(const RideState& s, char* out, size_t n) {
+void sunSubtitle(const DeviceState& s, char* out, size_t n) {
     if (!s.utc || !(s.gpsFix || s.everHadFix)) { snprintf(out, n, TR("needs a GPS fix")); return; }
     const doba_sun::Day d = doba_sun::day(s.latitude, s.longitude, s.utc);
     char t[8];
@@ -1904,7 +1898,7 @@ void sunSubtitle(const RideState& s, char* out, size_t n) {
     } else snprintf(out, n, d.setOk ? "" : TR("polar day/night"));
 }
 
-void renderSun(const RideState& s, uint8_t* fb) {
+void renderSun(const DeviceState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     if (!s.utc || !(s.gpsFix || s.everHadFix)) {
         ui::text(ui::font(ui::F_KEY), W / 2, TOP + 300, TR("Needs a GPS fix"), fb, EPD_DRAW_ALIGN_CENTER, INK);
@@ -1985,7 +1979,7 @@ const char* hoursText(float h);
 enum MoreRow { M_USB, M_BT, M_WIFI, M_BATT, M_OWNER, M_GPS, M_MODE, M_CARD, M_ABOUT, M_COUNT };
 int moreRowY(int r) { return TOP + 4 + SEC_H + r * SROW_H; }
 
-void renderMore(const RideState& s, uint8_t* fb) {
+void renderMore(const DeviceState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     section(TOP + 4, "DEVICE", fb);
     for (int r = 0; r < M_COUNT; ++r) {
@@ -2093,7 +2087,7 @@ const char* hoursText(float h) {
     return b;
 }
 
-void renderBattery(const RideState& s, uint8_t* fb) {
+void renderBattery(const DeviceState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     doba_batt::Report r;
     doba_batt::report(r);
@@ -2162,7 +2156,7 @@ static void fitTextTo(const EpdFont* f, char* t, int w) {
     }
 }
 
-void renderOffCard(const RideState& s, bool powerKey, uint8_t* fb) {
+void renderOffCard(const DeviceState& s, bool powerKey, uint8_t* fb) {
     // The map is already drawn, centred on the position at y 430 (riderY).
     constexpr int MAP_TOP = 262, MAP_BOT = 560;
     // Paper above and below the map window, then contour lines on it: the
@@ -2318,7 +2312,7 @@ void renderOffCard(const RideState& s, bool powerKey, uint8_t* fb) {
     }
 }
 
-void render(Page p, const RideState& s, uint8_t* fb) {
+void render(Page p, const DeviceState& s, uint8_t* fb) {
     switch (p) {
         case HOME:    renderHome(s, fb); break;
         case COMMS:   renderComms(s, fb); break;
@@ -2348,7 +2342,7 @@ void render(Page p, const RideState& s, uint8_t* fb) {
 
 bool sosActive() { return g_sosOn; }
 
-bool tick(const RideState& s) {
+bool tick(const DeviceState& s) {
     if (g_sosOn && millis() - g_sosLast >= SOS_EVERY_MS) {
         sosSend(s);
         return true;
@@ -2383,7 +2377,7 @@ const char* title(Page p) {
 
 void setPressMs(uint32_t ms) { g_pressMs = ms; }
 
-Go tap(Page p, int x, int y, const RideState& s) {
+Go tap(Page p, int x, int y, const DeviceState& s) {
     switch (p) {
         case HOME:    return tapHome(x, y);
         case COMMS:   return tapComms(x, y);

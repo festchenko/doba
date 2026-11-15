@@ -15,7 +15,7 @@
 #include "gps_sentence_audit.h"
 
 #include "config.h"
-#include "ride_state.h"
+#include "device_state.h"
 #include "speed_source.h"
 #include "settings.h"
 #include "rtc_clock.h"
@@ -778,13 +778,13 @@ void task(void*) {
             // field prefers and the barometer, if fitted, calibrates from.
             float m = 0;
             const bool ok = doba_dem::height(la, lo, m);
-            g_state.with([&](RideState& s) {
+            g_state.with([&](DeviceState& s) {
                 s.mapElevationValid = ok;
                 if (ok) s.mapElevationM = m;
             });
         }
         if (gps.location.isUpdated() || gps.satellites.isUpdated()) {
-            g_state.with([](RideState& s) {
+            g_state.with([](DeviceState& s) {
                 s.gpsFix = fixFresh();
                 if (s.gpsFix) {
                     s.latitude = gps.location.lat();
@@ -842,7 +842,7 @@ void task(void*) {
         // Fix expiry. The block above only runs when the parser commits a new
         // location or satellite count; if the receiver stops sending (or only
         // sends sentences that commit neither) the last fix and speed would
-        // stay latched in RideState. Drop them as soon as the fix goes stale,
+        // stay latched in DeviceState. Drop them as soon as the fix goes stale,
         // whatever did or didn't arrive. The loop wakes at least once a second
         // (UART notify timeout / 50 ms poll), so this lands within ~1 s of
         // kFixStaleMs.
@@ -850,7 +850,7 @@ void task(void*) {
             static bool publishedFresh = false;
             const bool fresh = fixFresh();
             if (publishedFresh && !fresh) {
-                g_state.with([](RideState& s) {
+                g_state.with([](DeviceState& s) {
                     s.gpsFix = false;
                     s.gpsSpeedKmh = 0.0f;
                     speed_source::publish(s, millis());
@@ -1010,7 +1010,7 @@ void task(void*) {
         // Speed-source upkeep every loop: re-arbitrate so a phone or wheel
         // stream that has gone stale drops out (to the next source, or 0)
         // without waiting for a fix or a packet to trigger it.
-        g_state.with([](RideState& s) { speed_source::publish(s, millis()); });
+        g_state.with([](DeviceState& s) { speed_source::publish(s, millis()); });
 
         // High-rate serial telemetry for live iteration: 1 Hz while searching,
         // 5 Hz-slow (5 s) once locked so the console isn't a firehose.

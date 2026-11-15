@@ -14,10 +14,9 @@
 #include "gps_rx_guard.h"
 #include "lora_radio.h"
 #include "power_mgmt.h"
-#include "ride_state.h"
+#include "device_state.h"
 #include "rtc_clock.h"
 #include "sd_diagnostics.h"
-#include "smooth_epd.h"
 #include "usb_storage.h"
 #include "sim.h"
 
@@ -25,7 +24,7 @@
 #include <map>
 #include <mutex>
 
-extern SharedRideState g_state;
+extern SharedDeviceState g_state;
 
 namespace power_mgmt {
 bool prepare() { return true; }
@@ -90,10 +89,6 @@ void report(char* out, size_t n) { snprintf(out, n, "aux: none (sim)"); }
 
 // lora_radio: sim/host/lora_sim.cpp (fitted with --lora).
 
-namespace smooth_epd {
-void selfTest() {}
-}
-
 namespace gps_rx_guard {
 void begin() {}
 void tick(bool) {}
@@ -115,7 +110,7 @@ std::atomic<bool> g_charging{false};
 void sim::setBattery(int pct, bool charging) {
     g_batteryPct = pct;
     g_charging = charging;
-    g_state.with([&](RideState& s) {
+    g_state.with([&](DeviceState& s) {
         s.batteryPercent = (uint8_t)pct;
         s.charging = charging;
     });

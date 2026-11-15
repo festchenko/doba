@@ -8,7 +8,7 @@
 #include "config.h"
 #include "diag.h"
 #include "i2c_bus.h"
-#include "ride_state.h"
+#include "device_state.h"
 #include "settings.h"
 
 // Hand-rolled drivers rather than pulling in two more libraries: both chips are
@@ -267,7 +267,7 @@ bool seaLevelCalibrated() { return seaLevelFromDem; }
 void task(void*) {
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(200));        // 5 Hz
-        RideState s = g_state.snapshot();
+        DeviceState s = g_state.snapshot();
 
         if (baroOk) {
             float pa = 0, tc = 0;
@@ -290,7 +290,7 @@ void task(void*) {
                     }
                 }
                 const float alt = aux_math::altitudeFromPressure(pa, seaLevel);
-                g_state.with([&](RideState& st) {
+                g_state.with([&](DeviceState& st) {
                     st.pressurePa = pa;
                     st.baroTempC = tc;
                     st.baroAltM = alt;
@@ -303,7 +303,7 @@ void task(void*) {
         bool haveAcc = accOk && accRead(ax, ay, az);
         if (haveAcc) {
             movement.observe(ax, ay, az);
-            g_state.with([&](RideState& st) { st.deviceMoving = movement.moving; });
+            g_state.with([&](DeviceState& st) { st.deviceMoving = movement.moving; });
         }
 
         if (magOk && haveAcc) {
@@ -324,7 +324,7 @@ void task(void*) {
                             mountOffset.observe(raw, s.courseDeg);
 
                         const float h = mountOffset.apply(raw);
-                        g_state.with([&](RideState& st) {
+                        g_state.with([&](DeviceState& st) {
                             st.compassDeg = h;
                             st.compassValid = true;
                         });
@@ -348,7 +348,7 @@ void task(void*) {
 }
 
 void report(char* out, size_t n) {
-    RideState s = g_state.snapshot();
+    DeviceState s = g_state.snapshot();
     snprintf(out, n,
              "baro %s %.1fhPa %.1fm %.1fC (QNH %.1f%s) · acc %s%s · mag %s",
              baroOk ? "on" : "off", s.pressurePa / 100.0f, s.baroAltM, s.baroTempC,

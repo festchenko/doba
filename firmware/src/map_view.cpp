@@ -10,7 +10,7 @@
 
 #include "epdiy.h"
 #include "epd_compat.h"
-#include "ride_state.h"
+#include "device_state.h"
 #include "ui_render.h"
 #include "vfont_faces.h"
 
@@ -214,13 +214,13 @@ void renderMapTop(const MapScreenData& map, uint8_t* fb) {
 }
 }  // namespace
 
-void ui_render_map_features(const MapScreenData& map, const RideState& s, uint8_t* fb) {
+void ui_render_map_features(const MapScreenData& map, const DeviceState& s, uint8_t* fb) {
     (void)s;
     ui_render_map_base(map, fb);
     renderMapTop(map, fb);
 }
 
-void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
+void ui_render_map(const MapScreenData& map, const DeviceState& s, uint8_t* fb,
                    bool baseDrawn, void (*onBase)(const uint8_t* fb)) {
     const int W = epd_rotated_display_width();
     const int H = epd_rotated_display_height();
@@ -235,7 +235,7 @@ void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
     milspec::drawPois(map, fb);   // DOBA: hospitals, water, food...
     milspec::drawTarget(map, s, fb);   // DOBA: the active waypoint
     if (map.panned) milspec::drawMeasure(map, fb);   // DOBA: A -> the cross
-    drawScaleBar(map.metersPerPixel, s.useMiles, fb);
+    drawScaleBar(map.metersPerPixel, false, fb);
     // The turn banner occupies the top of the map, exactly where the compass
     // lives (compass spans y 78..146; the banner runs to y 202), so the north
     // indicator was drawn underneath it and invisible while navigating. Drop it

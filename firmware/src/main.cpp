@@ -13,7 +13,7 @@
 #include <bq27220.h>
 
 #include "config.h"
-#include "ride_state.h"
+#include "device_state.h"
 #include "gps_service.h"
 #include "rtc_clock.h"
 #include "settings.h"
@@ -93,7 +93,7 @@ static void routeConsoleToUsb() {
 }
 #endif
 
-SharedRideState g_state;
+SharedDeviceState g_state;
 
 // Serializes all I2C access (fuel gauge / touch / IO expander / RTC).
 SemaphoreHandle_t g_i2cMutex = nullptr;
@@ -224,7 +224,7 @@ static void batteryTask(void*) {
             bool chg = false;
             i2cLock(); chg = fuelGauge.getIsCharging(); i2cUnlock();
             if (soc >= 1 && soc <= 100) {
-                g_state.with([&](RideState& s) {
+                g_state.with([&](DeviceState& s) {
                     s.batteryPercent = (uint8_t)soc;
                     s.charging = chg;
                 });
@@ -414,7 +414,7 @@ void setup() {
         }
         if (soc >= 1) {
             bool chg = fuelGauge.getIsCharging();
-            g_state.with([&](RideState& s) {
+            g_state.with([&](DeviceState& s) {
                 s.batteryPercent = (uint8_t)soc;
                 s.charging = chg;
             });
@@ -429,10 +429,8 @@ void setup() {
         }
     }
     settings::begin();
-    g_state.with([](RideState& s) {
+    g_state.with([](DeviceState& s) {
         s.tzMin = (int16_t)settings::tzMinutes();
-        s.useMiles = settings::useMiles();
-        s.clock24h = settings::clock24h();
     });
     // Panel FIRST, before anything slow. E-paper holds its last image with no
     // power, so until this runs the glass still shows the previous session and

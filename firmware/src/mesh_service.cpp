@@ -15,7 +15,7 @@
 #include "diag.h"
 #include "lora_radio.h"
 #include "mesh_crypto.h"
-#include "ride_state.h"
+#include "device_state.h"
 #include "settings.h"
 
 namespace {
@@ -611,7 +611,7 @@ float metresBetween(double lat1, double lon1, double lat2, double lon2) {
 // No fix, no claim — a stale or invented position sent to people who are using it
 // to find each other is worse than sending nothing.
 bool ownPosition(mesh::Position& p) {
-    const RideState s = g_state.snapshot();
+    const DeviceState s = g_state.snapshot();
     if (s.gpsFix) {
         p.latitude = s.latitude;
         p.longitude = s.longitude;

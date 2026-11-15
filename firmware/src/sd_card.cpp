@@ -11,7 +11,7 @@
 #include "config.h"
 #include "crash_report.h"
 #include "diag.h"
-#include "ride_state.h"
+#include "device_state.h"
 #include "sd_bus.h"
 #include "usb_storage.h"
 

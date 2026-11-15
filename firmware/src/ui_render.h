@@ -11,7 +11,7 @@
 
 #include "epdiy.h"
 
-struct RideState;
+struct DeviceState;
 
 // Shared design-system pieces (also used by map_view.cpp)
 namespace ui {
@@ -103,11 +103,11 @@ int valueFontIndex(const EpdFont* const* ladder, const char* value, int availW,
 // `title` is drawn centred in the band — menu, settings and the list screens
 // wear the SAME status bar as the ride and map screens, with their name in it,
 // rather than each inventing a header of its own.
-void statusBar(const RideState& s, uint8_t* fb, const char* title = nullptr);
+void statusBar(const DeviceState& s, uint8_t* fb, const char* title = nullptr);
 // DOBA: a sub-page's band: a back chevron (tap target x < BACK_W), the page
 // title, and clock + battery on the right.
 constexpr int BACK_W = 96;
-void statusBarBack(const RideState& s, uint8_t* fb, const char* title);
+void statusBarBack(const DeviceState& s, uint8_t* fb, const char* title);
 
 void text(const EpdFont* font, int x, int y, const char* str, uint8_t* fb,
           EpdFontFlags align = EPD_DRAW_ALIGN_LEFT, uint8_t color = 0x00);

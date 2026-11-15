@@ -26,11 +26,7 @@ void setRegionAuto(bool on);
 int backlight();          // 0=off .. 3=bright
 void setBacklight(int b);
 
-bool useMiles();          // false = metric (km), true = imperial (mi/ft/mph)
-void setUseMiles(bool m);
 
-bool clock24h();          // true = 24-hour clock, false = 12-hour (AM/PM)
-void setClock24h(bool h);
 
 bool usbDrive();          // true = expose SD as a USB drive when plugged in
 void setUsbDrive(bool on);
@@ -43,13 +39,11 @@ bool bluetooth();
 void setBluetooth(bool on);
 bool wifi();
 void setWifi(bool on);
-const char* owner();
 // The card as fields: 0 name, 1 born, 2 blood group, 3 allergies/illnesses, 4 contact.
 constexpr int OWNER_FIELDS = 5;
 const char* ownerField(int i);
 void setOwnerField(int i, const char* t);
 bool ownerSet();
-void setOwner(const char* t);
 
 
 
@@ -128,11 +122,6 @@ void setMeshPrivateKey(const uint8_t key[32]);
 // aux_math::HeadingOffset). Persisted because the board does not move between
 // rides, so re-learning it every time would leave the compass wrong for the
 // first minutes of every ride. NAN when nothing has been learned yet.
-// Cycling map layers the rider wants drawn (MAP_LAYER_* bits, map_view.h).
-// All on by default. Applied at render time only — tiles keep everything.
-uint16_t mapLayers();
-void setMapLayers(uint16_t mask);
-
 float compassOffsetDeg();
 void setCompassOffsetDeg(float deg);
 

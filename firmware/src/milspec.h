@@ -10,7 +10,7 @@
 #include <cstdint>
 
 struct MapScreenData;
-struct RideState;
+struct DeviceState;
 
 namespace milspec {
 
@@ -23,11 +23,11 @@ void drawCross(uint8_t* fb);
 void drawGrid(const MapScreenData& map, uint8_t* fb);
 
 // The readout strip, from ui::MAP_STRIP_TOP to the bottom of the panel.
-void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb);
+void drawStrip(const MapScreenData& map, const DeviceState& s, uint8_t* fb);
 
 // The active waypoint (doba_points): a dashed line from the rider to it and
 // its mark, over the map, under the chrome.
-void drawTarget(const MapScreenData& map, const RideState& s, uint8_t* fb);
+void drawTarget(const MapScreenData& map, const DeviceState& s, uint8_t* fb);
 
 // Map options kept in NVS: the MGRS grid, every waypoint on the map.
 bool gridOn();

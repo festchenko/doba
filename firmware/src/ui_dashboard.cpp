@@ -13,7 +13,7 @@
 #include <TouchDrvGT911.hpp>
 
 #include "config.h"
-#include "ride_state.h"
+#include "device_state.h"
 #include "sd_card.h"
 #include "sd_bus.h"
 #include "sd_diagnostics.h"
@@ -48,7 +48,6 @@
 #include "diag.h"
 #include "crash_report.h"
 #include "memfault_service.h"
-#include "smooth_epd.h"
 #include "power_mgmt.h"
 #include "live_view.h"
 
@@ -84,7 +83,6 @@ inline float mapMaxMpp() { return 200.0f; }   // ~z9: the widest the topo packs 
 // Which zoom button is showing its pressed state (0 none, 1 in, 2 out). Held
 // from the tap until a COMPLETE map frame has been drawn.
 int zoomHeld = 0;
-bool mapTrackUp = false;
 // DOBA: how far the map has been dragged off the position, metres east/north.
 float mapPanE = 0, mapPanN = 0;
 bool mapPanned() { return mapPanE != 0 || mapPanN != 0; }
@@ -129,7 +127,7 @@ uint32_t noticeSeq = 0;
 bool noticeUp = false;
 uint32_t noticeUntilMs = 0;
 bool meshNoticeShown() { return noticeUp; }
-void buildMapScreenData(const RideState& s, MapScreenData& map,
+void buildMapScreenData(const DeviceState& s, MapScreenData& map,
                         bool finalFrame = false);
 
 
@@ -281,8 +279,7 @@ void renderFarewell(uint8_t* fb) {
     // days; rotated to whatever heading the last fix happened to have, it is
     // unreadable as a map of where the bike is. (Deep sleep follows
     // immediately, so mutating the live setting here is harmless.)
-    mapTrackUp = false;
-    RideState s = g_state.snapshot();
+    DeviceState s = g_state.snapshot();
     // Save the last known position on the way down, so the next boot's
     // GPS warm-start seed is as fresh as possible.
     if (s.everHadFix) settings::setLastPosition(s.latitude, s.longitude);
@@ -808,14 +805,6 @@ void handleTap(int x, int y) {
 
     switch (screen) {
         case SCREEN_MAP:
-            {
-                int dx = x - kMapCompass.cx,
-                    dy = y - mapCompassCy(false) - 56;
-                if (dx * dx + dy * dy <= kMapCompass.r * kMapCompass.r) {
-                    mapTrackUp = !mapTrackUp;
-                    break;
-                }
-            }
             if (x >= kMapZoom.zoomX &&
                 x < kMapZoom.zoomX + kMapZoom.size) {
                 // DOBA: the layers button opens Doba's map options (OTP's were
@@ -879,20 +868,10 @@ void handleTap(int x, int y) {
             break;
         }
         case SCREEN_GPSDEBUG:
-            // Experimental: a tap in the top band runs the smooth-drive
-            // pipeline self-test; anywhere else goes back to More, where it
-            // was opened from (it went to the old bike Settings page).
-            if (y < 150) {
-                smooth_epd::selfTest();
-                // The self-test drove the panel directly, behind the driver's
-                // back, so its record of what is on glass is now wrong. A clear
-                // puts both back in agreement at white; zeroing shadowFb (a
-                // value the renderer never produces) forces a full redraw.
-                epdc_clear();
-                if (shadowFb) memset(shadowFb, 0, fbSize);
-            } else {
-                screen = SCREEN_MORE;
-            }
+            // A tap anywhere goes back to More, where it was opened from. (A tap
+            // in the top 150 px, the Back corner included, ran a panel drive
+            // experiment that flashed the screen dark and light for 2 s.)
+            screen = SCREEN_MORE;
             break;
     }
 }
@@ -1058,7 +1037,7 @@ void mapCacheAllocate() {
 
 void mapLayerKeep(const uint8_t* fb) { memcpy(mapLayerBeingKept, fb, fbSize); }
 
-void buildMapScreenData(const RideState& s, MapScreenData& map,
+void buildMapScreenData(const DeviceState& s, MapScreenData& map,
                         bool finalFrame) {
     map.riderX = 270;
     map.riderY = 430;
@@ -1072,10 +1051,12 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
     const bool useCompass = s.compassValid && s.speedKmh < 5.0f;
     const float heading = mapTestHeading >= 0.0f ? mapTestHeading
                                                  : useCompass ? s.compassDeg : s.courseDeg;
-    float rot = mapTrackUp ? -heading : 0.0f;
-    map.headingDeg = mapTrackUp ? 0.0f : heading;
-    map.northDeg = rot;
-    map.trackUp = mapTrackUp;
+    // The topo tiles are a raster drawn 1:1: the map is always north-up, and the
+    // position's arrow turns instead.
+    float rot = 0.0f;
+    map.headingDeg = heading;
+    map.northDeg = 0.0f;
+    map.trackUp = false;
     // Tell the map renderer to drop the compass below the turn banner when one
     // is drawn over the top of the viewport. The pause banner sits in the same
     // band, so it displaces the compass the same way.
@@ -1174,11 +1155,11 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
 
     // Not on the farewell frame: that one stays on the glass for days, long
     // after anyone is still where it would show them.
-    if (!finalFrame) buildMapPeers(lat, lon, rot, s.useMiles, map);
+    if (!finalFrame) buildMapPeers(lat, lon, rot, false, map);
 }
 
 // The map frame's base layer, from the cache if it can be, kept for next time if not.
-void renderMapWithCache(const MapScreenData& map, const RideState& s, uint8_t* fb) {
+void renderMapWithCache(const MapScreenData& map, const DeviceState& s, uint8_t* fb) {
     const uint32_t now = millis();
     const MapBaseKey key = mapKeyFor(map);
     if (!mapSameView(key, mapViewKey)) {
@@ -1202,7 +1183,7 @@ void renderMapWithCache(const MapScreenData& map, const RideState& s, uint8_t* f
     if (save) mapCache.commit(save, key, now);
 }
 
-void renderMapScreen(const RideState& s, uint8_t* fb) {
+void renderMapScreen(const DeviceState& s, uint8_t* fb) {
     MapScreenData map = {};
     uint32_t m0 = millis();
     buildMapScreenData(s, map);
@@ -1249,7 +1230,7 @@ void mapPrerenderStep() {
         const float liveMpp = mapMpp;
         mapMpp = ask;
         MapScreenData map = {};
-        const RideState s = g_state.snapshot();
+        const DeviceState s = g_state.snapshot();
         buildMapScreenData(s, map);   // snaps to a tile zoom the card has
         const float mpp = mapMpp;
         mapMpp = liveMpp;
@@ -1275,7 +1256,6 @@ void mapPrerenderStep() {
 // Console `farewell`: the power-off screen without the power-off, held for a look.
 void farewellTest() {
     const float liveMpp = mapMpp;
-    const bool liveTrackUp = mapTrackUp;
     uint8_t* fb = epdc_framebuffer();
     renderFarewell(fb);
     if (shadowFb) memcpy(shadowFb, fb, fbSize);
@@ -1284,7 +1264,6 @@ void farewellTest() {
     epdc_paint_wait();
     vTaskDelay(pdMS_TO_TICKS(30000));
     mapMpp = liveMpp;
-    mapTrackUp = liveTrackUp;
     forceDraw = true;
 }
 
@@ -2007,10 +1986,6 @@ static void runConsoleLine(char* line) {
         }
     } else if (!strcasecmp(cmd, "farewell")) {
         farewellTest();
-    } else if (!strcasecmp(cmd, "trackup")) {
-        if (arg) mapTrackUp = !strcasecmp(arg, "on");
-        forceDraw = true;
-        Serial.printf("[trackup] %s\n", mapTrackUp ? "on" : "off");
     } else if (!strcasecmp(cmd, "heading")) {
         mapTestHeading = arg && strcasecmp(arg, "off") ? atof(arg) : -1.0f;
         forceDraw = true;
@@ -2246,7 +2221,7 @@ static void runConsoleLine(char* line) {
         Serial.printf("[stealth] state %s radio=%d\n", !stealth::active() ? "off" : stealth::listen() ? "listen" : "silent",
                       mesh_service::enabled() ? 1 : 0);
     } else if (!strcasecmp(cmd, "dem")) {    // DOBA: ground under the fix, from /doba/dem
-        const RideState st = g_state.snapshot();
+        const DeviceState st = g_state.snapshot();
         float v;
         bool wet;
         if (doba_dem::ground(st.latitude, st.longitude, v, wet))
@@ -2358,7 +2333,7 @@ TRC("loop");         bool host = usb_storage::hostActive();
         // computer must NEVER auto-off while you're moving. Any real speed keeps
         // it awake (and for the idle timeout after you stop).
         {
-            RideState now = g_state.snapshot();
+            DeviceState now = g_state.snapshot();
             if (now.gpsFix && now.speedKmh > 3.0f) lastActivityMs = millis();
             // And without a fix: an accelerometer knows the bike is moving in a
             // tunnel, under trees, or before the receiver has locked — all
@@ -2367,8 +2342,10 @@ TRC("loop");         bool host = usb_storage::hostActive();
             if (now.deviceMoving) lastActivityMs = millis();
 
             // The page on screen, for diagnostics and the simulator.
+            // `page` is the Screen itself: the sim tests tell Doba's pages apart by it.
             LiveView lv;
             if (screen == SCREEN_MAP) lv.screen = 1;
+            lv.page = (unsigned char)screen;
             live_view::publish(lv);
         }
 
@@ -2582,7 +2559,7 @@ TRC("predraw");         const bool modalHoldsStill = powerOverlay;
             const bool prevOverlay = lastOverlay;
             lastScreen = screen;
             lastOverlay = powerOverlay;
-            RideState s = g_state.snapshot();
+            DeviceState s = g_state.snapshot();
             s.sdCard = sd_card::sdCardState();
             uint8_t* fb = epdc_framebuffer();
             memset(fb, 0xFF, epd_width() / 2 * epd_height());
@@ -2638,7 +2615,7 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
                     v.hour = d.hour;
                     v.minute = d.minute;
                     v.second = d.second;
-                    v.useMiles = settings::useMiles();
+                    v.useMiles = false;
                     ui_render_gps_debug(v, fb);
                     ui::statusBarBack(s, fb, TR("GPS details"));
                     break;
@@ -2716,8 +2693,6 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
 
 // DOBA: the map's orientation, for doba_ui's MAP options page.
 namespace doba_ui {
-bool mapTrackUp() { return ::mapTrackUp; }
-void setMapTrackUp(bool on) { ::mapTrackUp = on; }
 }  // namespace doba_ui
 
 namespace live_view {

@@ -22,7 +22,7 @@ enum SdCardState : uint8_t {
 // Plain data — also compiled on the host by tools/preview to render
 // screen previews, so no Arduino dependencies in the struct itself.
 
-struct RideState {
+struct DeviceState {
     // GPS
     bool     gpsFix = false;
     bool     everHadFix = false;   // lat/lon hold the last known position
@@ -71,8 +71,6 @@ struct RideState {
 
     // Rider config (mirrored from settings so renderers stay host-safe)
     int16_t  tzMin = -420;
-    bool     useMiles = false;   // display units: false = km, true = miles
-    bool     clock24h = true;    // status-bar clock: true = 24h, false = 12h
 };
 
 // Metric <-> imperial display helpers. Host-safe (used by the preview harness
@@ -106,13 +104,13 @@ inline void navDist(char* out, size_t len, float m, bool miles) {
 #include <Arduino.h>
 
 // Copy-out under lock; mutate under lock via with().
-class SharedRideState {
+class SharedDeviceState {
 public:
     void begin() { mutex_ = xSemaphoreCreateMutex(); }
 
-    RideState snapshot() {
+    DeviceState snapshot() {
         xSemaphoreTake(mutex_, portMAX_DELAY);
-        RideState copy = state_;
+        DeviceState copy = state_;
         xSemaphoreGive(mutex_);
         return copy;
     }
@@ -125,9 +123,9 @@ public:
     }
 
 private:
-    RideState state_;
+    DeviceState state_;
     SemaphoreHandle_t mutex_ = nullptr;
 };
 
-extern SharedRideState g_state;
+extern SharedDeviceState g_state;
 #endif

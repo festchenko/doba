@@ -10,7 +10,7 @@ namespace sim {
 struct Options {
     std::string dir = "sim-device";   // NVS, bonds, OTA image live here
     std::string sdDir;                // the SD card's root (default <dir>/sd)
-    int blePort = 7878, ctlPort = 7879;
+    int ctlPort = 7879;
     bool quiet = false;
     double speed = 1.0;
     int notifyWindow = 32;

@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-struct RideState;
+struct DeviceState;
 
 // Another rider on one of our private mesh channels, where they last said they
 // were. Off-screen ones are kept (offscreen = true, x/y pinned to the map's
@@ -84,7 +84,7 @@ void ui_map_draw_zoom_button(bool zoomIn, bool pressed, uint8_t* fb);
 
 // `baseDrawn`: fb already holds this view's base layer (see ui_render_map_base).
 // `onBase`: if set, called with fb as soon as the base layer is on it, to keep a copy.
-void ui_render_map(const MapScreenData& map, const RideState& s, uint8_t* fb,
+void ui_render_map(const MapScreenData& map, const DeviceState& s, uint8_t* fb,
                    bool baseDrawn = false, void (*onBase)(const uint8_t* fb) = nullptr);
 
 // The slow part of a map frame on its own: the topo tiles, onto a white fb, with
@@ -93,5 +93,5 @@ void ui_render_map_base(const MapScreenData& map, uint8_t* fb);
 
 // Just the map (tiles + rider), full-screen, no chrome. Used as the
 // backdrop behind the powered-off screen.
-void ui_render_map_features(const MapScreenData& map, const RideState& s,
+void ui_render_map_features(const MapScreenData& map, const DeviceState& s,
                             uint8_t* fb);

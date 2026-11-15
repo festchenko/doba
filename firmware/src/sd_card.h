@@ -24,7 +24,7 @@ void retryMountIfNeeded();
 // card bring-up boot skipped).
 bool consumeLateMount();
 bool sdMounted();             // mounted and not lent to a USB host
-// SD_CARD_OK / SD_CARD_NONE / SD_CARD_UNREADABLE (ride_state.h). Lock-free.
+// SD_CARD_OK / SD_CARD_NONE / SD_CARD_UNREADABLE (device_state.h). Lock-free.
 uint8_t sdCardState();
 uint32_t sdFreeMB();
 

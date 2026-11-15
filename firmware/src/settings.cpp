@@ -20,14 +20,10 @@ float compassOff = NAN;
 int tz = TIMEZONE_OFFSET_MINUTES;
 int bl = 0;  // backlight level 0-3; OFF until the rider turns it on — e-paper
              // needs no light in daylight, and a lit panel drains a fresh device
-bool miles = false;  // false = km, true = miles
-bool clk24 = true;   // true = 24-hour clock, false = 12-hour
 bool usbDrv = true;
 bool btOn = false;    // DOBA: Bluetooth switch (nothing uses it yet)
 bool wifiOn = false;  // DOBA: Wi-Fi switch (nothing uses it yet)
-char ownerText[128] = "";
 char ownerF[5][64] = {};    // DOBA: name, born, blood, medical, contact   // DOBA: "if found" card on the power-off screen  // true = expose SD as USB drive when plugged into a host
-uint16_t mapLayerMask = 0x003F;   // MAP_LAYERS_ALL: every cycling layer on
 bool panelScanOn = false;   // paint through epd_scan.cpp, not the driver's path
 // Per kind, a ';'-separated list of paired addresses, most recent first (max
 // SENSOR_MAX_PAIRED). Stored under the same NVS key as the old single address,
@@ -63,7 +59,7 @@ namespace settings {
 // The stored settings' format. Bump it with a migration step below whenever a
 // key changes meaning or goes away, so a newer firmware never reads an older
 // value as something else.
-constexpr uint32_t kSettingsVersion = 2;
+constexpr uint32_t kSettingsVersion = 3;
 
 void migrate() {
     const uint32_t v = prefs.getUInt("cfgver", 0);
@@ -80,6 +76,12 @@ void migrate() {
         static const char* const gone[] = {"apause", "showoff"};
         for (const char* k : gone) if (prefs.isKey(k)) prefs.remove(k);
     }
+    if (v < 3) {
+        // 2 -> 3: miles, the 12-hour clock, the vector map's layers and the
+        // one-line owner text had no switch on Doba (the owner card has fields).
+        static const char* const gone[] = {"miles", "clk24", "maplayers", "owner"};
+        for (const char* k : gone) if (prefs.isKey(k)) prefs.remove(k);
+    }
     prefs.putUInt("cfgver", kSettingsVersion);
     Serial.printf("[cfg] settings format %u -> %u\n", (unsigned)v, (unsigned)kSettingsVersion);
 }
@@ -90,8 +92,6 @@ void begin() {
     compassOff = prefs.getFloat("cmpoff", NAN);
     tz = prefs.getInt("tz", TIMEZONE_OFFSET_MINUTES);
     bl = prefs.getInt("bl", 0);
-    miles = prefs.getBool("miles", false);
-    clk24 = prefs.getBool("clk24", true);
     tzAutoOn = prefs.getBool("tzAuto", true);
     regionAutoOn = prefs.getBool("rgAuto", true);
     // Key bumped to usbdrv2 so the new OFF default takes effect even on devices
@@ -100,12 +100,10 @@ void begin() {
     usbDrv = prefs.getBool("usbdrv2", false);
     btOn = prefs.getBool("bt", false);
     wifiOn = prefs.getBool("wifi", false);
-    prefs.getString("owner", ownerText, sizeof ownerText);
     for (int i = 0; i < 5; ++i) {
         char k[8]; snprintf(k, sizeof k, "own%d", i);
         prefs.getString(k, ownerF[i], sizeof ownerF[i]);
     }
-    mapLayerMask = prefs.getUShort("maplayers", 0x003F);
     panelScanOn = prefs.getBool("pscan", false);
     lastLat = prefs.getDouble("lastlat", 0);
     lastLon = prefs.getDouble("lastlon", 0);
@@ -148,8 +146,6 @@ void setPanelScan(bool on) {
     prefs.putBool("pscan", on);
 }
 
-
-
 // DOBA: by default the zone comes from the last GPS position (tz_auto), summer
 // time included; a manual offset is kept for when that is wrong or unknown.
 int tzMinutes() {
@@ -174,18 +170,6 @@ void setBacklight(int b) {
     prefs.putInt("bl", bl);
 }
 
-bool useMiles() { return miles; }
-void setUseMiles(bool m) {
-    miles = m;
-    prefs.putBool("miles", miles);
-}
-
-bool clock24h() { return clk24; }
-void setClock24h(bool h) {
-    clk24 = h;
-    prefs.putBool("clk24", clk24);
-}
-
 bool usbDrive() { return usbDrv; }
 void setUsbDrive(bool on) {
     usbDrv = on;
@@ -196,7 +180,6 @@ bool bluetooth() { return btOn; }
 void setBluetooth(bool on) { btOn = on; prefs.putBool("bt", on); }
 bool wifi() { return wifiOn; }
 void setWifi(bool on) { wifiOn = on; prefs.putBool("wifi", on); }
-const char* owner() { return ownerText; }
 const char* ownerField(int i) { return i >= 0 && i < 5 ? ownerF[i] : ""; }
 void setOwnerField(int i, const char* t) {
     if (i < 0 || i >= 5) return;
@@ -205,32 +188,6 @@ void setOwnerField(int i, const char* t) {
     prefs.putString(k, ownerF[i]);
 }
 bool ownerSet() { for (auto& f : ownerF) if (f[0]) return true; return false; }
-void setOwner(const char* t) {
-    snprintf(ownerText, sizeof ownerText, "%s", t ? t : "");
-    prefs.putString("owner", ownerText);
-}
-
-uint16_t mapLayers() { return mapLayerMask; }
-void setMapLayers(uint16_t mask) {
-    if (mask == mapLayerMask) return;
-    mapLayerMask = mask;
-    prefs.putUShort("maplayers", mapLayerMask);
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 bool lastPosition(double& lat, double& lon) {
     if (lastLat == 0 && lastLon == 0) return false;

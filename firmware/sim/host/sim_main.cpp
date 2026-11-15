@@ -5,7 +5,7 @@
 #include <Wire.h>
 
 #include "config.h"
-#include "ride_state.h"
+#include "device_state.h"
 #include "gps_service.h"
 #include "rtc_clock.h"
 #include "settings.h"
@@ -41,7 +41,7 @@ extern "C" uint8_t __stop_rtc_noinit[] __attribute__((weak));
 #include <thread>
 #include <unistd.h>
 
-SharedRideState g_state;
+SharedDeviceState g_state;
 SemaphoreHandle_t g_i2cMutex = nullptr;
 SemaphoreHandle_t g_sdMutex = nullptr;
 
@@ -114,10 +114,8 @@ void setup() {
     pinMode(BOARD_BOOT_BTN, INPUT_PULLUP);
     sim::setBattery(100, false);   // the fuel gauge, set by the control channel from here
     settings::begin();
-    g_state.with([](RideState& s) {
+    g_state.with([](DeviceState& s) {
         s.tzMin = (int16_t)settings::tzMinutes();
-        s.useMiles = settings::useMiles();
-        s.clock24h = settings::clock24h();
     });
     bool uiOk = ui_dashboard::beginPanel();
     ui_dashboard::bootStep("SD card");
@@ -184,7 +182,7 @@ void loop() {
             bool usb = false;
             board_read_power(mv, ma);
             board_usb_power_present(usb);
-            RideState st = g_state.snapshot();
+            DeviceState st = g_state.snapshot();
             doba_batt::sample(mv, ma, st.batteryPercent, (uint16_t)(1500 * st.batteryPercent / 100), usb);
         }
     }
@@ -321,7 +319,6 @@ int main(int argc, char** argv) {
         };
         if (a == "--dir") sim::opts.dir = next();
         else if (a == "--sd") sim::opts.sdDir = next();
-        else if (a == "--ble-port") sim::opts.blePort = atoi(next().c_str());
         else if (a == "--ctl-port") sim::opts.ctlPort = atoi(next().c_str());
         else if (a == "--speed") sim::opts.speed = atof(next().c_str());
         else if (a == "--gps-baud") gpsBaud = next();
@@ -379,7 +376,7 @@ int main(int argc, char** argv) {
                 sim::feedConsole(l);
             }
         }).detach();
-    sim::consoleLine("[sim] simble on 127.0.0.1:" + std::to_string(sim::opts.blePort) + ", control on 127.0.0.1:" +
+    sim::consoleLine("[sim] control on 127.0.0.1:" +
                      std::to_string(sim::opts.ctlPort) + ", device dir " + sim::opts.dir);
     setup();
     for (;;) loop();

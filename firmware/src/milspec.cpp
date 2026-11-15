@@ -14,7 +14,7 @@
 #include "epd_compat.h"
 #include "map_view.h"
 #include "milgeo.h"
-#include "ride_state.h"
+#include "device_state.h"
 #include "topo_layer.h"
 #include "ui_render.h"
 
@@ -320,7 +320,7 @@ void drawGrid(const MapScreenData& map, uint8_t* fb) {
     for (int i = 0; i < nl; ++i) labelBox(labels[i].x, labels[i].y, labels[i].t, fb);
 }
 
-void drawTarget(const MapScreenData& map, const RideState& s, uint8_t* fb) {
+void drawTarget(const MapScreenData& map, const DeviceState& s, uint8_t* fb) {
     const bool have = s.gpsFix || s.everHadFix;
     const double lat = have ? s.latitude : map.centerLat;
     const double lon = have ? s.longitude : map.centerLon;
@@ -418,7 +418,7 @@ void drawCross(uint8_t* fb) {
 
 // DOBA: the strip under the map, in the calm style: the grid reference big,
 // lat/lon in grey under it, then three small facts each with its caption.
-void drawStrip(const MapScreenData& map, const RideState& s, uint8_t* fb) {
+void drawStrip(const MapScreenData& map, const DeviceState& s, uint8_t* fb) {
     const int W = SCREEN_W, H = 960, top = ui::MAP_STRIP_TOP;
     epd_fill_rect({0, top, W, H - top}, 0xFF, fb);
     epd_fill_rect({0, top, W, 1}, ui::HAIR, fb);

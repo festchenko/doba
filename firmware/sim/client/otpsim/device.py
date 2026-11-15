@@ -30,9 +30,8 @@ class SimDevice:
     device directory (NVS, bonds, SD card), waits for it to boot and connects
     the control channel. Use it as a context manager, or call stop()."""
 
-    def __init__(self, dir=None, ble_port=None, ctl_port=None, args=(), log_path=None):
+    def __init__(self, dir=None, ctl_port=None, args=(), log_path=None):
         self.dir = dir or tempfile.mkdtemp(prefix="otp-sim-")
-        self.ble_port = ble_port or free_port()
         self.ctl_port = ctl_port or free_port()
         self.args = list(args)
         self.log_path = log_path or os.path.join(self.dir, "console.log")
@@ -58,7 +57,7 @@ class SimDevice:
             raise RuntimeError("build the sim first: sim/build.sh")
         log = open(self.log_path, "ab")
         self.proc = subprocess.Popen(
-            [BINARY, "--dir", self.dir, "--ble-port", str(self.ble_port), "--ctl-port", str(self.ctl_port),
+            [BINARY, "--dir", self.dir, "--ctl-port", str(self.ctl_port),
              "--no-stdin"] + self.args,
             stdout=log, stderr=subprocess.STDOUT)
         self._connect(boot_timeout)
@@ -159,24 +158,8 @@ class SimDevice:
         or a brownout. Its state is kept; off again, it carries on."""
         self.cmd("gps_silent", on=on)
 
-    def sensor(self, kind, **values):
-        return self.cmd("sensor", kind=kind, **values)["addr"]
 
-    def remove_sensor(self, addr):
-        self.cmd("sensor_remove", addr=addr)
 
-    # -- sensors / radar / media inspection (PROTOCOL.md: sensor_state, media_state) --
-
-    def sensor_state(self):
-        """What the firmware made of its sensors: {"state": RideState's sensor
-        fields, speed arbitration and radar tracks, "links": per kind pairing
-        and link}."""
-        r = self.cmd("sensor_state")
-        return dict(state=r["state"], links={l["kind"]: l for l in r["links"]})
-
-    def media_state(self):
-        """The device's now-playing store as the MUSIC page reads it."""
-        return self.cmd("media_state")["media"]
 
     def wait_sensor_state(self, predicate, timeout=10, interval=0.1):
         deadline = time.time() + timeout
@@ -244,15 +227,7 @@ class SimDevice:
     def set_speed(self, factor):
         self.cmd("speed", factor=factor)
 
-    def link_pace(self, interval_ms=None, packets=None, window=None):
-        """The phone link's pace, live (control `link_pace`): None leaves a value as it is."""
-        args = {k: v for k, v in (("interval_ms", interval_ms), ("packets", packets), ("window", window))
-                if v is not None}
-        return self.cmd("link_pace", **args)
 
-    def drop_phone(self, reason=0x08):
-        """The radio link to the phone is lost (default: supervision timeout)."""
-        self.cmd("ble_drop", reason=reason)
 
     # -- mesh / LoRa radio (start with args=["--lora"]; see otpsim.mesh) ---------------------
 
@@ -314,12 +289,6 @@ class SimDevice:
         return self.status()["workout"]
 
     # ---- segments (cov/nav) ----
-    def segments(self):
-        """The SEGMENT page's matcher (host/tu/ui_dashboard.cpp): `count` (the
-        set accepted, segments::count), `loaded` (adopted by the UI task),
-        `phase` of the primary segment, and `list`: each relevant segment's
-        name, phase, elapsed_ms, done_m, len_m, pr_s, delta_ms, new_pr, ..."""
-        return self.cmd("segments")["segments"]
     # ---- end segments ----
 
     def reboot(self, timeout=30):
