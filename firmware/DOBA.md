@@ -129,3 +129,11 @@ settings pages, and their sim suites. The SD card's mounting, retries and USB
 lending moved from the recorder into `src/sd_card.cpp`. The vector map's
 footer is the position readout, as on the topo map (it showed speed, distance
 and ride time), and the MGRS grid and measuring work on both.
+
+Source layout after the clean-up (November 2026): the UI task, panel and
+console in `src/ui_dashboard.cpp`; the map screen in `src/ui_map.cpp` (shared
+state in `src/ui_shared.h`); Doba's pages in `src/doba_ui.cpp` (home, setup,
+the dispatcher, the power-off card), `doba_ui_comms.cpp`, `doba_ui_map.cpp`
+(map options, points, nearby, a point) and `doba_ui_pages.cpp` (SOS, sun,
+more, battery), sharing `doba_ui_shared.h`. The topo map is drawn through a
+canvas round the view (`src/topo_layer.cpp`): a drag or a walk is a copy.
