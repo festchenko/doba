@@ -43,6 +43,13 @@ int drawBase(const MapScreenData& map, uint8_t* fb);
 // (the map half a screen beyond each edge), so a drag or a walk lands on map
 // already drawn. False when there is nothing left to draw for it.
 bool idleStep(const MapScreenData& map);
+// While a finger drags the map: the view straight off the canvas as it stands,
+// blocks not drawn yet left as paper, nothing read from the card. False when the
+// view is off the canvas (the finger has gone beyond the margin).
+bool drawQuick(const MapScreenData& map, uint8_t* fb);
+// On a zoom tap: the last view shown, enlarged 2x (in) or shrunk 2x (out) about
+// its centre, from the canvas, at once. The sharp frame follows.
+bool drawZoomPreview(uint8_t* fb, bool zoomIn);
 // This view is already drawn on the canvas: showing it is a copy.
 bool viewReady(const MapScreenData& map);
 // Console `topo canvas off`: every frame straight from the tiles (to compare).

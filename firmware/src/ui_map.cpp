@@ -498,4 +498,46 @@ void farewellTest() {
 }
 
 
+// DOBA: the map follows a finger while it drags (released, the drag is kept by
+// mapDrag). Each frame is the canvas round the view, copied (topo::drawQuick):
+// nothing comes off the card while the finger moves, so frames go out as fast
+// as the panel takes them, at most one in 120 ms. Off the canvas (dragged past
+// its margin) the map waits for the finger to let go.
+bool liveDragging = false;
+uint32_t liveLastPaint = 0;
+
+bool mapLiveDrag() {
+    if (screen != SCREEN_MAP || powerOverlay || !touchWasDown) {
+        liveDragging = false;
+        return false;
+    }
+    const int x0 = touchStartX, y0 = touchStartY, x = touchNowX, y = touchNowY;
+    if (y0 < ui::STATUS_H || y0 >= ui::MAP_STRIP_TOP) return false;
+    if (x0 >= kMapZoom.zoomX - 10) return false;          // the button column
+    const int dx = x - x0, dy = y - y0;
+    if (!liveDragging && dx * dx + dy * dy < 30 * 30) return false;
+    liveDragging = true;
+    if (millis() - liveLastPaint < 120) return false;
+    const float e = mapPanE, n = mapPanN;
+    mapPanE -= dx * mapMpp;
+    mapPanN += dy * mapMpp;
+    MapScreenData map = {};
+    const DeviceState s = g_state.snapshot();
+    buildMapScreenData(s, map);
+    uint8_t* fb = epdc_framebuffer();
+    memset(fb, 0xFF, fbSize);
+    const bool ok = map.topo && topo::drawQuick(map, fb);
+    if (ok) ui_render_map(map, s, fb, /*baseDrawn=*/true);
+    mapPanE = e;
+    mapPanN = n;
+    if (!ok) {
+        if (shadowFb) memcpy(fb, shadowFb, fbSize);
+        return false;
+    }
+    liveLastPaint = millis();
+    refresh(false, true, false, false, false, false);
+    if (dbgTiming) diag::log("map: live drag %d,%d", dx, dy);
+    return true;
+}
+
 }  // namespace uid

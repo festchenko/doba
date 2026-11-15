@@ -69,6 +69,9 @@ extern bool dbgTiming;               // console `timing`: log every frame
 extern bool powerOverlay;            // the power sheet is up
 extern bool g_offByPowerKey;
 extern volatile bool touchIrq, touchWasDown;
+extern volatile int16_t touchStartX, touchStartY, touchNowX, touchNowY;
+bool refresh(bool screenChanged, bool fastInPage, bool listFast,
+             bool forceClean, bool gc16, bool fullFlash);
 extern bool forceDraw;
 bool meshNoticeShown();
 void drawMeshNotice(uint8_t* fb);
@@ -92,5 +95,6 @@ bool mapDrag(int x0, int y0, int x1, int y1);
 bool mapLongPress(int x, int y);
 void renderFarewell(uint8_t* fb);
 void farewellTest();
+bool mapLiveDrag();                  // a frame of the map under a moving finger; true if painted
 
 }  // namespace uid

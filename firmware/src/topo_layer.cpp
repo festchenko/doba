@@ -389,6 +389,9 @@ struct Canvas {
     int32_t wx0 = 0, wy0 = 0;         // world px (at z) of canvas portrait (0, 0)
     bool valid[BROWS][BCOLS] = {};
     int validCount = 0;
+    // The view last put on the screen from it: where, and where its centre was.
+    bool shown = false;
+    int shownOx = 0, shownOy = 0, shownRiderX = 0, shownRiderY = 0;
 } g_cv;
 
 uint32_t g_generationForCanvas();
@@ -442,6 +445,33 @@ void renderBlock(int br, int bc) {
 void invalidateCanvas() {
     memset(g_cv.valid, 0, sizeof g_cv.valid);
     g_cv.validCount = 0;
+    g_cv.shown = false;
+}
+
+inline uint8_t getCanvas(int cx, int cy) {
+    int nx, ny;
+    if (g_cv.inverted) { nx = cy; ny = CW - 1 - cx; }
+    else               { nx = CH - 1 - cy; ny = cx; }
+    const uint8_t b = g_cv.px[(size_t)ny * CROW + (nx >> 1)];
+    return (nx & 1) ? (b >> 4) : (b & 0x0F);
+}
+
+inline bool canvasPixelReady(int cx, int cy) {
+    return cx >= 0 && cy >= 0 && cx < CW && cy < CH && g_cv.valid[cy / BH][cx / BW];
+}
+
+// Where the view would sit on the canvas as it stands, without moving it.
+bool viewOnCanvas(const MapScreenData& map, int& ox, int& oy) {
+    if (!g_cv.anchored || !g_cv.px) return false;
+    const double lat = map.centerLat, lon = map.centerLon;
+    const int z = zoomFor(lat, map.metersPerPixel);
+    if (z != g_cv.z || g_cv.gen != g_generationForCanvas()) return false;
+    if (fabs(map.metersPerPixel / nativeMpp(z, lat) - 1.0) > 1e-3) return false;
+    const double world = (double)TILE * (double)(1u << z);
+    const double lr = lat * M_PI / 180.0;
+    ox = (int32_t)floor((lon + 180.0) / 360.0 * world) - map.riderX - g_cv.wx0;
+    oy = (int32_t)floor((1.0 - asinh(tan(lr)) / M_PI) / 2.0 * world) - map.riderY - g_cv.wy0;
+    return ox >= 0 && ox <= CW - SCREEN_W && oy >= 0 && oy <= CH - SCREEN_H;
 }
 
 // Where the view's top-left falls on the canvas, re-anchoring it round the view
@@ -512,20 +542,45 @@ int drawBase(const MapScreenData& map, uint8_t* fb) {
         for (int bc = ox / BW; bc <= (ox + SCREEN_W - 1) / BW; ++bc)
             if (!g_cv.valid[br][bc]) renderBlock(br, bc);
     blit(fb, ox, oy);
+    g_cv.shown = true;
+    g_cv.shownOx = ox; g_cv.shownOy = oy;
+    g_cv.shownRiderX = map.riderX; g_cv.shownRiderY = map.riderY;
     return (int)(g_stats.missing - missingBefore);
 }
 
+bool drawQuick(const MapScreenData& map, uint8_t* fb) {
+    int ox, oy;
+    if (!g_canvasOn || !viewOnCanvas(map, ox, oy)) return false;
+    blit(fb, ox, oy);
+    // blocks not drawn yet hold whatever was there before: paper instead
+    for (int br = oy / BH; br <= (oy + SCREEN_H - 1) / BH; ++br)
+        for (int bc = ox / BW; bc <= (ox + SCREEN_W - 1) / BW; ++bc)
+            if (!g_cv.valid[br][bc])
+                epd_fill_rect({bc * BW - ox, br * BH - oy, BW, BH}, 0xFF, fb);
+    return true;
+}
+
+bool drawZoomPreview(uint8_t* fb, bool zoomIn) {
+    if (!g_canvasOn || !g_cv.shown || !g_cv.px) return false;
+    g_inverted = epd_get_rotation() == EPD_ROT_INVERTED_PORTRAIT;
+    const int rx = g_cv.shownRiderX, ry = g_cv.shownRiderY;
+    const int ox = g_cv.shownOx, oy = g_cv.shownOy;
+    for (int y = 0; y < SCREEN_H; ++y) {
+        // the new screen row in the old view: halved (in) or doubled (out) about the centre
+        const int sy = zoomIn ? ry + ((y - ry) >> 1) : ry + 2 * (y - ry);
+        const int cy = oy + sy;
+        for (int x = 0; x < SCREEN_W; ++x) {
+            const int sx = zoomIn ? rx + ((x - rx) >> 1) : rx + 2 * (x - rx);
+            const int cx = ox + sx;
+            putPortrait(fb, x, y, canvasPixelReady(cx, cy) ? getCanvas(cx, cy) : 15);
+        }
+    }
+    return true;
+}
+
 bool viewReady(const MapScreenData& map) {
-    if (!g_canvasOn || !g_cv.anchored || !g_cv.px) return false;
-    const double lat = map.centerLat, lon = map.centerLon;
-    const int z = zoomFor(lat, map.metersPerPixel);
-    if (z != g_cv.z || g_cv.gen != g_generationForCanvas()) return false;
-    if (fabs(map.metersPerPixel / nativeMpp(z, lat) - 1.0) > 1e-3) return false;
-    const double world = (double)TILE * (double)(1u << z);
-    const double lr = lat * M_PI / 180.0;
-    const int ox = (int32_t)floor((lon + 180.0) / 360.0 * world) - map.riderX - g_cv.wx0;
-    const int oy = (int32_t)floor((1.0 - asinh(tan(lr)) / M_PI) / 2.0 * world) - map.riderY - g_cv.wy0;
-    if (ox < 0 || ox > CW - SCREEN_W || oy < 0 || oy > CH - SCREEN_H) return false;
+    int ox, oy;
+    if (!g_canvasOn || !viewOnCanvas(map, ox, oy)) return false;
     for (int br = oy / BH; br <= (oy + SCREEN_H - 1) / BH; ++br)
         for (int bc = ox / BW; bc <= (ox + SCREEN_W - 1) / BW; ++bc)
             if (!g_cv.valid[br][bc]) return false;

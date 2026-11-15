@@ -404,6 +404,9 @@ void shutdownDevice(uint8_t* fb, const char* reason) {
 // Long-press tracking
 uint32_t touchDownAt = 0;
 volatile bool touchWasDown = false;   // DOBA: written by touchTask
+// Where the finger went down and where it is now, while it is on the glass (the
+// map follows a drag with them). Written by touchTask, read by the UI task.
+volatile int16_t touchStartX = 0, touchStartY = 0, touchNowX = 0, touchNowY = 0;
 void touchTask(void*) {
     int16_t x0 = 0, y0 = 0, lx = 0, ly = 0;
     uint32_t downAt = 0;
@@ -418,8 +421,12 @@ void touchTask(void*) {
         i2cUnlock();
         touchIrq = false;
         if (now) {
+            const int16_t px = lx, py = ly;
             lx = x[0]; ly = y[0];
-            if (!down) { x0 = lx; y0 = ly; downAt = millis(); }
+            if (!down) { x0 = lx; y0 = ly; downAt = millis(); touchStartX = x0; touchStartY = y0; }
+            touchNowX = lx; touchNowY = ly;
+            // a finger moving: let the UI task see it (the map follows a drag)
+            if (down && (abs(lx - px) + abs(ly - py)) >= 4 && uiWake) xSemaphoreGive(uiWake);
         } else if (down) {
             const TouchEv ev = {x0, y0, lx, ly, downAt, millis()};
             xQueueSend(g_touchQ, &ev, 0);
@@ -646,9 +653,19 @@ void cycleBacklight() {
 // zoom range — where mapMpp is clamped and the rest of the frame is unchanged —
 // would leave the button stuck black: the next frame would compare equal to the
 // shadow and never repaint.
-void ackZoomTap(bool zoomIn) {
+void ackZoomTap(bool zoomIn, float mppBefore) {
     if (screen != SCREEN_MAP) return;
     uint8_t* fb = epdc_framebuffer();
+    // DOBA: the new zoom at once, from the map already drawn: the last view
+    // enlarged (or shrunk) 2x about its centre, under the new zoom's chrome. Soft
+    // for a moment; the sharp frame follows. Not at the end of the range.
+    MapScreenData map = {};
+    const DeviceState s = g_state.snapshot();
+    buildMapScreenData(s, map);
+    if (fabsf(map.metersPerPixel - mppBefore) > 0.01f && map.topo && topo::drawZoomPreview(fb, zoomIn)) {
+        ui_render_map(map, s, fb, /*baseDrawn=*/true);
+        if (dbgTiming) diag::log("map: zoom preview %s", zoomIn ? "in" : "out");
+    }
     ui_map_draw_zoom_button(zoomIn, true, fb);
     refresh(false, true, false);
     // Stay pressed until the map has actually caught up. A single flash before
@@ -723,15 +740,17 @@ void handleTap(int x, int y) {
                     break;
                 }
                 if (y >= kMapZoom.zoomInY && y < kMapZoom.zoomInY + kMapZoom.size) {
-                    if (mapMpp > 1.0f) mapMpp /= 2.0f;
+                    const float before = mapMpp;
+                    if (mapMpp > 0.2f) mapMpp /= 2.0f;   // snapped to the deepest tiles here
                     Serial.printf("[map] zoom in -> %.2f m/px\n", mapMpp);
-                    ackZoomTap(true);
+                    ackZoomTap(true, before);
                     break;
                 }
                 if (y >= kMapZoom.zoomOutY && y < kMapZoom.zoomOutY + kMapZoom.size) {
+                    const float before = mapMpp;
                     if (mapMpp < mapMaxMpp()) mapMpp *= 2.0f;
                     Serial.printf("[map] zoom out -> %.2f m/px\n", mapMpp);
-                    ackZoomTap(false);
+                    ackZoomTap(false, before);
                     break;
                 }
             }
@@ -1699,7 +1718,7 @@ static void runConsoleLine(char* line) {
         else { Serial.printf("[cmd] unknown screen '%s'\n", arg); return; }
         noteActivity();
     } else if (!strcasecmp(cmd, "zoom")) {
-        if (arg && !strcasecmp(arg, "in") && mapMpp > 1.0f) mapMpp /= 2.0f;
+        if (arg && !strcasecmp(arg, "in") && mapMpp > 0.2f) mapMpp /= 2.0f;
         else if (arg && !strcasecmp(arg, "out") && mapMpp < mapMaxMpp()) mapMpp *= 2.0f;
         screen = SCREEN_MAP; noteActivity();
     } else if (!strcasecmp(cmd, "greytest")) {   // DOBA: panel grey levels card
@@ -1988,6 +2007,8 @@ TRC("touch");         if (touchOk && g_touchQ) {
                 else handleTap(ev.x1, ev.y1);
             }
         }
+        // DOBA: a finger dragging the map: the map goes with it.
+        if (touchOk) mapLiveDrag();
 
         // Capacitive Home button (GT911 key). On the two main screens it swaps
         // dash <-> map — the gesture that used to be "tap anywhere", now on a
