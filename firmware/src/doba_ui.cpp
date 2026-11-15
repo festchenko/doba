@@ -952,7 +952,10 @@ void renderComms(const DeviceState& s, uint8_t* fb) {
     }
 }
 
+CommsView g_chatFrom = CV_CHATS;   // the list a chat was opened from: Back returns there
+
 void openChat(uint8_t ch, uint32_t dm) {
+    if (g_cv == CV_CHATS || g_cv == CV_NODES) g_chatFrom = g_cv;
     g_chatCh = ch;
     g_chatDm = dm;
     g_chatScroll = 0;
@@ -1031,7 +1034,8 @@ Go tapComms(int x, int y) {
 // Back inside COMMS: quick -> chat -> the list it came from. false at the list.
 bool commsBack() {
     if (g_cv == CV_QUICK) { g_cv = CV_CHAT; return true; }
-    if (g_cv == CV_CHAT) { g_cv = g_chatDm && g_seenCount >= 0 ? CV_CHATS : CV_CHATS; return true; }
+    // (It went to Chats either way: a chat opened from Nodes came back to Chats.)
+    if (g_cv == CV_CHAT) { g_cv = g_chatFrom; return true; }
     return false;
 }
 
@@ -1045,12 +1049,12 @@ void renderCompose(const DeviceState& s, uint8_t* fb) {
     char t[48], hdr[64];
     chatTitle(g_chatCh, g_chatDm, t, sizeof t);
     snprintf(hdr, sizeof hdr, TR("TO: %s"), t);
-    fit(ui::font(ui::F_SMALL), hdr, W - 120);
-    ui::text(ui::font(ui::F_SMALL), 14, TOP + 34, hdr, fb, EPD_DRAW_ALIGN_LEFT, INK);
+    fit(ui::font(ui::F_SMALL), hdr, W - 140);
+    ui::text(ui::font(ui::F_SMALL), 24, TOP + 34, hdr, fb, EPD_DRAW_ALIGN_LEFT, INK);
     char cnt[16];
     snprintf(cnt, sizeof cnt, "%u/%u", (unsigned)strlen(g_compose.text), (unsigned)mesh::MAX_TEXT_LEN);
-    ui::text(ui::font(ui::F_TINY), W - 14, TOP + 34, cnt, fb, EPD_DRAW_ALIGN_RIGHT, INK);
-    const EpdRect box = {10, TOP + 48, W - 20, g_compose.top - TOP - 64};
+    ui::text(ui::font(ui::F_TINY), W - 24, TOP + 34, cnt, fb, EPD_DRAW_ALIGN_RIGHT, INK);
+    const EpdRect box = {24, TOP + 48, W - 48, g_compose.top - TOP - 64};   // the page margin
     frame(box, 2, fb);
     char shown[300];
     snprintf(shown, sizeof shown, "%s_", g_compose.text);
