@@ -357,10 +357,13 @@ int drawBase(const MapScreenData& map, uint8_t* fb) {
     return (int)(g_stats.missing - missingBefore);
 }
 
+static uint32_t g_generation = 1;
 void reset() {
     for (Slot& s : g_slots) s.valid = false;
     for (CellSeen& c : g_cells) c = CellSeen();
+    ++g_generation;
 }
+uint32_t generation() { return g_generation; }
 
 Stats stats() { return g_stats; }
 

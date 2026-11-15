@@ -58,6 +58,22 @@ def ride(mesh, screen):
     mesh.dev.wait_status(lambda s: s["screen"] == screen, timeout=5)
 
 
+MPP = re.compile(r"map: .* mpp=(\d+\.\d+)")
+
+
+def up_150px(mesh):
+    """Metres that put a rider 150 px above the position at the map's zoom
+    (the map snaps to the topo tile zooms, so it is read off the frame log)."""
+    deadline = time.time() + 5 * TIME_SCALE
+    while time.time() < deadline:
+        m = [MPP.search(l) for l in mesh.dev.log()]
+        m = [x for x in m if x]
+        if m:
+            return 150 * float(m[-1].group(1))
+        time.sleep(0.2)
+    raise AssertionError("no map frame logged")
+
+
 def wait_peers(dev, since, n, timeout=10):
     """The first map frame after `since` showing `n` dots, once it is painted
     (the next frame line or a refresh after it)."""
@@ -112,11 +128,11 @@ def test_a_group_riders_shared_position_is_a_dot_on_the_device_map(mesh, tmp_pat
     assert ring_ink(glass(mesh, tmp_path, "before"), RIDER[0], RIDER[1] - 150) < 0.5
 
     introduce(mesh, alex(channel=group))
-    mesh.hear(alex(channel=group).position(*north(300)))
+    mesh.hear(alex(channel=group).position(*north(up_150px(mesh))))
     mesh.drain()
     wait_peers(mesh.dev, seq, 1)
     g = glass(mesh, tmp_path, "with-alex")
-    assert ring_ink(g, RIDER[0], RIDER[1] - 150) > 0.8, "no ring 300 m north of the rider"
+    assert ring_ink(g, RIDER[0], RIDER[1] - 150) > 0.8, "no ring 150 px north of the rider"
     # Hollow, with "Al" in it.
     assert 0.1 < dot_ink(g, RIDER[0], RIDER[1] - 150, r=8) < 0.8
 
@@ -126,7 +142,7 @@ def test_positions_from_the_public_channel_stay_off_the_map(mesh, tmp_path):
     ride(mesh, "map")
     seq = mesh.dev.log_seq()
     introduce(mesh, bea())
-    mesh.hear(bea().position(*north(300)))
+    mesh.hear(bea().position(*north(up_150px(mesh))))
     mesh.drain()
     assert any(n.num == BEA and n.HasField("position") for n in mesh.nodes()), "the position did arrive"
     mesh.dev.console("zoom in")        # one more frame, after the position
@@ -146,7 +162,7 @@ def test_a_rider_off_the_screen_is_pinned_to_the_edge_pointing_their_way(mesh, t
     g = glass(mesh, tmp_path, "far")
     # Pinned straight up from the rider, under the status bar, its pointer
     # out of the top of the ring.
-    marker = (RIDER[0], 64 + 84)
+    marker = (RIDER[0], 64 + 52 + 84)   # under the status bar and the header band
     assert ring_ink(g, *marker) > 0.8, "no marker at the top edge"
     assert dot_ink(g, marker[0], marker[1] - 42, r=4) > 0.8, "no pointer above it"
     assert dot_ink(g, marker[0], marker[1] + 42, r=4) < 0.5, "pointer the wrong way"
@@ -159,7 +175,7 @@ def test_forgetting_the_channel_takes_its_riders_off_the_map(mesh, tmp_path):
     group = join_group(mesh)
     ride(mesh, "map")
     seq = mesh.dev.log_seq()
-    mesh.hear(alex(channel=group).position(*north(300)))
+    mesh.hear(alex(channel=group).position(*north(up_150px(mesh))))
     mesh.drain()
     wait_peers(mesh.dev, seq, 1)
 

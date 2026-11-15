@@ -66,7 +66,6 @@ void usage() {
             "  --sd-latency-ms N      every card open/read/write costs N ms of device time (a slow card)\n"
             "  --sd-size-mb N         the card's capacity (default 32 GB); writes fail when it is full\n"
             "  --sd-cluster-kb N      its FAT cluster size (default 32 KB from 2 GB up, else 16 KB)\n"
-            "otp-sim card-tool h3 ...      build card contents (sim/host/cardtool_sim.cpp)\n"
             "  --lora                 an SX1262 LoRa radio is fitted (the mesh); its air is the control channel\n"
             "  --mac AA:BB:CC:DD:EE:FF  the board's MAC (the mesh node number is bytes 2-5)\n"
             "  --quiet                don't echo the console to stdout\n"
@@ -313,7 +312,6 @@ int sim::resetReasonByName(const std::string& n) {
 int main(int argc, char** argv) {
     bool readStdin = true;
     std::string wallclock, gpsBaud;
-    if (argc > 1 && !strcmp(argv[1], "card-tool")) return sim::cardTool(argc - 2, argv + 2);
     for (int i = 0; i < argc; ++i) sim::opts.argv.push_back(argv[i]);
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];

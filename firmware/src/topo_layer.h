@@ -42,6 +42,8 @@ int drawBase(const MapScreenData& map, uint8_t* fb);
 
 // Forget open packs and cached tiles (the card was removed or rewritten).
 void reset();
+// Moves on with every reset(): a map layer drawn before it is out of date.
+uint32_t generation();
 
 // For the console / sim tests: tiles decoded, cache hits, packs opened.
 struct Stats { uint32_t decoded, hits, missing, packsOpened; };

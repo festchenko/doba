@@ -104,4 +104,13 @@ bool nearest(double lat, double lon, char* name, size_t n, double& distM, double
     return found;
 }
 
+// The card changed (a computer wrote to it, or it came back): read the file
+// again on next use. A Doba that booted without it never looked again.
+void rescan() {
+    if (g_cells) heap_caps_free(g_cells);
+    g_cells = nullptr;
+    g_cellCount = g_count = 0;
+    g_state = 0;
+}
+
 }  // namespace doba_places

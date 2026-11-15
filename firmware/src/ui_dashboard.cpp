@@ -1,5 +1,6 @@
 #include "ui_dashboard.h"
 #include "doba_places.h"
+#include "doba_pois.h"
 #include "milgeo.h"
 
 #include <Arduino.h>
@@ -35,8 +36,6 @@
 #include "doba_points.h" // DOBA
 #include "doba_dem.h"    // DOBA
 #include "doba_library.h" // DOBA
-#include "map_tiles.h"
-#include "map_store.h"
 #include "i2c_bus.h"
 #include "usb_storage.h"
 #include <esp_random.h>
@@ -79,10 +78,9 @@ bool mapTopoActive = false;
 // DOBA: the grey calibration card is up (console `greytest`; any touch or
 // key, or `greytest off`, takes it down).
 bool greyTestShown = false;
-inline float mapMaxMpp() { return mapTopoActive ? 200.0f : 32.0f; }
+inline float mapMaxMpp() { return 200.0f; }   // ~z9: the widest the topo packs go
 // Whether the next map frame may read tiles off the card. See renderMapScreen:
 // the first pass after any change is drawn from RAM alone so it lands at once.
-bool mapFullPass = false;
 // Which zoom button is showing its pressed state (0 none, 1 in, 2 out). Held
 // from the tap until a COMPLETE map frame has been drawn.
 int zoomHeld = 0;
@@ -103,18 +101,10 @@ uint32_t mapCacheHits = 0, mapCacheMisses = 0, mapPrerenders = 0, mapPrerendersC
 // riding it never gets here, which is the point: those frames would go unused.
 constexpr uint32_t kMapStillMs = 3000;
 constexpr uint32_t kMapPrerenderRetryMs = 5000;
-// A cached layer is four things, one after the other. The base layer's pixels at one
-// bit each: it is pure black and white, and PSRAM spent here comes straight out of the
-// tile cache, which is what wide views live on. What the tile pass found, so a frame
-// that skips it still reports the same map. Its POIs, which go on top of the base but
-// come out of that pass too. And where its water is.
-constexpr int kMapCachePois = 512;
-struct MapLayerFacts {
-    int32_t poiCount, features, tilePolys, projectedTiles, wantedTiles, parks, waters;
-    decltype(MapScreenData::clsCount) classes;
-};
+// A cached layer is the base layer's pixels as drawn: the topo tiles in their
+// greys. (It was packed to one bit a pixel when the base was black vector roads,
+// which turned a cached topo view into a thresholded copy of itself.)
 const uint8_t* mapFrameBase = nullptr;   // this frame's cached layer, if it has one
-const uint8_t* mapFrameWater = nullptr;  // and where its water is, for a zoom's scrub
 uint8_t* mapPrerenderFb = nullptr;       // a full framebuffer to prerender into
 uint8_t* mapLayerBeingKept = nullptr;
 
@@ -286,7 +276,7 @@ static bool g_offByPowerKey = false;
 // this frame is the one nobody can watch being built.
 void renderFarewell(uint8_t* fb) {
     memset(fb, 0xFF, fbSize);
-    mapMpp = 32.0f;   // max zoom-out (1/2/4/8/16/32 m per px)
+    mapMpp = 32.0f;   // a wide view: snapped to the topo zoom nearest it
     // Always north-up for the farewell. This image sits on the glass for
     // days; rotated to whatever heading the last fix happened to have, it is
     // unreadable as a map of where the bike is. (Deep sleep follows
@@ -299,25 +289,11 @@ void renderFarewell(uint8_t* fb) {
     MapScreenData map = {};
     const uint32_t t0 = millis();
     buildMapScreenData(s, map, /*finalFrame=*/true);
-    // The widest zoom only suits a card that has that much map. Past what was
-    // downloaded it is blank paper, with the map a patch in the middle, and this frame
-    // stays up for days. So go in to the widest view the card can fill. A card with
-    // nothing that fills any view keeps the widest, since that shows the most it has.
-    if (map.projectedTiles < map.wantedTiles) {
-        for (float mpp = 16.0f; mpp >= 2.0f; mpp /= 2.0f) {
-            if (!map_store::coversView(map.centerLat, map.centerLon, mpp)) continue;
-            mapMpp = mpp;
-            map = MapScreenData();
-            buildMapScreenData(s, map, /*finalFrame=*/true);
-            break;
-        }
-    }
     const uint32_t t1 = millis();
     ui_render_map_features(map, s, fb);
-    diag::log("farewell: %d m/px project=%lu draw=%lu tiles=%d/%d polys=%d water=%d parks=%d%s%s at=%.5f,%.5f",
-              (int)mapMpp, (unsigned long)(t1 - t0), (unsigned long)(millis() - t1), map.projectedTiles,
-              map.wantedTiles, map.featureCount, map.waterCount, map.parkCount,
-              map.partial ? " CUT" : "", map.hasMap ? "" : " NOMAP", map.centerLat, map.centerLon);
+    diag::log("farewell: %.1f m/px build=%lu draw=%lu%s at=%.5f,%.5f",
+              mapMpp, (unsigned long)(t1 - t0), (unsigned long)(millis() - t1),
+              map.topo ? "" : " NOMAP", map.centerLat, map.centerLon);
     doba_ui::renderOffCard(s, g_offByPowerKey, fb);   // DOBA: the paper card
 }
 
@@ -834,7 +810,7 @@ void handleTap(int x, int y) {
         case SCREEN_MAP:
             {
                 int dx = x - kMapCompass.cx,
-                    dy = y - mapCompassCy(false) - (mapTopoActive ? 56 : 0);
+                    dy = y - mapCompassCy(false) - 56;
                 if (dx * dx + dy * dy <= kMapCompass.r * kMapCompass.r) {
                     mapTrackUp = !mapTrackUp;
                     break;
@@ -952,6 +928,27 @@ static void peerInitials(const mesh_service::Node& nd, char out[3]) {
     snprintf(out, 3, "?");
 }
 
+// A point on the screen, around (centerX, centerY) at the view's centre: a local
+// flat projection, rotated by rotateDeg, clamped well inside int16.
+void geoToScreen(double lat, double lon, double centerLat, double centerLon,
+                 float metersPerPixel, int centerX, int centerY,
+                 float rotateDeg, int16_t& sx, int16_t& sy) {
+    const double kxl = 111320.0 * cos(centerLat * M_PI / 180.0);
+    float x = centerX + (float)((lon - centerLon) * kxl / metersPerPixel);
+    float y = centerY - (float)((lat - centerLat) * 110540.0 / metersPerPixel);
+    if (rotateDeg != 0) {
+        const float rc = cosf(rotateDeg * (float)M_PI / 180.0f);
+        const float rs = sinf(rotateDeg * (float)M_PI / 180.0f);
+        const float dx = x - centerX, dy = y - centerY;
+        x = centerX + dx * rc - dy * rs;
+        y = centerY + dx * rs + dy * rc;
+    }
+    x = x < -20000 ? -20000 : x > 20000 ? 20000 : x;
+    y = y < -20000 ? -20000 : y > 20000 ? 20000 : y;
+    sx = (int16_t)lroundf(x);
+    sy = (int16_t)lroundf(y);
+}
+
 // Riders on our private mesh channels who have told us where they are (see
 // MapPeer). Public-channel positions are left off: those are strangers, and a
 // busy public mesh would cover the map in them.
@@ -976,13 +973,14 @@ void buildMapPeers(double lat, double lon, float rot, bool useMiles,
         const float distM = (float)sqrt(dx * dx + dy * dy);
         const float mpp = distM / mapMpp > 8000.0f ? distM / 8000.0f : mapMpp;
         int16_t x, y;
-        map_tiles::geoToScreen(nd.latitude, nd.longitude, lat, lon, mpp,
-                               map.riderX, map.riderY, rot, x, y);
+        geoToScreen(nd.latitude, nd.longitude, lat, lon, mpp,
+                    map.riderX, map.riderY, rot, x, y);
 
         // Inside the map with room for the marker, clear of the top band when
         // something is drawn in it; otherwise pinned further in, so the
         // pointer reaching out of it toward them stays on the glass too.
-        const int bandBottom = ui::STATUS_H + (map.navBannerVisible ? 138 : 0);
+        // Under the status bar and the map's header band (52 px), or the popup.
+        const int bandBottom = ui::STATUS_H + (map.navBannerVisible ? 138 : 52);
         MapPeer& p = peers[count];
         p.offscreen = x < 24 || x > 540 - 24 || y < bandBottom + 24 ||
                       y > ui::MAP_STRIP_TOP - 24;
@@ -1044,83 +1042,21 @@ MapBaseKey mapKeyFor(const MapScreenData& map) {
     k.lon = map.centerLon + mapPanE / (111320.0 * cos(map.centerLat * M_PI / 180.0));
     k.mpp = map.metersPerPixel;
     k.rotDeg = map.northDeg;
-    k.layers = map.layers;
-    k.tiles = map_store::generation();
-    k.hasMap = map.hasMap;
+    k.tiles = topo::generation();
+    k.hasMap = map.topo;
     return k;
 }
 
 void mapCacheAllocate() {
     if (mapCacheAllocated) return;
     mapCacheAllocated = true;
-    const size_t bytes = fbSize / 4 + sizeof(MapLayerFacts) + kMapCachePois * sizeof(MapPoi) +
-                         fbSize / 8;
+    const size_t bytes = fbSize;
     for (int i = 0; i < MapBaseCache::kSlots; ++i)
         mapCache.attach(i, (uint8_t*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM));
     mapPrerenderFb = (uint8_t*)heap_caps_malloc(fbSize, MALLOC_CAP_SPIRAM);
 }
 
-MapLayerFacts* cachedFacts(const uint8_t* layer) { return (MapLayerFacts*)(layer + fbSize / 4); }
-MapPoi* cachedPois(const uint8_t* layer) {
-    return (MapPoi*)(layer + fbSize / 4 + sizeof(MapLayerFacts));
-}
-
-// Four framebuffer bytes, so eight pixels, to one byte and back. White is 1.
-void mapLayerPack(const uint8_t* fb, uint8_t* layer) {
-    for (size_t i = 0; i < fbSize / 4; ++i) {
-        uint8_t bits = 0;
-        for (int b = 0; b < 4; ++b) {
-            const uint8_t px = fb[i * 4 + b];
-            bits |= (uint8_t)(((px & 0x80) ? 2 : 0) | ((px & 0x08) ? 1 : 0)) << (2 * b);
-        }
-        layer[i] = bits;
-    }
-}
-
-void mapLayerExpand(const uint8_t* layer, uint8_t* fb) {
-    static uint32_t table[256];
-    if (!table[0xFF]) {
-        for (int v = 0; v < 256; ++v) {
-            uint8_t out[4];
-            for (int b = 0; b < 4; ++b) {
-                const int two = (v >> (2 * b)) & 3;
-                out[b] = (uint8_t)(((two & 2) ? 0xF0 : 0) | ((two & 1) ? 0x0F : 0));
-            }
-            memcpy(&table[v], out, 4);
-        }
-    }
-    uint32_t* words = (uint32_t*)fb;
-    for (size_t i = 0; i < fbSize / 4; ++i) words[i] = table[layer[i]];
-}
-
-void mapLayerKeep(const uint8_t* fb) { mapLayerPack(fb, mapLayerBeingKept); }
-
-uint8_t* cachedWater(const uint8_t* layer) {
-    return (uint8_t*)cachedPois(layer) + kMapCachePois * sizeof(MapPoi);
-}
-
-// What a stored layer needs besides its pixels. Call straight after drawing it.
-void mapCacheKeepExtras(uint8_t* layer, const MapScreenData& map) {
-    const int n = map.poiCount < kMapCachePois ? map.poiCount : kMapCachePois;
-    if (n) memcpy(cachedPois(layer), map.pois, n * sizeof(MapPoi));
-    MapLayerFacts* facts = cachedFacts(layer);
-    facts->poiCount = n;
-    facts->features = map.featureCount;
-    facts->tilePolys = map.tilePolys;
-    facts->projectedTiles = map.projectedTiles;
-    facts->wantedTiles = map.wantedTiles;
-    facts->parks = map.parkCount;
-    facts->waters = map.waterCount;
-    memcpy(facts->classes, map.clsCount, sizeof(facts->classes));
-
-    uint8_t* bits = cachedWater(layer);
-    memset(bits, 0, fbSize / 8);
-    if (const uint8_t* mask = ui_map_dither_mask()) {
-        for (size_t i = 0; i < fbSize; ++i) {
-            if (mask[i]) bits[i >> 3] |= (uint8_t)(1 << (i & 7));
-        }
-    }
-}
+void mapLayerKeep(const uint8_t* fb) { memcpy(mapLayerBeingKept, fb, fbSize); }
 
 void buildMapScreenData(const RideState& s, MapScreenData& map,
                         bool finalFrame) {
@@ -1145,7 +1081,6 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
     // band, so it displaces the compass the same way.
     map.navBannerVisible = meshNoticeShown();
     map.metersPerPixel = mapMpp;
-    map.layers = settings::mapLayers();
 
     // Position priority: the current GPS fix; else the last known position;
     // else the persisted/default.
@@ -1161,13 +1096,13 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
     }
     map.centerLat = lat;
     map.centerLon = lon;
-    // DOBA: a topo pack under the rider takes over the base layer. Its tiles
-    // are drawn 1:1, so the zoom snaps to the tile zoom nearest the one asked
-    // for (the zoom buttons still halve/double; the snap keeps them on tile
-    // zooms), and the map is north-up: a raster is not rotated.
+    // DOBA: the base layer is the topo pack under the view. Its tiles are drawn
+    // 1:1, so the zoom snaps to the tile zoom nearest the one asked for (the
+    // zoom buttons still halve/double; the snap keeps them on tile zooms), and
+    // the map is north-up: a raster is not rotated.
     map.topo = topo::covers(lat, lon);
     mapTopoActive = map.topo;
-    if (map.topo) {
+    {
         // DOBA: the first topo view opens at z14 (~6 m/px), not at the closest
         // level, so + and - both do something from the start.
         static bool opened = false;
@@ -1192,10 +1127,10 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
     }
     // DOBA: dragged: the view stays north-up and the position moves on the
     // screen (it may leave it); everything is still drawn round it.
-    map.zoomInEnd = map.topo ? mapMpp <= topo::nativeMpp(18, lat) * 1.01f : mapMpp <= 1.0f;
+    map.zoomInEnd = mapMpp <= topo::nativeMpp(topo::maxZoomAt(lat, lon), lat) * 1.01f;
     map.zoomOutEnd = mapMpp * 2.0f > mapMaxMpp() * 1.01f;
     // DOBA: the place under the view (the position, or the middle when dragged)
-    if (map.topo) {
+    {
         const double vlat = lat + mapPanN / 111320.0;
         const double vlon = lon + mapPanE / (111320.0 * cos(lat * M_PI / 180.0));
         static double qLat = 999, qLon = 999;
@@ -1229,59 +1164,12 @@ void buildMapScreenData(const RideState& s, MapScreenData& map,
         map.riderX = 270 - (int)lroundf(mapPanE / mapMpp);
         map.riderY = 430 + (int)lroundf(mapPanN / mapMpp);
     }
-    // The farewell frame is the one frame with no "next one".
-    //
-    // Every rule below exists because another frame is coming: draw only what
-    // is already in RAM, and bail the instant a finger lands, because `partial`
-    // brings us straight back. Nothing brings the shutdown screen back — it is
-    // painted, the rails come down, and it sits on the glass for days. Run it
-    // cached-only and it draws whatever the cache happened to hold, which after
-    // riding at a close zoom is the tile under the rider and little else; abort
-    // it on touch and it stops after one tile, since power-off is REACHED by
-    // touching (the dialog) or holding BOOT. That is the whole bug: the farewell
-    // asked for the widest zoom and then refused to read the card for it.
-    //
-    // So: read the card, ignore the finger, and bound it by the clock instead —
-    // a power-off must not hang, and tiles come nearest-first, so a deadline
-    // costs the far edge rather than the middle.
-    static uint32_t frameDeadline;
-    // 12 s, not the 4 it was: the widest view is about 2 MB, and the card manages about
-    // 400 KB/s, so a cold one takes 5 s and 4 s left only the tiles around the rider.
-    frameDeadline = millis() + 12000;
-    map.hasMap = map.topo || map_store::coversPosition(lat, lon);
-
     // With this view's base layer already finished, the tiles have nothing left to
-    // give: skip them. Reading them here would be worse than wasted, because the
-    // zooms prerendered either side push this view's tiles out of RAM, and a frame
-    // that needs none of them would spend seconds on the card fetching them back.
+    // give: skip them.
     mapFrameBase = nullptr;
     if (mapCacheOn && !finalFrame) {
         mapCacheAllocate();
         mapFrameBase = mapCache.find(mapKeyFor(map), millis());
-    }
-    if (mapFrameBase) {
-        const MapLayerFacts* facts = cachedFacts(mapFrameBase);
-        map.pois = cachedPois(mapFrameBase);
-        map.poiCount = facts->poiCount;
-        map.featureCount = facts->features;
-        map.tilePolys = facts->tilePolys;
-        map.projectedTiles = facts->projectedTiles;
-        map.wantedTiles = facts->wantedTiles;
-        map.parkCount = facts->parks;
-        map.waterCount = facts->waters;
-        memcpy(map.clsCount, facts->classes, sizeof(facts->classes));
-    } else if (map.topo) {
-        // DOBA: no vector features under a topo base layer.
-        map.features = nullptr; map.featureCount = 0;
-        map.water = nullptr; map.waterCount = 0;
-        map.parks = nullptr; map.parkCount = 0;
-        map.pois = nullptr; map.poiCount = 0;
-    } else {
-        map_store::renderInto(lat, lon, mapMpp, map.riderX, map.riderY, rot, map,
-                              finalFrame
-                                  ? []() -> bool { return millis() < frameDeadline; }
-                                  : []() -> bool { return !touchIrq && !touchWasDown; },
-                              /*cachedOnly=*/finalFrame ? false : !mapFullPass);
     }
 
     // Not on the farewell frame: that one stays on the glass for days, long
@@ -1301,24 +1189,17 @@ void renderMapWithCache(const MapScreenData& map, const RideState& s, uint8_t* f
         ui_render_map(map, s, fb);
         return;
     }
-    mapFrameWater = nullptr;
     if (mapFrameBase) {
         mapCacheHits++;
-        mapFrameWater = cachedWater(mapFrameBase);
-        mapLayerExpand(mapFrameBase, fb);
+        memcpy(fb, mapFrameBase, fbSize);
         ui_render_map(map, s, fb, /*baseDrawn=*/true);
         return;
     }
     mapCacheMisses++;
-    // A partial frame is missing tiles, so it is not worth keeping.
-    uint8_t* save = map.partial ? nullptr : mapCache.claim(now);
+    uint8_t* save = mapCache.claim(now);
     mapLayerBeingKept = save;
     ui_render_map(map, s, fb, false, save ? mapLayerKeep : nullptr);
-    if (save) {
-        mapCacheKeepExtras(save, map);
-        mapCache.commit(save, key, now);
-        mapFrameWater = cachedWater(save);
-    }
+    if (save) mapCache.commit(save, key, now);
 }
 
 void renderMapScreen(const RideState& s, uint8_t* fb) {
@@ -1341,43 +1222,15 @@ void renderMapScreen(const RideState& s, uint8_t* fb) {
     if ((touchIrq || touchWasDown) && shadowFb) {
         memcpy(fb, shadowFb, fbSize);
         forceDraw = true;
-        mapFullPass = true;      // and let the retry read whatever it missed
         if (dbgTiming) diag::log("map: frame dropped for a touch");
         return;
     }
     renderMapWithCache(map, s, fb);
-    // ui_render_map redraws the buttons unpressed, so re-assert the held one on
-    // top of it. Released only once the frame is complete — a partial frame
-    // means tiles are still coming.
-    if (zoomHeld) {
-        if (map.partial) ui_map_draw_zoom_button(zoomHeld == 1, true, fb);
-        else             zoomHeld = 0;
-    }
-    // Two-pass rendering, and the reason a zoom lands instantly.
-    //
-    // The FIRST pass after any change draws only tiles already in RAM. Zooming
-    // does not change which ground is under the rider — only its scale — so the
-    // middle of the map is always already resident and can be re-projected and
-    // painted in milliseconds. If that left anything out (the newly exposed
-    // outer ring, or a frame a finger interrupted), the frame comes back marked
-    // partial and the NEXT one is allowed to read the card.
-    //
-    // Steady state costs nothing: once everything on screen is cached, the
-    // cached-only pass IS the complete frame and there is no second one.
-    if (map.partial) { forceDraw = true; mapFullPass = true; }
-    else             { mapFullPass = false; }
+    zoomHeld = 0;   // the frame is complete: the pressed zoom button lets go
     if (dbgTiming)
-        diag::log("map: project=%lu draw=%lu polys=%d (tiles=%d base=%d) "
-                  "cls[maj=%d pri=%d sec=%d ter=%d min=%d path=%d] ntiles=%d/%d%s "
-                  "mpp=%d pois=%d/%d at=%.5f,%.5f peers=%d",
-                  (unsigned long)(m1 - m0), (unsigned long)(millis() - m1),
-                  map.featureCount, map.tilePolys, map.featureCount - map.tilePolys,
-                  map.clsCount[0], map.clsCount[1], map.clsCount[2], map.clsCount[3],
-                  map.clsCount[4], map.clsCount[5],
-                  map.projectedTiles, map.wantedTiles,
-                  map.partial ? " cut" : "", (int)mapMpp,
-                  map.poiCount, map_tiles::projectStats().poisDropped,
-                  map.centerLat, map.centerLon, map.peerCount);
+        diag::log("map: build=%lu draw=%lu mpp=%.2f topo=%d at=%.5f,%.5f peers=%d",
+                  (unsigned long)(m1 - m0), (unsigned long)(millis() - m1), mapMpp,
+                  (int)map.topo, map.centerLat, map.centerLon, map.peerCount);
     drawMeshNotice(fb);
 }
 
@@ -1391,114 +1244,32 @@ void mapPrerenderStep() {
     if (now - mapStillSince < kMapStillMs || (int32_t)(now - mapPrerenderNotBefore) < 0) return;
     if (touchIrq || touchWasDown) return;
 
-    for (const float mpp : {mapMpp / 2.0f, mapMpp * 2.0f}) {
-        if (mpp < 1.0f || mpp > 32.0f) continue;
-        MapBaseKey want = mapViewKey;
-        want.mpp = mpp;
-        if (mapCache.find(want, now)) continue;
-        if (!mapPrerenderFb) return;
-
+    for (const float ask : {mapMpp / 2.0f, mapMpp * 2.0f}) {
+        if (ask > mapMaxMpp() * 1.01f) continue;
         const float liveMpp = mapMpp;
-        const bool liveFullPass = mapFullPass;
-        mapMpp = mpp;
-        mapFullPass = true;      // this one may read the card, and has the time to
+        mapMpp = ask;
         MapScreenData map = {};
         const RideState s = g_state.snapshot();
-        buildMapScreenData(s, map);
+        buildMapScreenData(s, map);   // snaps to a tile zoom the card has
+        const float mpp = mapMpp;
         mapMpp = liveMpp;
-        mapFullPass = liveFullPass;
-
-        // The bike can have moved since mapViewKey, onto a layer that is already kept.
-        // That frame has its counts but no features, so there is nothing here to draw.
-        if (mapFrameBase) return;
-        // Only now: a claim gives up a slot's layer, and that is worth doing for a
-        // frame that is going to be drawn.
+        if (fabsf(mpp - liveMpp) < 0.01f) continue;   // already at the end of the range
+        if (mapFrameBase) continue;                    // kept already
+        if (!mapPrerenderFb) return;
         uint8_t* px = mapCache.claim(millis());
         if (!px) return;
-
         memset(mapPrerenderFb, 0xFF, fbSize);
-        const bool done = !map.partial && ui_render_map_base(
-            map, mapPrerenderFb, []() -> bool { return !touchIrq && !touchWasDown; });
-        if (done) {
-            mapLayerPack(mapPrerenderFb, px);
-            mapCacheKeepExtras(px, map);
-            mapCache.commit(px, mapKeyFor(map), millis());
-            mapPrerenders++;
-        } else {
+        ui_render_map_base(map, mapPrerenderFb);
+        if (touchIrq || touchWasDown) {   // a finger came: this frame may be stale
             mapPrerendersCut++;
             mapPrerenderNotBefore = millis() + kMapPrerenderRetryMs;
+            return;
         }
+        memcpy(px, mapPrerenderFb, fbSize);
+        mapCache.commit(px, mapKeyFor(map), millis());
+        mapPrerenders++;
         return;
     }
-}
-
-// One full map frame through the cache, as the UI task would make it.
-void mapTestFrame(const RideState& s, MapScreenData& map, uint8_t* fb) {
-    map = MapScreenData();
-    memset(fb, 0xFF, fbSize);
-    mapFullPass = true;
-    buildMapScreenData(s, map);
-    renderMapWithCache(map, s, fb);
-    vTaskDelay(1);
-}
-
-// Console `maptest`: for each heading in track-up, a frame drawn from scratch must match
-// the one drawn from its cached layer byte for byte, a turn within tolerance must reuse
-// the layer, and one past it must not. Runs at the current zoom, on real tiles.
-void mapSelfTest() {
-    mapCacheAllocate();
-    uint8_t* fresh = epdc_framebuffer();
-    uint8_t* cached = mapPrerenderFb;
-    if (!mapCacheOn || !cached) {
-        Serial.println("[maptest] needs mapcache on");
-        return;
-    }
-    const bool liveTrackUp = mapTrackUp;
-    const float liveHeading = mapTestHeading;
-    mapTrackUp = true;
-    const RideState s = g_state.snapshot();
-    MapScreenData map = {};
-    int failed = 0;
-    for (const float heading : {0.f, 1.f, 30.f, 45.f, 89.f, 90.f, 135.f, 180.f, 225.f, 270.f,
-                                315.f, 359.f}) {
-        mapCache.clear();
-        mapTestHeading = heading;
-        const uint32_t t0 = millis();
-        mapTestFrame(s, map, fresh);
-        const uint32_t freshMs = millis() - t0;
-        const bool cold = mapFrameBase == nullptr;
-        const bool partial = map.partial;
-        const int tiles = map.projectedTiles, wanted = map.wantedTiles;
-
-        const uint32_t t1 = millis();
-        mapTestFrame(s, map, cached);
-        const uint32_t cachedMs = millis() - t1;
-        const bool sameHit = mapFrameBase != nullptr;
-        size_t differ = 0;
-        for (size_t i = 0; i < fbSize; ++i) differ += fresh[i] != cached[i];
-
-        // 360 is not a heading anything produces, but wrapping past north must still hit.
-        mapTestHeading = fmodf(heading + 1.0f, 360.0f);
-        mapTestFrame(s, map, cached);
-        const bool nearHit = mapFrameBase != nullptr;
-        mapTestHeading = fmodf(heading + 3.0f, 360.0f);
-        mapTestFrame(s, map, cached);
-        const bool farHit = mapFrameBase != nullptr;
-
-        const bool ok = cold && !partial && sameHit && differ == 0 && nearHit && !farHit;
-        failed += !ok;
-        Serial.printf("[maptest] %s heading %3.0f: tiles %d/%d, %lu ms fresh, %lu ms cached, "
-                      "%u bytes differ, +1 deg %s, +3 deg %s%s\n",
-                      ok ? "ok  " : "FAIL", heading, tiles, wanted, (unsigned long)freshMs,
-                      (unsigned long)cachedMs, (unsigned)differ, nearHit ? "reused" : "redrawn",
-                      farHit ? "reused" : "redrawn", partial ? " PARTIAL" : "");
-    }
-    mapTrackUp = liveTrackUp;
-    mapTestHeading = liveHeading;
-    mapFullPass = false;
-    mapCache.clear();
-    forceDraw = true;
-    Serial.printf("[maptest] %s at %d m/px\n", failed ? "FAILED" : "all passed", (int)mapMpp);
 }
 
 // Console `farewell`: the power-off screen without the power-off, held for a look.
@@ -1735,25 +1506,9 @@ void bootDetailFor(const char* step, const char* fmt, ...) {
 }
 
 bool begin() {
-    // Load the best downloaded map for our last-known spot, else the embedded
-    // default. New maps arrive from the phone over BLE (see map_store).
-    //
-    // ANNOUNCED, like the SD mount and for the same reason: indexing the tiles
-    // on the card is the longest thing left in setup() — ~4 s with 107 tiles,
-    // and it grows with the card — and it used to run with the glass showing a
-    // fully ticked list and an unmoving bar. Nothing said the device was still
-    // working, so the last four seconds of every boot looked like a hang.
-
+    // The topo packs are opened when the map first asks for them: nothing to
+    // index here, and nothing on the card to walk at boot.
     bootStep("Maps");
-    double mlat = DEFAULT_MAP_LAT, mlon = DEFAULT_MAP_LON;
-    settings::lastPosition(mlat, mlon);
-    map_store::begin(mlat, mlon);
-    EPDC_STEP("map_store::begin returned");
-    // NO tile count here. Counting means walking every tile directory on the
-    // card, and this is the boot path — the exact place map_store::tileCount()
-    // documents itself as never belonging. Having it here (twice, once per
-    // argument) put a full card walk back into boot immediately after the scan
-    // it was meant to have removed, which is what kept the boot loop alive.
     bootDetailFor("Maps", "ready");
     EPDC_STEP("bootDetailFor done");
     bootStatus("Maps", true);
@@ -2250,8 +2005,6 @@ static void runConsoleLine(char* line) {
         } else {
             printMeshReport();
         }
-    } else if (!strcasecmp(cmd, "maptest")) {
-        mapSelfTest();
     } else if (!strcasecmp(cmd, "farewell")) {
         farewellTest();
     } else if (!strcasecmp(cmd, "trackup")) {
@@ -2548,6 +2301,20 @@ void pollSerialCommands() {
 #else
 #define TRC(tag) ((void)0)
 #endif
+// Everything that reads files off the card forgets what it knew and looks again:
+// the card came back, or a computer wrote to it over USB. Topo packs, books,
+// saved points, ground heights, place names and useful places.
+void cardChanged() {
+    topo::reset();
+    doba_lib::rescan();
+    doba_points::rescan();
+    doba_dem::rescan();
+    doba_places::rescan();
+    doba_pois::rescan();
+    mapCache.clear();
+    forceDraw = true;
+}
+
 void task(void*) {
     uint32_t lastDraw = 0;
     Screen lastScreen = screen;
@@ -2566,60 +2333,22 @@ TRC("usb");     bool lastHostActive = false;
 TRC("loop");         bool host = usb_storage::hostActive();
         if (lastHostActive && !host) {
             applySdUpdate();
-            map_store::rescanCard(); doba_lib::rescan(); doba_points::rescan(); doba_dem::rescan();  // DOBA   // it may have added/removed maps too
+            cardChanged();   // the computer may have added or removed maps, books...
         }
         lastHostActive = host;
 
-        // A card that only mounted after boot had given up: setup() skipped the
-        // map index and the USB drive, and nothing revisited them, so
-        // the card stayed mounted-but-unused for the whole session. Run that
-        // bring-up now. It happens here, in the UI task, next to the renderer
-        // that consumes it.
-        //
-        // It used to say the map cache was "this task's alone". It never was —
-        // the BLE server writes to it on every tile received — and acting on
-        // that belief is why nothing locked it. map_store owns the locking now.
+        // A card that only mounted after boot had given up: everything that
+        // looked for its files found none, and the USB drive was skipped. Look
+        // again now, here in the UI task, next to the renderer that uses them.
         if (sd_card::consumeLateMount()) {
             diag::log("sd: late mount — loading maps and books, exposing USB drive");
-            map_store::rescanCard(); doba_lib::rescan(); doba_points::rescan(); doba_dem::rescan();  // DOBA
+            cardChanged();
             applySdUpdate();      // a firmware.bin may have been on the card
             usb_storage::begin(); // no-op if it already came up
         }
 
-        // Terrain elevation from the map DEM at the current position.
-        // Only the UI task touches the tile cache, so this stays race-free with
-        // the map render. The recorder reads mapElevationM to integrate ascent.
-        //
-        // This is an SD read, and it sits near the top of the loop — ahead of
-        // touch handling. While a ride is recording, the recorder task (which
-        // runs at a HIGHER priority than the UI) takes sdLock every second to
-        // write a FIT record, and every 15 s to flush. A DEM read here then
-        // blocks behind it and the rider's tap is not processed until it
-        // returns, which is why touch felt sluggish only while recording.
-        //
-        // So skip it entirely while the rider is interacting, and sample at
-        // 2.5 s rather than 1 s otherwise: ascent is integrated with 3 m
-        // hysteresis, so a slower sample costs nothing but removes most of the
-        // opportunities to collide with the recorder.
-        static uint32_t lastElevMs = 0;
-        const bool interacting = touchIrq || touchWasDown ||
-                                 millis() - lastUiInputMs < 1500;
-        if (!interacting && millis() - lastElevMs > 2500 && !host) {
-            lastElevMs = millis();
-            RideState es = g_state.snapshot();
-            double elat = 0, elon = 0;
-            bool have = false;
-            if (es.gpsFix) { elat = es.latitude; elon = es.longitude; have = true; }
-            else if (es.everHadFix) { elat = es.latitude; elon = es.longitude; have = true; }
-            if (have) {
-                float ev = map_store::elevationAt(elat, elon);
-                bool ok = (ev == ev);   // false when NAN
-                g_state.with([&](RideState& st) {
-                    st.mapElevationValid = ok;
-                    if (ok) st.mapElevationM = ev;
-                });
-            }
-        }
+        // Ground height under the position comes from the card's DEM, set by
+        // gps_service with every fix (doba_dem).
 
         // A firmware update in progress takes over the screen with a progress
         // modal (redrawn only when the percentage/phase moves so the e-paper
@@ -2855,10 +2584,6 @@ TRC("predraw");         const bool modalHoldsStill = powerOverlay;
             lastOverlay = powerOverlay;
             RideState s = g_state.snapshot();
             s.sdCard = sd_card::sdCardState();
-            // Swap to a downloaded map that covers where we are, if one exists.
-            // Not while a host computer owns the SD card.
-            if (s.everHadFix && !usb_storage::hostActive())
-                map_store::ensureForPosition(s.latitude, s.longitude);
             uint8_t* fb = epdc_framebuffer();
             memset(fb, 0xFF, epd_width() / 2 * epd_height());
             bandDrawnThisFrame = false;
@@ -2962,20 +2687,8 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
             // in the changed area through white, so on the scan path any change of
             // screen earns one, not just the transitions listed above.
             const bool scanScrub = epdc_scan_enabled() && screen != prevScreen;
-            // A zoom replaces the whole map without changing screen, and the water's
-            // dots that stay black show the old roads. Only the water needs it, so only
-            // the water gets it: the rest of the map changes in place. Done with once a
-            // frame that knows where its water is has gone out, since a touch can drop
-            // the frame that carried the zoom and a partial one has no layer to ask.
-            static float scrubbedMpp = 0.0f;
-            const bool zoomed = screen == SCREEN_MAP && mapMpp != scrubbedMpp;
-            scrubBits = zoomed && epdc_scan_enabled() ? mapFrameWater : nullptr;
-            const bool scrubbing = scrubBits != nullptr;
-            const bool painted = refresh(screenChanged, fastInPage, listFast, wantClean,
-                                         false,
-                                         mapTransition || bandCleared || scanScrub);
-            if (painted && scrubbing) scrubbedMpp = mapMpp;
-            scrubBits = nullptr;
+            refresh(screenChanged, fastInPage, listFast, wantClean, false,
+                    mapTransition || bandCleared || scanScrub);
         }
 
         // The epdiy path managed panel rails by hand here — poweron before an

@@ -1,57 +1,41 @@
-# Map pipeline
+# Firmware tools
 
-Offline maps for the e-paper bike computer are compact vector tiles (`EBM1`
-format, with a baked-in `ELV1` elevation grid) rendered as crisp 1-bit lines on
-the panel. There are two ways to make them; both write the same format the
-firmware reads from the SD card.
+What is in here and what each is for. The maps, books and card contents are
+built by the scripts at the top of the repository (`maps/`, `library/`,
+`tools/doba_card.py`), not here.
 
-See the [main README](../README.md#map-tiles) for the format spec and the
-on-device handling (`src/map_store.cpp`, `src/map_tiles.cpp`).
+## Building
 
-## 1. On the phone (primary)
+| | |
+|---|---|
+| `apply-pm-framework.sh`, `check-framework.sh`, `revert-pm.sh` | the pinned Arduino-ESP32 framework with power management on |
+| `apply-exfat.sh` | rebuilds the framework's FatFs with exFAT (the 1 TB card) |
+| `epd_hybrid_patch.py`, `epd_idle_patch.py` | panel-driver patches applied at build time |
+| `memfault_build.py` | pre-build step: compiles the pinned Memfault SDK (crash dumps to the card) |
+| `pio_upload.py`, `flash.py` | flashing helpers |
+| `i18n/` | `uk.tsv` (every Ukrainian string) and `build.py`, which makes `src/doba_i18n_uk.inc` and checks format specifiers |
+| `vfont/vfont_build.py` | makes `src/vfont_faces.h`, the vector fonts with Cyrillic; see `vfont/DESIGN.md` |
+| `declination/`, `tzgrid/` | make the magnetic-declination and time-zone tables in `src/` |
+| `preview/shim/` | ESP-IDF header stand-ins, used by the simulator build |
 
-The iOS app is the normal way to load maps: draw a box in the Route tab and it
-downloads every [H3](https://h3geo.org/) res-6 hexagon covering it — fetching
-OSM ways from Overpass and an elevation grid from Open-Meteo per hex, encoding
-`EBM1`+`ELV1`, and streaming each tile to `/maps/tiles/<h3id>.ebm` over BLE.
-Code: `companion-ios/Sources/MapBuilder.swift` + `H3Tiles.swift`.
+## Host tests (no device needed)
 
-## 2. On the desktop — `build_map.py` (region bake)
+| | |
+|---|---|
+| `map_cache_test/run.sh` | the map frame cache (`src/map_base_cache.h`) |
+| `scan_test/run.sh` | the panel scan path's tables |
+| `aux_test/run_aux_test.sh` | the optional I2C sensors' maths |
+| `milgeo_test/run.py` | MGRS and mils conversions (`src/milgeo.cpp`) against a reference |
+| `mesh_test/run_mesh_test.sh` | the Meshtastic packet code (`src/mesh_*.cpp`) |
+| `crash_test/run_tests.py` | crash reports: flash, card, retries (`src/crash_report.cpp`) |
+| `epd_hybrid_bench/run_core_test.sh` | the panel driver's frame scheduler |
 
-`build_map.py` bakes a whole bounding box into a single `EBM1` file for the
-`/maps/*.ebm` fallback layer (drawn where no H3 tile covers the rider). It
-fetches ways from Overpass (cached locally), classifies them into render
-classes, simplifies geometry, clips into a square lat/lon grid, and writes the
-binary.
+The whole device runs in the simulator: `sim/build.sh`, then `sim/test.sh`.
 
-```sh
-python3 build_map.py --bbox 37.703 -122.525 37.835 -122.355 \
-    --name sf --out ../../data/sf.ebm
-```
+## On a device
 
-Copy the result to `/maps/` on the SD card. `sf_overpass.json` is a cached
-Overpass response for the San Francisco box so the build is reproducible
-offline.
-
-## 3. In the browser (region bake, no toolchain)
-
-The project site's *Generate an offline map* section
-([`docs/mapgen.js`](../docs/mapgen.js) + `docs/mapgen-ui.js`) is a JS port of
-`build_map.py`: pick a bounding box on a Leaflet map, and it fetches Overpass
-and encodes the same whole-region `EBM1` blob client-side, then downloads a
-`<name>.ebm` to drop in `/maps/`. Output is byte-for-byte identical to
-`build_map.py` for the same Overpass response, so the three paths stay in sync.
-Like `build_map.py`, it has no `ELV1` elevation block — that's the phone's
-per-hex path.
-
-## Render classes
-
-Both paths classify OSM tags identically (`build_map.py` and `MapBuilder.swift`
-must agree):
-
-| class | value | OSM |
-|-------|-------|-----|
-| 0 | major road | motorway, trunk, primary, secondary |
-| 1 | minor road | tertiary, residential, unclassified, living_street, pedestrian |
-| 2 | path | cycleway, footway, path, track, steps |
-| 3 | rail | railway=rail / light_rail |
+| | |
+|---|---|
+| `memfault_export.py` | checks a Memfault export taken off the card before it goes to Memfault's tools |
+| `power_capture.py`, `power_logging.py`, `power_sd_decode.py`, `power_framework_report.py` | power measurements: capture, decode, report |
+| `epdpainter_test/`, `epd_hybrid_bench/` | panel experiments flashed as their own firmware |

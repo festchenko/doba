@@ -20,4 +20,5 @@ int nearest(double lat, double lon, int kind, Poi* out, int n);
 // For the overview: per kind, the nearest one (dist < 0: none in range).
 void nearestOfEach(double lat, double lon, Poi* out /* KINDS entries */);
 
+void rescan();   // the card changed: read the file again on next use
 }  // namespace doba_pois

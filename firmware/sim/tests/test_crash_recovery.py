@@ -16,7 +16,6 @@ import pytest
 
 from conftest import TIME_SCALE
 
-from otpsim.tiles import card_path, fixture_manifest, fixture_tiles
 from power_util import FAST, console_text, uptime_s
 from power_util import line_track
 

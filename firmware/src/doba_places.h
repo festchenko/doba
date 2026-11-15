@@ -9,4 +9,5 @@ namespace doba_places {
 // false: no file, or nothing within 25 km.
 bool nearest(double lat, double lon, char* name, size_t n, double& distM, double& bearingDeg);
 
+void rescan();   // the card changed: read the file again on next use
 }  // namespace doba_places

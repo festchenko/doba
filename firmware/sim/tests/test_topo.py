@@ -114,10 +114,14 @@ def test_topo_is_north_up_and_centred(device, tmp_path):
     assert img[top + 192, left + 64] // 17 == 12
 
 
-def test_no_pack_falls_back_to_vector_maps(device, tmp_path):
+def test_no_pack_says_there_is_no_map_here(device, tmp_path):
     show_map(device)
     out = "\n".join(device.console("topo"))
     assert "active=0" in out, out
+    # The box in the middle of the paper (map_view.cpp: 500x96, centred, 30 px up).
+    img = glass(device, tmp_path, "nomap.png")
+    top = (960 - 96) // 2 - 30
+    assert (img[top:top + 96, 20:520] < 128).mean() > 0.02, "no 'no map here' box"
 
 
 def test_topo_reports_active_and_decodes(device, tmp_path):

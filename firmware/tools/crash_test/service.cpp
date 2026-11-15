@@ -44,12 +44,12 @@ int esp_core_dump_image_erase(){++erases;return 0;}
 std::string logs;
 struct Console {void print(const char* p){logs+=p;}} Serial;
 namespace diag {void log(const char* fmt,...){char b[512];va_list a;va_start(a,fmt);vsnprintf(b,sizeof(b),fmt,a);va_end(a);logs+=b;logs+='\n';}}
-bool recording=false;
+
 bool mounted=false,host=false,nvsOK=true,writeOK=true,removeOK=true,renameOK=true;
 size_t sdLimit=SIZE_MAX;
 int sdDepth=0,powerDepth=0;
 namespace power_mgmt {void busyAcquire(){++powerDepth;}void busyRelease(){assert(powerDepth>0);--powerDepth;}}
-namespace sd_card {bool sdMounted(){return mounted;}bool isRecording(){return recording;}}
+namespace sd_card {bool sdMounted(){return mounted;}}
 namespace usb_storage {bool hostActive(){return host;}}
 void sdLock(){++sdDepth;}void sdUnlock(){assert(sdDepth>0);--sdDepth;}
 std::map<std::string,std::string> nvs,files;
@@ -86,7 +86,7 @@ bool delivered(uint32_t id){char p[64];snprintf(p,sizeof(p),"/logs/crash-%08lx.l
 void clean(){nvs.clear();files.clear();memset(tail,0,sizeof(tail));mounted=host=false;nvsOK=writeOK=removeOK=renameOK=true;sdLimit=SIZE_MAX;coreResult=1;erases=0;reboot();}
 int main(){
  clean();tick();assert(nvs.empty()&&files.empty());
- recording=true;crash_report::requestTestPanic();tick();assert(nvs.empty());recording=false;
+
  crash_report::recordLine("last GPS window clean\n",22);reboot(5);
  assert(reports()==1&&current.valid());assert(std::string(current.text).find("last GPS window clean")!=std::string::npos);assert(std::string(current.text).find(OT_MEMFAULT ? "crash_backend=Memfault" : "No decodable core dump")!=std::string::npos);
  tick();assert(reports()==1);reboot();mounted=true;tick();assert(nvs.empty()&&files.size()==1);

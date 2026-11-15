@@ -14,8 +14,8 @@ VENDOR=${OTP_VENDOR:-$ROOT/vendor}
 EPDIY=$VENDOR/T5S3-4.7-e-paper-PRO/lib/epdiy/src
 GPS=$VENDOR/T5S3-4.7-e-paper-PRO/lib/TinyGPSPlus/src
 
-INC="-I sim/shim -I sim/host -I src -I third_party/h3/include -I third_party/nanopb -I $GPS -I $EPDIY -I tools/preview/shim -I third_party/h3"
-DEFS="-DVFONT -DOTP_SIM=1 -DPB_ENABLE_MALLOC=0 -DARDUINO=10819 -DESP32=1 -DBOARD_HAS_PSRAM=1"
+INC="-I sim/shim -I sim/host -I src -I $GPS -I $EPDIY -I tools/preview/shim"
+DEFS="-DVFONT -DOTP_SIM=1 -DARDUINO=10819 -DESP32=1 -DBOARD_HAS_PSRAM=1"
 WARN="-Wno-unused-parameter -Wno-unused-variable -Wno-unused-function -Wno-deprecated-declarations -Wno-c99-designator -Wno-writable-strings -Wno-format -Wno-unused-but-set-variable"
 CXXFLAGS="-include sim/linux/linux_compat.h -std=gnu++17 -g -O1 $WARN $INC $DEFS ${SAN:-}"
 CFLAGS="-include sim/linux/linux_compat.h -std=gnu11 -g -O1 $WARN $INC $DEFS ${SAN:-}"
@@ -23,14 +23,11 @@ CFLAGS="-include sim/linux/linux_compat.h -std=gnu11 -g -O1 $WARN $INC $DEFS ${S
 # Firmware sources compiled as-is. Everything else in src/ is hardware and
 # has a stand-in in sim/host/.
 FW_CPP="settings ui_render vfont sd_card
-  map_view map_tiles map_store topo_layer milspec milgeo doba_keyboard doba_i18n doba_battery doba_ui doba_library doba_icons stealth tz_auto doba_places doba_pois doba_topo_bg doba_points doba_dem doba_sun
+  map_view topo_layer milspec milgeo doba_keyboard doba_i18n doba_battery doba_ui doba_library doba_icons stealth tz_auto doba_places doba_pois doba_topo_bg doba_points doba_dem doba_sun
   diag diag_sd mesh_service mesh_proto mesh_crypto
   gps_service
   crash_report"
 FW_C=""
-EXTRA_C="third_party/nanopb/pb_common third_party/nanopb/pb_encode third_party/nanopb/pb_decode
-  third_party/h3/h3shim"
-H3_C=$(ls third_party/h3/lib/*.c | sed 's/\.c$//')
 
 # Objects are rebuilt when their source, any header in src/ or sim/, or this
 # script is newer; compiles run in parallel.
@@ -60,7 +57,6 @@ done
 # as the preview tool builds it.
 compile src/epd_compat clang++ "$CXXFLAGS -UARDUINO" cpp
 for f in $FW_C; do compile src/$f clang "$CFLAGS" c; done
-for f in $EXTRA_C $H3_C; do compile $f clang "$CFLAGS" c; done
 compile "$GPS/TinyGPS++" clang++ "$CXXFLAGS" cpp
 for f in sim/host/*.cpp; do [ -f "$f" ] && compile "${f%.cpp}" clang++ "$CXXFLAGS" cpp; done
 for f in sim/host/*.c; do [ -f "$f" ] && compile "${f%.c}" clang "$CFLAGS" c; done
