@@ -53,7 +53,7 @@ Slot g_slots[CACHE_TILES];
 uint32_t g_tick = 0;
 uint8_t* g_zbuf = nullptr;       // compressed blob scratch
 uint32_t g_zbufLen = 0;
-Stats g_stats = {0, 0, 0, 0};
+Stats g_stats = {};
 
 // covers(): one entry per recently asked zoom-8 cell.
 struct CellSeen { int32_t x = -1, y = -1; bool have = false; int8_t detail = -1; };
@@ -309,7 +309,8 @@ bool covers(double lat, double lon) {
     return have;
 }
 
-int drawBase(const MapScreenData& map, uint8_t* fb) {
+// Straight from the tiles onto the screen: for a view the canvas cannot hold.
+static int drawDirect(const MapScreenData& map, uint8_t* fb) {
     g_inverted = epd_get_rotation() == EPD_ROT_INVERTED_PORTRAIT;
     const double lat = map.centerLat, lon = map.centerLon;
     int z = zoomFor(lat, map.metersPerPixel);
@@ -357,7 +358,201 @@ int drawBase(const MapScreenData& map, uint8_t* fb) {
     return (int)(g_stats.missing - missingBefore);
 }
 
+
+// ---- the canvas: the view with half a screen of map on every side ----------------
+//
+// Dragging the map, or walking with it, moves the view a few hundred pixels, and
+// each of those frames used to be drawn again tile by tile (the frame cache below
+// it in ui_dashboard keys on the exact view, so a moved view always missed). The
+// canvas keeps the map drawn around the view at this zoom: a view that falls on
+// it is a row-by-row copy, and only blocks nobody has drawn yet come off the
+// tiles. The rest of the canvas is filled in while nothing else happens
+// (idleStep), nearest the view first.
+//
+// It is laid out like the panel's framebuffer (native, 4 bpp, two pixels a byte),
+// so the copy is a memcpy per row: CW portrait columns are its rows, CH portrait
+// rows its pixels per row.
+namespace {
+constexpr int CMX = 270, CMY = 480;                       // margin, portrait px
+constexpr int CW = SCREEN_W + 2 * CMX, CH = SCREEN_H + 2 * CMY;   // 1080 x 1920
+constexpr int CROW = CH / 2;                              // bytes a canvas row
+constexpr int BW = 135, BH = 240;                         // blocks: drawn whole
+constexpr int BCOLS = CW / BW, BROWS = CH / BH;           // 8 x 8
+static_assert(CW % BW == 0 && CH % BH == 0, "blocks tile the canvas");
+
+struct Canvas {
+    uint8_t* px = nullptr;            // CW rows of CROW bytes, PSRAM
+    bool anchored = false;
+    bool inverted = false;
+    int z = -1;
+    uint32_t gen = 0;
+    int32_t wx0 = 0, wy0 = 0;         // world px (at z) of canvas portrait (0, 0)
+    bool valid[BROWS][BCOLS] = {};
+    int validCount = 0;
+} g_cv;
+
+uint32_t g_generationForCanvas();
+
+inline void putCanvas(int cx, int cy, uint8_t level) {
+    int nx, ny;
+    if (g_cv.inverted) { nx = cy; ny = CW - 1 - cx; }
+    else               { nx = CH - 1 - cy; ny = cx; }
+    uint8_t* p = &g_cv.px[(size_t)ny * CROW + (nx >> 1)];
+    if (nx & 1) *p = (uint8_t)((*p & 0x0F) | (level << 4));
+    else        *p = (uint8_t)((*p & 0xF0) | level);
+}
+
+// One block off the tiles. Column by column: a column of the portrait canvas is
+// a run along one of its native rows, so the writes go out in order.
+void renderBlock(int br, int bc) {
+    const int z = g_cv.z, maxT = (1 << z) - 1;
+    for (int cx = bc * BW; cx < (bc + 1) * BW; ++cx) {
+        const int32_t wx = g_cv.wx0 + cx;
+        const int tx = wx >> 8, px = wx & 0xFF;
+        int cy = br * BH;
+        const int end = (br + 1) * BH;
+        while (cy < end) {
+            const int32_t wy = g_cv.wy0 + cy;
+            const int ty = wy >> 8;
+            int run = cy + (256 - (wy & 0xFF));
+            if (run > end) run = end;
+            if (ty < 0 || ty > maxT || tx < 0 || tx > maxT) {
+                for (; cy < run; ++cy) putCanvas(cx, cy, 15);
+                continue;
+            }
+            Slot* sl = tile(z, tx, ty);
+            if (!sl->present) {
+                for (; cy < run; ++cy) putCanvas(cx, cy, 15);
+            } else if (sl->solid) {
+                for (; cy < run; ++cy) putCanvas(cx, cy, sl->fill);
+            } else {
+                for (; cy < run; ++cy) {
+                    const int py = (g_cv.wy0 + cy) & 0xFF;
+                    const uint8_t b = sl->px[py * (TILE / 2) + (px >> 1)];
+                    putCanvas(cx, cy, (px & 1) ? (b & 0x0F) : (b >> 4));
+                }
+            }
+        }
+    }
+    g_cv.valid[br][bc] = true;
+    ++g_cv.validCount;
+    ++g_stats.blocks;
+}
+
+void invalidateCanvas() {
+    memset(g_cv.valid, 0, sizeof g_cv.valid);
+    g_cv.validCount = 0;
+}
+
+// Where the view's top-left falls on the canvas, re-anchoring it round the view
+// when the view is off it (or the zoom, the card or the rotation changed).
+// False when the canvas cannot take this view.
+bool placeView(const MapScreenData& map, int& ox, int& oy) {
+    const double lat = map.centerLat, lon = map.centerLon;
+    int z = zoomFor(lat, map.metersPerPixel);
+    if (z > 16 && maxZoomAt(lat, lon) < z) return false;          // enlarged: direct
+    if (fabs(map.metersPerPixel / nativeMpp(z, lat) - 1.0) > 1e-3) return false;
+    if (!g_cv.px) {
+        g_cv.px = (uint8_t*)heap_caps_malloc((size_t)CW * CROW, MALLOC_CAP_SPIRAM);
+        if (!g_cv.px) return false;
+    }
+    const double world = (double)TILE * (double)(1u << z);
+    const double lr = lat * M_PI / 180.0;
+    const int32_t vx = (int32_t)floor((lon + 180.0) / 360.0 * world) - map.riderX;
+    const int32_t vy = (int32_t)floor((1.0 - asinh(tan(lr)) / M_PI) / 2.0 * world) - map.riderY;
+    const bool inv = epd_get_rotation() == EPD_ROT_INVERTED_PORTRAIT;
+    if (!g_cv.anchored || g_cv.z != z || g_cv.gen != g_generationForCanvas() || g_cv.inverted != inv ||
+        vx - g_cv.wx0 < 0 || vx - g_cv.wx0 > CW - SCREEN_W ||
+        vy - g_cv.wy0 < 0 || vy - g_cv.wy0 > CH - SCREEN_H) {
+        g_cv.anchored = true;
+        g_cv.z = z;
+        g_cv.gen = g_generationForCanvas();
+        g_cv.inverted = inv;
+        g_cv.wx0 = vx - CMX;
+        g_cv.wy0 = vy - CMY;
+        invalidateCanvas();
+        ++g_stats.anchors;
+    }
+    ox = vx - g_cv.wx0;
+    oy = vy - g_cv.wy0;
+    return true;
+}
+
+// The window at (ox, oy) of the canvas onto the screen: a row at a time.
+void blit(uint8_t* fb, int ox, int oy) {
+    for (int r = 0; r < 540; ++r) {
+        int crow, c0;
+        if (g_cv.inverted) { crow = r + (CW - SCREEN_W - ox); c0 = oy; }
+        else               { crow = r + ox;                   c0 = CH - SCREEN_H - oy; }
+        const uint8_t* src = g_cv.px + (size_t)crow * CROW;
+        uint8_t* dst = fb + (size_t)r * NATIVE_ROW;
+        if (!(c0 & 1)) {
+            memcpy(dst, src + c0 / 2, NATIVE_ROW);
+        } else {
+            // odd: each screen byte takes the high half of one canvas byte and the
+            // low half of the next (low nibble = the even pixel)
+            const uint8_t* q = src + (c0 >> 1);
+            for (int i = 0; i < NATIVE_ROW; ++i)
+                dst[i] = (uint8_t)((q[i] >> 4) | (q[i + 1] << 4));
+        }
+    }
+    ++g_stats.blits;
+}
+}  // namespace
+
+static bool g_canvasOn = true;
+void setCanvas(bool on) { g_canvasOn = on; g_cv.anchored = false; }
+
+int drawBase(const MapScreenData& map, uint8_t* fb) {
+    g_inverted = epd_get_rotation() == EPD_ROT_INVERTED_PORTRAIT;
+    int ox, oy;
+    if (!g_canvasOn || !placeView(map, ox, oy)) return drawDirect(map, fb);
+    const uint32_t missingBefore = g_stats.missing;
+    for (int br = oy / BH; br <= (oy + SCREEN_H - 1) / BH; ++br)
+        for (int bc = ox / BW; bc <= (ox + SCREEN_W - 1) / BW; ++bc)
+            if (!g_cv.valid[br][bc]) renderBlock(br, bc);
+    blit(fb, ox, oy);
+    return (int)(g_stats.missing - missingBefore);
+}
+
+bool viewReady(const MapScreenData& map) {
+    if (!g_canvasOn || !g_cv.anchored || !g_cv.px) return false;
+    const double lat = map.centerLat, lon = map.centerLon;
+    const int z = zoomFor(lat, map.metersPerPixel);
+    if (z != g_cv.z || g_cv.gen != g_generationForCanvas()) return false;
+    if (fabs(map.metersPerPixel / nativeMpp(z, lat) - 1.0) > 1e-3) return false;
+    const double world = (double)TILE * (double)(1u << z);
+    const double lr = lat * M_PI / 180.0;
+    const int ox = (int32_t)floor((lon + 180.0) / 360.0 * world) - map.riderX - g_cv.wx0;
+    const int oy = (int32_t)floor((1.0 - asinh(tan(lr)) / M_PI) / 2.0 * world) - map.riderY - g_cv.wy0;
+    if (ox < 0 || ox > CW - SCREEN_W || oy < 0 || oy > CH - SCREEN_H) return false;
+    for (int br = oy / BH; br <= (oy + SCREEN_H - 1) / BH; ++br)
+        for (int bc = ox / BW; bc <= (ox + SCREEN_W - 1) / BW; ++bc)
+            if (!g_cv.valid[br][bc]) return false;
+    return true;
+}
+
+bool idleStep(const MapScreenData& map) {
+    int ox, oy;
+    if (!g_canvasOn || !placeView(map, ox, oy)) return false;
+    if (g_cv.validCount >= BROWS * BCOLS) return false;
+    // the undrawn block nearest the middle of the view
+    const int mx = ox + SCREEN_W / 2, my = oy + SCREEN_H / 2;
+    int best = -1, bestD = 0;
+    for (int br = 0; br < BROWS; ++br)
+        for (int bc = 0; bc < BCOLS; ++bc) {
+            if (g_cv.valid[br][bc]) continue;
+            const int dx = bc * BW + BW / 2 - mx, dy = br * BH + BH / 2 - my;
+            const int d = dx * dx + dy * dy;
+            if (best < 0 || d < bestD) { best = br * BCOLS + bc; bestD = d; }
+        }
+    if (best < 0) return false;
+    renderBlock(best / BCOLS, best % BCOLS);
+    return true;
+}
+
 static uint32_t g_generation = 1;
+namespace { uint32_t g_generationForCanvas() { return g_generation; } }
 void reset() {
     for (Slot& s : g_slots) s.valid = false;
     for (CellSeen& c : g_cells) c = CellSeen();

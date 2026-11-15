@@ -12,9 +12,7 @@
 //   /doba/map/8/<x>/<y>.dtp       zoom 9-16 for one zoom-8 cell
 //   /doba/map/8/<x>/<y>.17.dtp    zoom 17 (detail, street names) where rendered
 //
-// When a pack covers the rider, the topo layer replaces the OpenTrailPaper
-// vector roads entirely (they would only repeat what the topo tile shows),
-// and the map is drawn north-up: a raster cannot be rotated cheaply.
+// The map is drawn north-up: a raster cannot be rotated cheaply.
 
 #include <cstdint>
 
@@ -37,8 +35,18 @@ int maxZoomAt(double lat, double lon);
 
 // Draws the topo tiles for map.centerLat/centerLon at map.metersPerPixel, with
 // the centre at (map.riderX, map.riderY), over the whole 540x960 portrait fb.
-// Returns the number of tiles that were missing (drawn white).
+// Returns the number of tiles that were missing (drawn white). Through the
+// canvas (topo_layer.cpp): a view near the last one is a copy, not a redraw.
 int drawBase(const MapScreenData& map, uint8_t* fb);
+
+// With nothing else to do: draws one more block of the canvas round this view
+// (the map half a screen beyond each edge), so a drag or a walk lands on map
+// already drawn. False when there is nothing left to draw for it.
+bool idleStep(const MapScreenData& map);
+// This view is already drawn on the canvas: showing it is a copy.
+bool viewReady(const MapScreenData& map);
+// Console `topo canvas off`: every frame straight from the tiles (to compare).
+void setCanvas(bool on);
 
 // Forget open packs and cached tiles (the card was removed or rewritten).
 void reset();
@@ -46,7 +54,10 @@ void reset();
 uint32_t generation();
 
 // For the console / sim tests: tiles decoded, cache hits, packs opened.
-struct Stats { uint32_t decoded, hits, missing, packsOpened; };
+struct Stats {
+    uint32_t decoded, hits, missing, packsOpened;
+    uint32_t blocks, blits, anchors;   // canvas: blocks drawn, views copied, re-anchors
+};
 Stats stats();
 
 }  // namespace topo

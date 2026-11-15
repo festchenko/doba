@@ -1,0 +1,74 @@
+"""DOBA: the topo canvas (topo_layer.cpp) — the map drawn half a screen beyond
+each edge of the view, so a drag or a walk is a copy instead of a redraw.
+What it puts on the glass must be what the tiles give, pixel for pixel."""
+import re
+import time
+
+import numpy as np
+
+from test_doba import boot, doba  # noqa: F401
+from test_topo import LAT, LON, Z, tile_xy, write_packs
+from test_audit import shot
+
+TOPO = re.compile(r"blocks=(\d+) blits=(\d+) anchors=(\d+)")
+
+
+def pattern(tx, ty):
+    """A tile no two pixels apart can be mistaken in: diagonal stripes 3 px wide
+    whose phase depends on where the tile is."""
+    y, x = np.mgrid[0:256, 0:256]
+    return (((tx * 256 + x) // 3 + (ty * 256 + y) // 5) % 14 + 1).astype(np.uint8)
+
+
+def topo_stats(dev):
+    out = "\n".join(dev.console("topo"))
+    m = TOPO.search(out)
+    return dict(blocks=int(m[1]), blits=int(m[2]), anchors=int(m[3]), out=out)
+
+
+def open_z16(dev):
+    dev.gps(LAT, LON, speed_kmh=0)
+    time.sleep(1.5)
+    dev.console("screen map", 600)
+    dev.wait_status(lambda s: s["screen"] == "map", timeout=10)
+    time.sleep(1.5)
+    for _ in range(2):
+        dev.console("zoom in")
+        time.sleep(1)
+    time.sleep(2)
+
+
+def band(img):
+    # under the header band, over the scale bar; left of the zoom buttons
+    return img[150:700, 0:400]
+
+
+def test_a_drag_onto_the_canvas_is_a_copy_and_matches_the_tiles(doba, tmp_path):
+    fx, fy = tile_xy(LAT, LON, Z)
+    tx, ty = int(fx), int(fy)
+    write_packs(doba.sd, {(Z, tx + dx, ty + dy): pattern(tx + dx, ty + dy)
+                          for dy in range(-6, 7) for dx in range(-4, 5)})
+    boot(doba)
+    open_z16(doba)
+    # the idle time fills the canvas round the view
+    deadline = time.time() + 30
+    while topo_stats(doba)["blocks"] < 64 and time.time() < deadline:
+        time.sleep(0.5)
+    before = topo_stats(doba)
+    assert before["blocks"] >= 64, before["out"]
+
+    for i, (x0, y0, x1, y1) in enumerate([(300, 500, 117, 381), (200, 300, 331, 523)]):
+        doba.swipe(x0, y0, x1, y1)
+        time.sleep(2.5)
+        after = topo_stats(doba)
+        assert after["anchors"] == before["anchors"], "the drag left the canvas"
+        assert after["blits"] > before["blits"]
+        canvas = band(shot(doba, tmp_path, "canvas%d.png" % i))
+        doba.console("topo canvas off")
+        time.sleep(2.5)
+        direct = band(shot(doba, tmp_path, "direct%d.png" % i))
+        doba.console("topo canvas on")
+        time.sleep(2)
+        same = (canvas == direct).mean()
+        assert same > 0.999, "canvas and tiles differ on %.2f%% of the map" % (100 * (1 - same))
+        before = topo_stats(doba)

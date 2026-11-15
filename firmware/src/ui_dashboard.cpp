@@ -750,7 +750,11 @@ bool mapDrag(int x0, int y0, int x1, int y1) {
     mapPanE -= dx * mapMpp;
     mapPanN += dy * mapMpp;
     Serial.printf("[map] drag %d,%d -> %.0f m E %.0f m N\n", dx, dy, mapPanE, mapPanN);
-    ackBusy();   // the new tiles come off the card
+    // The spinner is a panel refresh of its own: only when the new view has tiles
+    // to come off the card. On the canvas (topo_layer.cpp) the map itself is next.
+    MapScreenData map = {};
+    buildMapScreenData(g_state.snapshot(), map);
+    if (!(map.topo && topo::viewReady(map))) ackBusy();
     return true;
 }
 
@@ -1170,6 +1174,13 @@ void renderMapWithCache(const MapScreenData& map, const DeviceState& s, uint8_t*
         return;
     }
     mapCacheMisses++;
+    if (map.topo) {
+        // The canvas holds this zoom round the view; the frame cache is for the
+        // other zooms (one claimed a frame a GPS step while walking, and pushed
+        // the prerendered + and - out).
+        ui_render_map(map, s, fb);
+        return;
+    }
     uint8_t* save = mapCache.claim(now);
     mapLayerBeingKept = save;
     ui_render_map(map, s, fb, false, save ? mapLayerKeep : nullptr);
@@ -1208,15 +1219,24 @@ void renderMapScreen(const DeviceState& s, uint8_t* fb) {
     drawMeshNotice(fb);
 }
 
-// With the view holding still and nothing else to do, render one zoom either side, one
-// per call, so a tap only has to put it on the panel. Runs in the UI task's idle time and
-// gives way to a finger, which is checked all the way through.
-void mapPrerenderStep() {
-    if (!mapCacheOn || screen != SCREEN_MAP || powerOverlay ||
-        zoomHeld) return;
+// The map's idle work, one small piece a call, in the UI task's spare time, giving
+// way to a finger. First the canvas round the view (topo_layer.cpp: half a screen
+// of map beyond each edge, so a drag or a walk lands on map already drawn), then,
+// with the view holding still, one zoom either side, so a tap on + or - only has
+// to put it on the panel. True when it did something (the loop comes straight
+// back for the next piece instead of sleeping).
+bool mapPrerenderStep() {
+    if (screen != SCREEN_MAP || powerOverlay || zoomHeld) return false;
+    if (touchIrq || touchWasDown) return false;
+    {
+        MapScreenData map = {};
+        const DeviceState s = g_state.snapshot();
+        buildMapScreenData(s, map);
+        if (map.topo && topo::idleStep(map)) return true;
+    }
+    if (!mapCacheOn) return false;
     const uint32_t now = millis();
-    if (now - mapStillSince < kMapStillMs || (int32_t)(now - mapPrerenderNotBefore) < 0) return;
-    if (touchIrq || touchWasDown) return;
+    if (now - mapStillSince < kMapStillMs || (int32_t)(now - mapPrerenderNotBefore) < 0) return false;
 
     for (const float ask : {mapMpp / 2.0f, mapMpp * 2.0f}) {
         if (ask > mapMaxMpp() * 1.01f) continue;
@@ -1229,21 +1249,22 @@ void mapPrerenderStep() {
         mapMpp = liveMpp;
         if (fabsf(mpp - liveMpp) < 0.01f) continue;   // already at the end of the range
         if (mapFrameBase) continue;                    // kept already
-        if (!mapPrerenderFb) return;
+        if (!mapPrerenderFb) return false;
         uint8_t* px = mapCache.claim(millis());
-        if (!px) return;
+        if (!px) return false;
         memset(mapPrerenderFb, 0xFF, fbSize);
         ui_render_map_base(map, mapPrerenderFb);
         if (touchIrq || touchWasDown) {   // a finger came: this frame may be stale
             mapPrerendersCut++;
             mapPrerenderNotBefore = millis() + kMapPrerenderRetryMs;
-            return;
+            return false;
         }
         memcpy(px, mapPrerenderFb, fbSize);
         mapCache.commit(px, mapKeyFor(map), millis());
         mapPrerenders++;
-        return;
+        return true;
     }
+    return false;
 }
 
 // Console `farewell`: the power-off screen without the power-off, held for a look.
@@ -2194,11 +2215,18 @@ static void runConsoleLine(char* line) {
         else
             Serial.println("[dem] none");
     } else if (!strcasecmp(cmd, "topo")) {   // DOBA: topo layer diagnostics
+        if (arg && !strcasecmp(arg, "canvas")) {
+            const char* v = strtok(nullptr, " \t");
+            topo::setCanvas(!(v && !strcasecmp(v, "off")));
+            mapCache.clear();
+            forceDraw = true;
+        }
         const topo::Stats t = topo::stats();
-        Serial.printf("[topo] active=%d mpp=%.2f decoded=%lu hits=%lu missing=%lu packs=%lu\n",
+        Serial.printf("[topo] active=%d mpp=%.2f decoded=%lu hits=%lu missing=%lu packs=%lu blocks=%lu blits=%lu anchors=%lu\n",
                       (int)mapTopoActive, mapMpp, (unsigned long)t.decoded,
                       (unsigned long)t.hits, (unsigned long)t.missing,
-                      (unsigned long)t.packsOpened);
+                      (unsigned long)t.packsOpened, (unsigned long)t.blocks,
+                      (unsigned long)t.blits, (unsigned long)t.anchors);
     } else if (!strcasecmp(cmd, "back")) {
         goBack(); noteActivity();
     } else {
@@ -2632,7 +2660,7 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
         // power-up. EPD_Painter owns its rails around each paint, so there is
         // nothing to release.
 
-        mapPrerenderStep();
+        const bool busy = mapPrerenderStep();
 
         // Block until an input interrupt or a redraw request, with a fallback
         // tick that still satisfies the slowest thing the loop owes anyone (the
@@ -2643,16 +2671,12 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
         // only sleep when BOTH cores are idle, and tickless idle sizes each
         // sleep by the shortest pending timer across them, so this task's tick
         // was capping every sleep on core 1 at 30 ms.
-        xSemaphoreTake(uiWake, pdMS_TO_TICKS(UI_IDLE_TICK_MS));
+        xSemaphoreTake(uiWake, busy ? 0 : pdMS_TO_TICKS(UI_IDLE_TICK_MS));
     }
 }
 
 }  // namespace ui_dashboard
 
-
-// DOBA: the map's orientation, for doba_ui's MAP options page.
-namespace doba_ui {
-}  // namespace doba_ui
 
 namespace live_view {
 namespace {
