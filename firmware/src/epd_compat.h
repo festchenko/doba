@@ -59,6 +59,8 @@ void epdc_paint();
 //
 // No-op on the epdiy backend, whose epd_hl_update_screen() already blocks.
 void epdc_paint_wait();
+// True when the panel has finished driving the last frame (no wait).
+bool epdc_paint_idle();
 
 
 // Cut the panel's high-voltage rails (VPOS/VNEG/VGH/VGL/VCOM) before deep sleep.

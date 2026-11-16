@@ -460,6 +460,60 @@ inline bool canvasPixelReady(int cx, int cy) {
     return cx >= 0 && cy >= 0 && cx < CW && cy < CH && g_cv.valid[cy / BH][cx / BW];
 }
 
+// Move the canvas over the world by whole blocks: wx0 += dcols * BW, wy0 +=
+// drows * BH. The blocks it still covers keep what they hold (a copy of rows
+// and of bytes within rows: blocks are whole bytes either way); the blocks it
+// uncovers are left to be drawn. This is what keeps a margin on every side
+// after a drag without throwing the drawn map away.
+void shiftCanvas(int dcols, int drows) {
+    if (!dcols && !drows) return;
+    if (abs(dcols) >= BCOLS || abs(drows) >= BROWS) {
+        g_cv.wx0 += dcols * BW;
+        g_cv.wy0 += drows * BH;
+        invalidateCanvas();
+        return;
+    }
+    // native layout: row = cx (inverted: CW-1-cx), pixel = CH-1-cy (inverted: cy)
+    const int rs = g_cv.inverted ? -dcols * BW : dcols * BW;          // source row offset
+    const int bs = (g_cv.inverted ? drows * BH : -drows * BH) / 2;    // source byte offset
+    const int n = CROW - abs(bs);
+    // rows that read further down go first going down, and the other way up, so
+    // no row is overwritten before it is read
+    for (int i = 0; i < CW; ++i) {
+        const int r = rs >= 0 ? i : CW - 1 - i;
+        const int src = r + rs;
+        if (src < 0 || src >= CW) continue;          // an uncovered block column
+        uint8_t* d = g_cv.px + (size_t)r * CROW;
+        const uint8_t* q = g_cv.px + (size_t)src * CROW;
+        if (bs >= 0) memmove(d, q + bs, n);
+        else memmove(d - bs, q, n);
+    }
+    bool v[BROWS][BCOLS] = {};
+    int count = 0;
+    for (int br = 0; br < BROWS; ++br)
+        for (int bc = 0; bc < BCOLS; ++bc) {
+            const int sr = br + drows, sc = bc + dcols;
+            v[br][bc] = sr >= 0 && sr < BROWS && sc >= 0 && sc < BCOLS && g_cv.valid[sr][sc];
+            count += v[br][bc];
+        }
+    memcpy(g_cv.valid, v, sizeof v);
+    g_cv.validCount = count;
+    g_cv.wx0 += dcols * BW;
+    g_cv.wy0 += drows * BH;
+    g_cv.shownOx -= dcols * BW;
+    g_cv.shownOy -= drows * BH;
+    if (g_cv.shownOx < 0 || g_cv.shownOy < 0 || g_cv.shownOx > CW - SCREEN_W || g_cv.shownOy > CH - SCREEN_H)
+        g_cv.shown = false;
+    ++g_stats.shifts;
+}
+
+// Whole blocks from where the view's top-left is (ox, oy) to where it would sit
+// with an even margin round it.
+inline int blocksOff(int o, int margin, int b) {
+    const int d = o - margin;
+    return d >= 0 ? (d + b / 2) / b : -((-d + b / 2) / b);
+}
+
 // Where the view would sit on the canvas as it stands, without moving it.
 bool viewOnCanvas(const MapScreenData& map, int& ox, int& oy) {
     if (!g_cv.anchored || !g_cv.px) return false;
@@ -491,8 +545,13 @@ bool placeView(const MapScreenData& map, int& ox, int& oy) {
     const int32_t vx = (int32_t)floor((lon + 180.0) / 360.0 * world) - map.riderX;
     const int32_t vy = (int32_t)floor((1.0 - asinh(tan(lr)) / M_PI) / 2.0 * world) - map.riderY;
     const bool inv = epd_get_rotation() == EPD_ROT_INVERTED_PORTRAIT;
-    if (!g_cv.anchored || g_cv.z != z || g_cv.gen != g_generationForCanvas() || g_cv.inverted != inv ||
-        vx - g_cv.wx0 < 0 || vx - g_cv.wx0 > CW - SCREEN_W ||
+    const bool same = g_cv.anchored && g_cv.z == z && g_cv.gen == g_generationForCanvas() && g_cv.inverted == inv;
+    if (same && (vx - g_cv.wx0 < 0 || vx - g_cv.wx0 > CW - SCREEN_W ||
+                 vy - g_cv.wy0 < 0 || vy - g_cv.wy0 > CH - SCREEN_H)) {
+        // off the canvas, same map: slide it over, keeping what still overlaps
+        shiftCanvas(blocksOff(vx - g_cv.wx0, CMX, BW), blocksOff(vy - g_cv.wy0, CMY, BH));
+    }
+    if (!same || vx - g_cv.wx0 < 0 || vx - g_cv.wx0 > CW - SCREEN_W ||
         vy - g_cv.wy0 < 0 || vy - g_cv.wy0 > CH - SCREEN_H) {
         g_cv.anchored = true;
         g_cv.z = z;
@@ -590,6 +649,10 @@ bool viewReady(const MapScreenData& map) {
 bool idleStep(const MapScreenData& map) {
     int ox, oy;
     if (!g_canvasOn || !placeView(map, ox, oy)) return false;
+    // After a drag the view sits off the middle: slide the canvas back round it
+    // first, so the next drag finds a margin on every side.
+    const int dc = blocksOff(ox, CMX, BW), dr = blocksOff(oy, CMY, BH);
+    if (dc || dr) { shiftCanvas(dc, dr); return true; }
     if (g_cv.validCount >= BROWS * BCOLS) return false;
     // the undrawn block nearest the middle of the view
     const int mx = ox + SCREEN_W / 2, my = oy + SCREEN_H / 2;

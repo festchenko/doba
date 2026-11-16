@@ -816,6 +816,8 @@ void epdc_clear_dirty(int tolerance) {
     g_painter->clearDirtyAreas(g_levels, tolerance, EPD_Painter::ClearMode::SOFT);
 }
 
+bool epdc_paint_idle() { return !g_painter || g_painter->paintIdle(); }
+
 void epdc_paint_wait() {
     if (!g_painter) return;
     // paintIdle() is paintStage == 0, i.e. the paint task has finished driving

@@ -63,7 +63,7 @@ uint32_t generation();
 // For the console / sim tests: tiles decoded, cache hits, packs opened.
 struct Stats {
     uint32_t decoded, hits, missing, packsOpened;
-    uint32_t blocks, blits, anchors;   // canvas: blocks drawn, views copied, re-anchors
+    uint32_t blocks, blits, anchors, shifts;   // canvas: blocks drawn, views copied, re-anchors, slides
 };
 Stats stats();
 

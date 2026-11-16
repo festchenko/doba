@@ -37,6 +37,7 @@ void epdc_paint() {
     ++g_paints;
 }
 void epdc_paint_wait() {}
+bool epdc_paint_idle() { return true; }
 void epdc_power_off_wait() {}
 void epdc_park_pins() {}
 bool epdc_power_off_verify() { return true; }

@@ -517,7 +517,11 @@ bool mapLiveDrag() {
     const int dx = x - x0, dy = y - y0;
     if (!liveDragging && dx * dx + dy * dy < 30 * 30) return false;
     liveDragging = true;
-    if (millis() - liveLastPaint < 120) return false;
+    // One frame at a time: the next only once the panel has finished driving the
+    // last. Sent sooner, it lands on greys still on their way and they read
+    // darker until a later frame settles them (the drag looked dark, then the
+    // map came back to its tone after the finger let go).
+    if (millis() - liveLastPaint < 120 || !epdc_paint_idle()) return false;
     const float e = mapPanE, n = mapPanN;
     mapPanE -= dx * mapMpp;
     mapPanN += dy * mapMpp;

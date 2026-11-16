@@ -1765,11 +1765,11 @@ static void runConsoleLine(char* line) {
             forceDraw = true;
         }
         const topo::Stats t = topo::stats();
-        Serial.printf("[topo] active=%d mpp=%.2f decoded=%lu hits=%lu missing=%lu packs=%lu blocks=%lu blits=%lu anchors=%lu\n",
+        Serial.printf("[topo] active=%d mpp=%.2f decoded=%lu hits=%lu missing=%lu packs=%lu blocks=%lu blits=%lu anchors=%lu shifts=%lu\n",
                       (int)mapTopoActive, mapMpp, (unsigned long)t.decoded,
                       (unsigned long)t.hits, (unsigned long)t.missing,
                       (unsigned long)t.packsOpened, (unsigned long)t.blocks,
-                      (unsigned long)t.blits, (unsigned long)t.anchors);
+                      (unsigned long)t.blits, (unsigned long)t.anchors, (unsigned long)t.shifts);
     } else if (!strcasecmp(cmd, "back")) {
         goBack(); noteActivity();
     } else {
