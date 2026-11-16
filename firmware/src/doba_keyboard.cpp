@@ -158,7 +158,12 @@ void Keyboard::render(uint8_t* fb) const {
         const Key& k = keys[i];
         const EpdRect r = {k.x + GAP, k.y + GAP, k.w - 2 * GAP, k.h - 2 * GAP};
         const bool dark = k.kind == 6 || (k.kind == 1 && shift);
-        ui::fillRound(r, 7, dark ? 0x00 : k.kind == 0 ? 0xE6 : 0xC8, fb);
+        // The panel shows four tones (epd_compat.cpp: 13-15 white, 8-12 light):
+        // the letter keys' 0xE6 came out white on the glass, keys without a key
+        // shape. Letters light grey; word keys paper with an ink frame.
+        if (dark) ui::fillRound(r, 7, 0x00, fb);
+        else if (k.kind == 0) ui::fillRound(r, 7, 0xBB, fb);
+        else { ui::fillRound(r, 7, 0xFF, fb); ui::frameRound(r, 7, 2, fb); }
         if (!k.label[0]) continue;
         const EpdFont* f = ui::font(k.kind == 0 ? ui::F_KEY : ui::F_SMALL);
         char lb[32];

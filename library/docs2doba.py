@@ -633,6 +633,25 @@ def unreadable(text):
     return good < len(words) * 0.6
 
 
+def pdf_meta_title(raw):
+    """A PDF's Title as words, or "" when it is not usable. Some PDFs store it
+    as UTF-16 that the reader hands back undecoded ("\xfe\xff\x00T\x00h..."):
+    it showed on Doba as "\376\377\0007..." (16 Nov). Decoded here; a title
+    with too few letters, or one character over and over, falls back to the
+    file name."""
+    t = raw
+    if t[:2] in ("\xfe\xff", "\xff\xfe"):
+        try:
+            t = t.encode("latin-1").decode("utf-16")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return ""
+    t = clean(t)
+    letters = sum(c.isalpha() for c in t)
+    if letters < 3 or (t and max(t.count(c) for c in set(t)) > 0.6 * len(t)):
+        return ""
+    return t
+
+
 def read_pdf(path, title):
     import pymupdf
     doc = pymupdf.open(path)
@@ -649,7 +668,7 @@ def read_pdf(path, title):
         print(f"!! {os.path.basename(path)}: its text layer is in a broken encoding; skipped "
               "(find another copy, or OCR it)", file=sys.stderr)
         return []
-    meta_title = clean((doc.metadata or {}).get("title") or "")
+    meta_title = pdf_meta_title((doc.metadata or {}).get("title") or "")
     if TITLES_FROM_FILENAMES:
         meta_title = ""
     if meta_title and len(meta_title) > 3 and not meta_title.lower().startswith(("microsoft", "untitled")):

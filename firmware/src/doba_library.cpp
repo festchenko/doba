@@ -14,6 +14,9 @@
 #include "epd_compat.h"
 #include "sd_bus.h"
 #include "sd_card.h"   // mountGeneration: cached files die with a remount
+#ifndef OTP_SIM
+#include "ff.h"        // FatFs: 64-bit seeks for the big index files
+#endif
 #include "ui_render.h"
 #include <Preferences.h>
 #ifdef VFONT
@@ -147,27 +150,93 @@ uint32_t foldCp(uint32_t cp) {
 
 // --- books ---------------------------------------------------------------------
 
+// A book's index.dti, read with 64-bit offsets. English Wikipedia's is 2.6 GB
+// (20 M records); Arduino's File seeks through the VFS with a 32-bit signed
+// offset, so past 2 GB a seek failed and the binary search went on from
+// wherever the file was (searching it reset Doba, 16 Nov). FatFs itself takes
+// 64-bit offsets on exFAT: the device reads through it. The sim's files are
+// plain host files.
+class IdxFile {
+public:
+    IdxFile() = default;
+    IdxFile(const IdxFile&) = delete;
+    IdxFile& operator=(const IdxFile&) = delete;
+    ~IdxFile() { close(); }
+    bool open(const char* path) {   // path under the card's root, "/doba/lib/..."
+        close();
+#ifdef OTP_SIM
+        f_ = SD.open(path, FILE_READ);
+        return (bool)f_;
+#else
+        const uint8_t drv = sd_card::sdDrive();
+        if (drv == 0xFF) return false;
+        char full[112];
+        snprintf(full, sizeof full, "%c:%s", '0' + drv, path);
+        fil_ = (FIL*)heap_caps_malloc(sizeof(FIL), MALLOC_CAP_8BIT);
+        if (!fil_) return false;
+        if (f_open(fil_, full, FA_READ) != FR_OK) { heap_caps_free(fil_); fil_ = nullptr; return false; }
+        return true;
+#endif
+    }
+    explicit operator bool() const {
+#ifdef OTP_SIM
+        return (bool)f_;
+#else
+        return fil_ != nullptr;
+#endif
+    }
+    bool seek(uint64_t pos) {
+#ifdef OTP_SIM
+        return f_.seek(pos);
+#else
+        return fil_ && f_lseek(fil_, (FSIZE_t)pos) == FR_OK && f_tell(fil_) == (FSIZE_t)pos;
+#endif
+    }
+    size_t read(uint8_t* buf, size_t n) {
+#ifdef OTP_SIM
+        return f_.read(buf, n);
+#else
+        UINT got = 0;
+        if (!fil_ || f_read(fil_, buf, (UINT)n, &got) != FR_OK) return 0;
+        return got;
+#endif
+    }
+    void close() {
+#ifdef OTP_SIM
+        if (f_) f_.close();
+#else
+        if (fil_) { f_close(fil_); heap_caps_free(fil_); fil_ = nullptr; }
+#endif
+    }
+private:
+#ifdef OTP_SIM
+    File f_;
+#else
+    FIL* fil_ = nullptr;
+#endif
+};
+
 // Open index.dti files, kept between searches: a search runs on every key and
 // walks the books in turn, and opening /doba/lib/<book>/index.dti (three
 // directory lookups) was most of what each book cost. A few stay open, least
 // recently used goes; all of them go with a remount, a rescan or a delete.
-struct IdxCache { int8_t book = -1; uint32_t gen = 0, used = 0; File f; };
-IdxCache g_idx[6];
+struct IdxCache { int8_t book = -1; uint32_t gen = 0, used = 0; IdxFile f; };
+IdxCache g_idx[16];   // every book of a search across the library is read on each key
 uint32_t g_idxTick = 0;
 void closeIndexes() {   // under sdLock
-    for (IdxCache& c : g_idx) { if (c.f) c.f.close(); c.book = -1; }
+    for (IdxCache& c : g_idx) { c.f.close(); c.book = -1; }
 }
-File* openIndex(int bi) {   // under sdLock
+IdxFile* openIndex(int bi) {   // under sdLock
     const uint32_t gen = sd_card::mountGeneration();
     IdxCache* lru = &g_idx[0];
     for (IdxCache& c : g_idx) {
         if (c.book == bi && c.gen == gen && c.f) { c.used = ++g_idxTick; return &c.f; }
         if (c.used < lru->used) lru = &c;
     }
-    if (lru->f) lru->f.close();
+    lru->f.close();
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
-    lru->f = SD.open(path, FILE_READ);
+    lru->f.open(path);
     lru->book = (int8_t)bi;
     lru->gen = gen;
     lru->used = ++g_idxTick;
@@ -195,8 +264,8 @@ void scan() {
             d.close();
             char path[96];
             snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, b.dir);
-            File ix = SD.open(path, FILE_READ);
-            if (!ix) continue;
+            IdxFile ix;
+            if (!ix.open(path)) continue;
             uint8_t h[HDR];
             const bool ok = ix.read(h, HDR) == HDR && memcmp(h, "DOBAIX1", 7) == 0;
             ix.close();
@@ -259,9 +328,9 @@ void searchBook(int bi, const char* key) {
     uint8_t want[KEY] = {};
     memcpy(want, key, klen < KEY ? klen : KEY);
     sdLock();
-    File* fp = openIndex(bi);
+    IdxFile* fp = openIndex(bi);
     if (!fp) { sdUnlock(); return; }
-    File& f = *fp;
+    IdxFile& f = *fp;
     uint8_t rec[REC];
     uint32_t lo = 0, hi = b.count;
     while (lo < hi) {   // lower bound
@@ -293,10 +362,26 @@ void searchBook(int bi, const char* key) {
 }
 
 // Prefix search over the books in `mask` (bit per book), in book order.
+// Across books: each book's own best matches, then taken in turn — the first
+// of every book, then the second... The books used to be searched in order
+// until RESULTS were found, so the first big book (Wikipedia) filled the whole
+// list and nothing else was ever shown (16 Nov).
 void search(const char* key, BookMask mask) {
+    static PsArr<Result, MAX_BOOKS * RESULTS> cand;
+    static uint8_t got[MAX_BOOKS];
+    int nb = 0;
+    for (int bi = 0; bi < g_bookCount; ++bi) {
+        if (!(mask & ((BookMask)1 << bi))) continue;
+        g_resultCount = 0;
+        searchBook(bi, key);
+        if (!g_resultCount) continue;
+        for (int i = 0; i < g_resultCount; ++i) cand[nb * RESULTS + i] = g_results[i];
+        got[nb++] = (uint8_t)g_resultCount;
+    }
     g_resultCount = 0;
-    for (int bi = 0; bi < g_bookCount && g_resultCount < RESULTS; ++bi)
-        if (mask & ((BookMask)1 << bi)) searchBook(bi, key);
+    for (int r = 0; r < RESULTS && g_resultCount < RESULTS; ++r)
+        for (int b = 0; b < nb && g_resultCount < RESULTS; ++b)
+            if (r < got[b]) g_results[g_resultCount++] = cand[b * RESULTS + r];
 }
 
 bool inflateTo(const uint8_t* src, size_t len, char* dst, size_t cap, size_t* outLen) {
@@ -1180,7 +1265,7 @@ bool hitPager(const EpdRect& r, int x, int y) {
 }
 constexpr int LIST_ROW = 64;
 
-bool readRec(File& f, uint32_t i, uint8_t* rec) {
+bool readRec(IdxFile& f, uint32_t i, uint8_t* rec) {
     return f.seek(HDR + (uint64_t)i * REC) && f.read(rec, REC) == REC;
 }
 void recResult(const uint8_t* rec, int bi, Result& r) {
@@ -1235,7 +1320,8 @@ void findDocs(int bi) {
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
     sdLock();
-    File f = SD.open(path, FILE_READ);
+    IdxFile f;
+    f.open(path);
     uint8_t rec[REC];
     for (uint32_t i = 0; f && i < g_books[bi].count; ++i) {
         if (!readRec(f, i, rec)) break;
@@ -1526,6 +1612,89 @@ const EpdRect kDelNo = {48 + (W - 96 - 20) / 2 + 20, TOP + 420, (W - 96 - 20) / 
 int g_delAsk = -1;              // the book whose delete is being asked about
 uint64_t g_delBytes = 0;
 
+#ifndef OTP_SIM
+// A book's folder through FatFs itself. Through Arduino's File every entry was
+// opened to ask its size or remove it, and each open searched the folder from
+// its start again: a book's img/ of thousands of pictures took minutes, under
+// the card lock, and Doba stood still behind a spinner (16 Nov).
+namespace {
+bool fatPath(const char* path, char* out, size_t n) {
+    const uint8_t drv = sd_card::sdDrive();
+    if (drv == 0xFF) return false;
+    snprintf(out, n, "%c:%s", '0' + drv, path);
+    return true;
+}
+uint64_t fatTreeBytes(char* p, size_t cap) {   // p: a FatFs path, extended in place
+    FF_DIR* d = (FF_DIR*)heap_caps_malloc(sizeof(FF_DIR), MALLOC_CAP_8BIT);
+    FILINFO* fi = (FILINFO*)heap_caps_malloc(sizeof(FILINFO), MALLOC_CAP_8BIT);
+    uint64_t n = 0;
+    if (d && fi && f_opendir(d, p) == FR_OK) {
+        const size_t len = strlen(p);
+        while (f_readdir(d, fi) == FR_OK && fi->fname[0]) {
+            if (fi->fattrib & AM_DIR) {
+                if (len + 2 + strlen(fi->fname) >= cap) continue;
+                snprintf(p + len, cap - len, "/%s", fi->fname);
+                n += fatTreeBytes(p, cap);
+                p[len] = 0;
+            } else {
+                n += fi->fsize;
+            }
+        }
+        f_closedir(d);
+    }
+    heap_caps_free(d);
+    heap_caps_free(fi);
+    return n;
+}
+// Removes what is in p, then p. Entries are read first and removed after the
+// listing closes (a FAT directory changed while listed can skip entries), a
+// batch at a time.
+bool fatRmTree(char* p, size_t cap) {
+    FILINFO* fi = (FILINFO*)heap_caps_malloc(sizeof(FILINFO), MALLOC_CAP_8BIT);
+    FF_DIR* d = (FF_DIR*)heap_caps_malloc(sizeof(FF_DIR), MALLOC_CAP_8BIT);
+    constexpr int BATCH = 64;
+    struct Ent { char name[FF_MAX_LFN + 1]; bool dir; };
+    Ent* ents = (Ent*)heap_caps_malloc(sizeof(Ent) * BATCH, MALLOC_CAP_SPIRAM);
+    bool ok = fi && d && ents;
+    const size_t len = strlen(p);
+    while (ok) {
+        int got = 0;
+        if (f_opendir(d, p) != FR_OK) { ok = false; break; }
+        while (got < BATCH && f_readdir(d, fi) == FR_OK && fi->fname[0]) {
+            snprintf(ents[got].name, sizeof ents[got].name, "%s", fi->fname);
+            ents[got].dir = fi->fattrib & AM_DIR;
+            ++got;
+        }
+        f_closedir(d);
+        if (!got) break;
+        for (int i = 0; ok && i < got; ++i) {
+            if (len + 2 + strlen(ents[i].name) >= cap) { ok = false; break; }
+            snprintf(p + len, cap - len, "/%s", ents[i].name);
+            ok = ents[i].dir ? fatRmTree(p, cap) : f_unlink(p) == FR_OK;
+            p[len] = 0;
+        }
+    }
+    heap_caps_free(ents);
+    heap_caps_free(d);
+    heap_caps_free(fi);
+    return ok && f_unlink(p) == FR_OK;
+}
+}  // namespace
+
+uint64_t treeBytes(const char* path) {
+    char p[300];
+    if (!fatPath(path, p, sizeof p)) return 0;
+    FILINFO fi;
+    if (f_stat(p, &fi) != FR_OK) return 0;
+    if (!(fi.fattrib & AM_DIR)) return fi.fsize;
+    return fatTreeBytes(p, sizeof p);
+}
+bool rmTree(const char* path) {
+    char p[300];
+    if (!fatPath(path, p, sizeof p)) return false;
+    return fatRmTree(p, sizeof p);
+}
+#else
 uint64_t treeBytes(const char* path) {
     File d = SD.open(path);
     if (!d) return 0;
@@ -1560,6 +1729,7 @@ bool rmTree(const char* path) {
     }
     return SD.rmdir(path);
 }
+#endif
 void drawBin(const EpdRect& r, uint8_t* fb) {
     ui::frameRound(r, 8, 2, fb, INK, PAPER);
     const int cx = r.x + r.width / 2, top = r.y + 13;
@@ -1630,7 +1800,7 @@ Level g_levels[MAX_DEPTH];
 int g_depth = 0;                 // g_levels[g_depth - 1] is on screen
 uint32_t g_letterFrom = 0, g_letterTo = 0;
 
-uint32_t lowerIn(File& f, const char* key, size_t klen, uint32_t lo, uint32_t hi) {
+uint32_t lowerIn(IdxFile& f, const char* key, size_t klen, uint32_t lo, uint32_t hi) {
     uint8_t want[KEY] = {}, rec[REC];
     memcpy(want, key, std::min(klen, (size_t)KEY));
     while (lo < hi) {
@@ -1673,7 +1843,8 @@ void findKids(int bi) {
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
     sdLock();
-    File f = SD.open(path, FILE_READ);
+    IdxFile f;
+    f.open(path);
     uint8_t rec[REC];
     uint32_t pos = lv.from;
     while (f && pos < lv.to && g_kidCount < MAX_KIDS) {
@@ -1735,7 +1906,8 @@ void pushLevel(int bi, const char* key, const char* label, uint32_t from, uint32
         snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
         uint8_t rec[REC] = {};
         sdLock();
-        File f = SD.open(path, FILE_READ);
+        IdxFile f;
+        f.open(path);
         const bool ok = f && readRec(f, g_kids[0].from, rec);
         if (f) f.close();
         sdUnlock();
@@ -1766,7 +1938,8 @@ void setLetter(int bi, int i) {
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
     sdLock();
-    File f = SD.open(path, FILE_READ);
+    IdxFile f;
+    f.open(path);
     const uint32_t count = g_books[bi].count;
     uint32_t from = 0, to = 0;
     char key[16] = "";
@@ -1826,7 +1999,8 @@ void renderLetter(uint8_t* fb) {
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
     sdLock();
-    File f = SD.open(path, FILE_READ);
+    IdxFile f;
+    f.open(path);
     uint8_t rec[REC];
     for (int r = 0; r < per; ++r) {
         const uint32_t i = g_letterFrom + (uint32_t)(g_listPage * per + r);
@@ -1845,7 +2019,8 @@ bool openRecord(int bi, uint32_t i) {
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
     sdLock();
-    File f = SD.open(path, FILE_READ);
+    IdxFile f;
+    f.open(path);
     uint8_t rec[REC];
     const bool ok = f && readRec(f, i, rec);
     if (f) f.close();
@@ -2503,7 +2678,8 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
                         char path[96];
                         snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
                         sdLock();
-                        File f = SD.open(path, FILE_READ);
+                        IdxFile f;
+                        f.open(path);
                         uint8_t rec[REC];
                         for (int t = 0; f && t < 40 && readRec(f, i, rec) && (rec[114] & 3); ++t)
                             i = (uint32_t)random((long)g_books[bi].count);
@@ -2537,7 +2713,8 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
                             snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[g_open].dir);
                             uint8_t rec[REC] = {};
                             sdLock();
-                            File f = SD.open(path, FILE_READ);
+                            IdxFile f;
+                            f.open(path);
                             const bool ok = f && readRec(f, k.from, rec);
                             if (f) f.close();
                             sdUnlock();
@@ -2704,7 +2881,8 @@ bool findIn(int bi, const char* title, Result& out) {
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, b.dir);
     bool found = false;
     sdLock();
-    File f = SD.open(path, FILE_READ);
+    IdxFile f;
+    f.open(path);
     for (int pass = 0; f && !found && pass < (twoKeys ? 2 : 1); ++pass) {
         if (pass == 1) memcpy(want, old, KEY);
         uint8_t rec[REC];
