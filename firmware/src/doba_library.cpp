@@ -1325,6 +1325,7 @@ void findDocs(int bi) {
     uint8_t rec[REC];
     for (uint32_t i = 0; f && i < g_books[bi].count; ++i) {
         if (!readRec(f, i, rec)) break;
+        if (rec[114] & 2) continue;   // hidden (a deleted document)
         char t[KEY + 1];
         memcpy(t, rec + KEY, KEY);
         t[KEY] = 0;
@@ -1610,6 +1611,13 @@ const EpdRect kDelBox = {24, TOP + 190, W - 48, 330};
 const EpdRect kDelYes = {48, TOP + 420, (W - 96 - 20) / 2, 72};
 const EpdRect kDelNo = {48 + (W - 96 - 20) / 2 + 20, TOP + 420, (W - 96 - 20) / 2, 72};
 int g_delAsk = -1;              // the book whose delete is being asked about
+// One document of a book, by a finger held on it in the book's list: its
+// records are marked hidden in the book's index (flag bit 1, the bit
+// library/hidejunk.py sets), so search, the list and links pass it by. Its
+// text stays in the book's shared files: nothing else is rewritten.
+int g_delDocBook = -1;
+char g_delDocRaw[KEY + 1] = "";
+uint32_t g_pressMs = 0;         // how long the finger was down for this tap
 uint64_t g_delBytes = 0;
 
 #ifndef OTP_SIM
@@ -1763,11 +1771,112 @@ void renderDeleteAsk(int bi, uint8_t* fb) {
              EPD_DRAW_ALIGN_CENTER, INK);
 }
 
+// Marks every record of the document `raw` (its title, or "raw — chapter")
+// hidden in book bi's index. Under sdLock.
+bool hideDocument(int bi, const char* raw) {
+    char path[96];
+    snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
+    static PsArr<uint32_t, 4096> hits;
+    int n = 0;
+    {
+        IdxFile f;
+        if (!f.open(path)) { Serial.printf("[lib] delete document: %s does not open\n", path); return false; }
+        const size_t L = strlen(raw);
+        uint8_t rec[REC];
+        // the document's articles: its own title and "raw — chapter"...
+        static PsArr<uint64_t, 1024> arts;   // chunk << 32 | offset
+        int na = 0;
+        for (uint32_t i = 0; i < g_books[bi].count; ++i) {
+            if (!readRec(f, i, rec)) break;
+            // One document's records: "raw", "raw — chapter", the contents
+            // page under the full name ("FM 21-76 Survival"), and chapters under
+            // a shorter one ("FM 21-76 — Chapter 2", the list shows the first).
+            char t[KEY + 1];
+            memcpy(t, rec + KEY, KEY);
+            t[KEY] = 0;
+            char* dash = strstr(t, " \xE2\x80\x94 ");
+            if (dash) *dash = 0;
+            const size_t T = strlen(t);
+            const bool mine = !strncmp(t, raw, L) ? (t[L] == 0 || t[L] == ' ')
+                            : (dash && T < L && !strncmp(raw, t, T) && raw[T] == ' ');
+            if (!mine) continue;
+            uint32_t off;
+            memcpy(&off, rec + 116, 4);
+            if (na < 1024) arts[na++] = (uint64_t)(rec[112] | rec[113] << 8) << 32 | off;
+        }
+        // ...and every record that points at one of them (a chapter's bare
+        // name, "Shelter", is a record of its own)
+        for (uint32_t i = 0; i < g_books[bi].count && n < 4096; ++i) {
+            if (!readRec(f, i, rec)) break;
+            uint32_t off;
+            memcpy(&off, rec + 116, 4);
+            const uint64_t at = (uint64_t)(rec[112] | rec[113] << 8) << 32 | off;
+            for (int k = 0; k < na; ++k)
+                if (arts[k] == at) { hits[n++] = i; break; }
+        }
+    }
+    if (!n) { Serial.printf("[lib] delete document: no record of '%s'\n", raw); return false; }
+#ifdef OTP_SIM
+    File w = SD.open(path, "r+");
+    if (!w) { Serial.printf("[lib] delete document: %s not writable\n", path); return false; }
+    bool ok = true;
+    for (int k = 0; ok && k < n; ++k) {
+        const uint32_t at = HDR + hits[k] * REC + 114;
+        uint8_t b = 0;
+        ok = w.seek(at) && w.read(&b, 1) == 1;
+        b |= 2;
+        ok = ok && w.seek(at) && w.write(&b, 1) == 1;
+    }
+    w.close();
+#else
+    const uint8_t drv = sd_card::sdDrive();
+    if (drv == 0xFF) return false;
+    char full[128];
+    snprintf(full, sizeof full, "%c:%s", '0' + drv, path);
+    FIL* w = (FIL*)heap_caps_malloc(sizeof(FIL), MALLOC_CAP_8BIT);
+    if (!w) return false;
+    bool ok = f_open(w, full, FA_READ | FA_WRITE) == FR_OK;
+    if (ok) {
+        for (int k = 0; ok && k < n; ++k) {
+            const FSIZE_t at = HDR + (FSIZE_t)hits[k] * REC + 114;
+            uint8_t b = 0;
+            UINT io = 0;
+            ok = f_lseek(w, at) == FR_OK && f_read(w, &b, 1, &io) == FR_OK && io == 1;
+            b |= 2;
+            ok = ok && f_lseek(w, at) == FR_OK && f_write(w, &b, 1, &io) == FR_OK && io == 1;
+        }
+        ok = f_close(w) == FR_OK && ok;
+    }
+    heap_caps_free(w);
+#endif
+    Serial.printf("[lib] delete document '%s' in %s: %d records %s\n", raw, g_books[bi].dir, n, ok ? "hidden" : "FAILED");
+    return ok;
+}
+void renderDeleteDocAsk(uint8_t* fb) {
+    epd_fill_rect(kDelBox, PAPER, fb);
+    ui::frameRound(kDelBox, 12, 3, fb, INK, PAPER);
+    char t[160];
+    snprintf(t, sizeof t, TR("Delete \"%s\"?"), g_delDocRaw);
+    fitText(ui::font(ui::F_TITLE), t, kDelBox.width - 40);
+    ui::text(ui::font(ui::F_TITLE), W / 2, kDelBox.y + 64, t, fb, EPD_DRAW_ALIGN_CENTER, INK);
+    ui::text(ui::font(ui::F_SMALL), W / 2, kDelBox.y + 116, TR("this document only; the rest of the book stays"), fb,
+             EPD_DRAW_ALIGN_CENTER, INK);
+    ui::text(ui::font(ui::F_SMALL), W / 2, kDelBox.y + 156, TR("It can only come back from a computer."), fb,
+             EPD_DRAW_ALIGN_CENTER, ui::GREY);
+    epd_fill_rect(kDelYes, INK, fb);
+    ui::text(ui::font(ui::F_LABEL), kDelYes.x + kDelYes.width / 2, kDelYes.y + 47, TR("DELETE"), fb,
+             EPD_DRAW_ALIGN_CENTER, PAPER);
+    ui::frameRound(kDelNo, 8, 2, fb, INK, PAPER);
+    ui::text(ui::font(ui::F_LABEL), kDelNo.x + kDelNo.width / 2, kDelNo.y + 47, TR("CANCEL"), fb,
+             EPD_DRAW_ALIGN_CENTER, INK);
+}
+
 void renderBook(uint8_t* fb) {
     const int bi = g_open;
     renderBookHead(bi, fb);
     drawBin(kBookDel, fb);
     if (g_delAsk == bi) { renderDeleteAsk(bi, fb); return; }
+    if (g_delDocBook == bi) { renderDeleteDocAsk(fb); return; }
     char lbl[64];
     snprintf(lbl, sizeof lbl, TR("Search %s"), shortName(bi));
     searchBar(kBookSearch, lbl, fb);
@@ -2638,6 +2747,19 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
         }
         case V_BOOK: {
             const int bi = g_open;
+            if (g_delDocBook == bi) {
+                if (hit(kDelYes, x, y)) {
+                    sdLock();
+                    hideDocument(bi, g_delDocRaw);
+                    sdUnlock();
+                    g_docBook = -1;      // the list without it
+                    g_menuBook = -1;
+                    g_lastQuery[0] = 1;  // nor in a search
+                    g_lastQuery[1] = 0;
+                }
+                if (hit(kDelYes, x, y) || hit(kDelNo, x, y) || !hit(kDelBox, x, y)) g_delDocBook = -1;
+                return false;
+            }
             if (g_delAsk == bi) {
                 if (hit(kDelYes, x, y)) {
                     char path[96];
@@ -2694,6 +2816,23 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
                 if (g_menuPages > 1 && hitPager(kListNext, x, y)) { if (g_listPage + 1 < g_menuPages) ++g_listPage; return false; }
                 const int i = menuHit(bi, x, y);
                 if (i < 0) return false;
+                // A finger held on a document: delete it (that document only).
+                // The list may come from the book's menu.txt (docs2doba writes
+                // one), whose rows name a document by its title, not a record.
+                if (g_pressMs >= 800) {
+                    findDocs(bi);
+                    const char* raw = g_menu[i].title;
+                    for (int k = 0; k < g_docCount; ++k)
+                        if ((g_menu[i].rec >= 0 && g_docs[k].rec == (uint32_t)g_menu[i].rec) ||
+                            !strcmp(g_docs[k].title, g_menu[i].title) || !strcmp(g_docs[k].raw, g_menu[i].title)) {
+                            raw = g_docs[k].raw;
+                            break;
+                        }
+                    snprintf(g_delDocRaw, sizeof g_delDocRaw, "%s", raw);
+                    g_delDocBook = bi;
+                    Serial.printf("[lib] delete? document '%s'\n", g_delDocRaw);
+                    return false;
+                }
                 if (g_menu[i].rec >= 0) return openRecord(bi, (uint32_t)g_menu[i].rec);
                 return openEntry(bi, g_menu[i].title);
             }
@@ -2805,6 +2944,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
 }
 
 bool typing() { return g_view == V_SEARCH; }
+void notePress(uint32_t ms) { g_pressMs = ms; }
 
 // A tap that only turns a list's page, or that lands on nothing, draws from RAM
 // in tens of ms: no spinner for it (every tap in the library flashed one).

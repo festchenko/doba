@@ -2034,6 +2034,7 @@ TRC("touch");         if (touchOk && g_touchQ) {
                 noteActivity();
                 const uint32_t held = ev.upMs - ev.downMs;
                 doba_ui::setPressMs(held);
+                doba_lib::notePress(held);
                 if (powerOverlay) handlePowerTap(ev.x1, ev.y1);
                 else if (held >= 800 && mapLongPress(ev.x1, ev.y1)) {}   // DOBA
                 else handleTap(ev.x1, ev.y1);

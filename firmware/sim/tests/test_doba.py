@@ -741,3 +741,54 @@ def test_a_computer_gets_the_card_alone_and_doba_takes_it_back(doba):
     since = doba.log_seq()
     doba.usb_host(False)
     doba.wait_log(r"sd: remount \(usb host released\) -> ok", since=since, timeout=10)
+
+
+def test_a_finger_held_on_a_document_deletes_that_document_only(doba, tmp_path):
+    """In a book of one's own documents a held finger asks to delete that one
+    document: its records (contents, chapters, their bare names) are marked
+    hidden in the index; the book and its other documents stay (the bin
+    deleted the whole book, 16 Nov)."""
+    pymupdf = pytest.importorskip("pymupdf")
+    import struct
+    src = tmp_path / "in"
+    src.mkdir()
+    doc = pymupdf.open()
+    toc = []
+    for i, (h, body) in enumerate([("Chapter 1 Basics", "Plan and stay calm."),
+                                   ("Chapter 2 Shelter", "Build it before dark, out of the wind."),
+                                   ("Chapter 3 Water", "Boil it for one minute.")]):
+        p = doc.new_page()
+        p.insert_text((72, 90), h, fontsize=18)
+        for k in range(5):
+            p.insert_text((72, 130 + 16 * k), body, fontsize=10)
+        toc.append([1, h, i + 1])
+    doc.set_toc(toc)
+    doc.set_metadata({"title": "FM 21-76 Survival"})
+    doc.save(str(src / "fm.pdf"))
+    d2 = pymupdf.open()
+    d2.new_page().insert_text((72, 90), "Keep the water clean and boiled.", fontsize=12)
+    d2.set_metadata({"title": "Water Guide"})
+    d2.save(str(src / "w.pdf"))
+    out = os.path.join(doba.sd, "doba", "lib", "manuals")
+    subprocess.run([sys.executable, os.path.join(LIB, "docs2doba.py"), str(src), out, "--name", "Manuals"],
+                   check=True, capture_output=True)
+    boot(doba)
+    doba.console("screen library", 800)
+    time.sleep(0.8)
+    doba.tap(98, 340)                                  # the book
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(200, 324, ms=1000)                        # a finger held on the first document
+    m = doba.wait_log(r"\[lib\] delete\? document '([^']*)'", since=since)
+    name = re.search(r"document '([^']*)'", m).group(1)
+    doba.tap(150, TOP + 456)                           # DELETE
+    doba.wait_log(r"\[lib\] delete document '%s' in manuals: \d+ records hidden" % re.escape(name), since=since)
+    ix = open(os.path.join(out, "index.dti"), "rb").read()
+    flags = {}
+    for i in range(struct.unpack_from("<I", ix, 8)[0]):
+        r = ix[32 + i * 128: 32 + (i + 1) * 128]
+        flags[r[56:112].split(b"\0")[0].decode()] = r[114]
+    hidden = {t for t, v in flags.items() if v & 2}
+    assert name in hidden, (name, flags)
+    assert len(hidden) >= 3, flags                     # with its chapter and its bare name
+    assert not flags.get("Water Guide", 0) & 2, flags  # the other document stays
