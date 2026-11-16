@@ -52,6 +52,57 @@ def setup(model):
     return langs["en"].get_translation(langs["uk"])
 
 
+WORD_RE = re.compile(r"\w[\w'’-]*", re.U)
+
+
+def stem(w):
+    """A word without its Ukrainian ending: the cases change the last letters
+    ("кровотеча", "кровотечі", "кровотечу"), so a link is found by its stem."""
+    w = w.lower()
+    return w[:max(3, len(w) - 3)] if len(w) > 4 else w
+
+
+def relink(src_line, uk_line, tr, title_uk):
+    """The source line's links, put back into its translation. Each link's
+    words (translated alone, and the translated title it points to) are looked
+    for in the translated line by their stems; found, those words become the
+    link, to the target's Ukrainian title (the twin's own index). Links not
+    found are returned, to be listed at the article's end: none is lost."""
+    links = LINK_RE.findall(src_line)
+    if not links:
+        return uk_line, []
+    words = [(m.start(), m.end(), m.group(0)) for m in WORD_RE.finditer(uk_line)]
+    taken = [False] * len(words)
+    spans, lost = [], []
+    for text, target in links:
+        to = title_uk(target or text)
+        found = None
+        for cand in (tr(text), to):
+            cw = [stem(w) for w in WORD_RE.findall(cand or "")]
+            if not cw:
+                continue
+            for i in range(len(words) - len(cw) + 1):
+                if any(taken[i:i + len(cw)]):
+                    continue
+                if all(words[i + j][2].lower().startswith(cw[j]) for j in range(len(cw))):
+                    found = (i, i + len(cw))
+                    break
+            if found:
+                break
+        if found:
+            for j in range(*found):
+                taken[j] = True
+            spans.append((words[found[0]][0], words[found[1] - 1][1], to))
+        else:
+            lost.append((tr(text) or to, to))
+    out, last = [], 0
+    for a, b, to in sorted(spans):
+        out.append(uk_line[last:a] + "\x01" + uk_line[a:b] + "\x02" + to + "\x03")
+        last = b
+    out.append(uk_line[last:])
+    return "".join(out), lost
+
+
 def plain(t):
     return LINK_RE.sub(lambda m: m.group(1), t).replace("\x01", "").replace("\x02", "").replace("\x03", "")
 
@@ -94,6 +145,15 @@ def main():
 
     # Articles in their stored order; each translated once.
     arts = sorted({(r[2], r[4], r[5]) for r in recs})
+
+    # A link points at an article's title; in the twin, at its Ukrainian title
+    # (the one the twin's index is built from below).
+    title_memo = {}
+
+    def title_uk(t):
+        if t not in title_memo:
+            title_memo[t] = tr(t)
+        return title_memo[t]
     newpos = {}
     out_f = open(os.path.join(a.out, "a0000.dta"), "wb")
     pos = 0
@@ -117,6 +177,21 @@ def main():
                 lines.append(k + body)
             z = zlib.compress("\n".join(lines).encode("utf-8"), 9)
             open(cache, "wb").write(z)
+        # The cache holds the translation without links (older runs too): they
+        # go back in here, line by line against the source (the same lines).
+        src_lines = zlib.decompress(dta[ch][off:off + ln]).decode("utf-8", "replace").split("\n")
+        uk_lines = zlib.decompress(z).decode("utf-8", "replace").split("\n")
+        if len(src_lines) == len(uk_lines) and any("\x01" in l for l in src_lines):
+            lost = []
+            for j, (sl, ul) in enumerate(zip(src_lines, uk_lines)):
+                if sl[:1] in TEXT_KINDS and "\x01" in sl and ul[:1] == sl[:1]:
+                    body, gone = relink(sl[1:], ul[1:], tr, title_uk)
+                    uk_lines[j] = ul[:1] + body
+                    lost += [g for g in gone if g not in lost]
+            if lost:
+                uk_lines.append("P" + "Див. також: " + ", ".join(
+                    "\x01" + text + "\x02" + to + "\x03" for text, to in lost[:30]))
+            z = zlib.compress("\n".join(uk_lines).encode("utf-8"), 9)
         out_f.write(z)
         newpos[(ch, off, ln)] = (pos, len(z))
         pos += len(z)
