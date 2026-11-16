@@ -556,11 +556,43 @@ uint8_t* fromPack(const char* name, size_t& len) {
     return z;
 }
 
+// The last pictures read, as read (compressed): a page drawn again (a page
+// turn back, the spinner's redraw, a refresh) does not go to the card. A
+// loose picture in a folder of thousands took 3-4 s each time (16 Nov).
+struct PicCache { char name[16]; int8_t book; uint8_t* z; size_t len; uint32_t used; };
+PicCache g_pics[8];
+uint32_t g_picTick = 0;
+uint8_t* cachedPic(const char* name, size_t& len) {
+    for (PicCache& c : g_pics)
+        if (c.z && c.book == g_book && !strncmp(c.name, name, sizeof c.name)) {
+            c.used = ++g_picTick;
+            uint8_t* z = (uint8_t*)heap_caps_malloc(c.len, MALLOC_CAP_SPIRAM);
+            if (z) { memcpy(z, c.z, c.len); len = c.len; }
+            return z;
+        }
+    return nullptr;
+}
+void keepPic(const char* name, const uint8_t* z, size_t len) {
+    if (len > 256 * 1024) return;
+    PicCache* lru = &g_pics[0];
+    for (PicCache& c : g_pics) if (c.used < lru->used) lru = &c;
+    if (lru->z) heap_caps_free(lru->z);
+    lru->z = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    if (!lru->z) return;
+    memcpy(lru->z, z, len);
+    lru->len = len;
+    lru->book = (int8_t)g_book;
+    snprintf(lru->name, sizeof lru->name, "%s", name);
+    lru->used = ++g_picTick;
+}
+
 void drawImage(const char* name, int y, int maxH, uint8_t* fb) {
     char path[128];
-    sdLock();
     size_t zlen = 0;
-    uint8_t* z = fromPack(name, zlen);
+    uint8_t* z = cachedPic(name, zlen);
+    const bool cached = z != nullptr;
+    sdLock();
+    if (!z) z = fromPack(name, zlen);
     bool ok = z != nullptr;
     if (!z) {
         // loose files: small books, and big ones converted before the packs
@@ -575,6 +607,7 @@ void drawImage(const char* name, int y, int maxH, uint8_t* fb) {
         if (f) f.close();
     }
     sdUnlock();
+    if (ok && !cached) keepPic(name, z, zlen);
     if (!ok || memcmp(z, "DGI1", 4) != 0) {
         if (z) heap_caps_free(z);
         epd_fill_rect({W / 2 - 60, y, 120, 2}, INK, fb);   // missing: a mark, not a hole
@@ -740,6 +773,63 @@ void layout() {
     buildToc();
 }
 
+// What a wiki's page carries that says nothing on paper, out before layout:
+// a heading with nothing under it (Wiktionary: ten empty "Синоніми",
+// "Антоніми"... before and after the meaning, which they pushed off the first
+// page), the sound file's "прослухати вимову", an empty transcription
+// ("УФ: []"), an unknown origin ("Від ??"). In place: the text only shrinks.
+bool junkLine(const char* b, size_t n) {
+    auto is = [&](const char* w) { return n == strlen(w) && !memcmp(b, w, n); };
+    if (is("прослухати вимову") || is("Від ??") || is("Корінь: --.") || is("listen")) return true;
+    return n >= 4 && !memcmp(b + n - 4, ": []", 4);   // an empty transcription
+}
+void tidyText() {
+    constexpr int MAXL = 8192;
+    static PsArr<uint32_t, MAXL> st, ln;
+    int nl = 0;
+    for (size_t i = 0; i < g_textLen && nl < MAXL;) {
+        size_t e = i;
+        while (e < g_textLen && g_text[e] != '\n') ++e;
+        st[nl] = (uint32_t)i;
+        ln[nl++] = (uint32_t)(e - i);
+        i = e + 1;
+    }
+    if (nl >= MAXL) return;   // too long to bother: as it is
+    static PsArr<uint8_t, MAXL> keep;
+    for (int k = 0; k < nl; ++k) {
+        const char* l = g_text + st[k];
+        keep[k] = !(ln[k] > 1 && (l[0] == 'P' || l[0] == 'B') && junkLine(l + 1, ln[k] - 1));
+    }
+    // a heading keeps only if something not a heading of its rank or above
+    // follows before the next such heading (H over S over the rest)
+    auto rank = [](char k) { return k == 'T' ? 3 : k == 'H' ? 2 : k == 'S' ? 1 : 0; };
+    for (int k = nl - 1; k >= 0; --k) {
+        if (!keep[k]) continue;
+        const int r = rank(g_text[st[k]]);
+        if (r == 0 || r == 3) continue;
+        bool body = false;
+        for (int j = k + 1; j < nl; ++j) {
+            if (!keep[j] || ln[j] == 0) continue;
+            const int rj = rank(g_text[st[j]]);
+            if (rj >= r) break;
+            body = true;
+            break;
+        }
+        if (!body) keep[k] = 0;
+    }
+    size_t w = 0;
+    bool first = true;
+    for (int k = 0; k < nl; ++k) {
+        if (!keep[k]) continue;
+        if (!first) g_text[w++] = '\n';
+        memmove(g_text + w, g_text + st[k], ln[k]);
+        w += ln[k];
+        first = false;
+    }
+    g_textLen = w;
+    g_text[w] = 0;
+}
+
 // \x01 visible \x02 target \x03 -> visible, and a Link. In place: the text
 // only gets shorter.
 void extractLinks() {
@@ -804,6 +894,7 @@ bool openArticle(const Result& r) {
     if (!ok) return false;
     g_textLen = n;
     g_text[n] = 0;
+    tidyText();
     extractLinks();
     // Every article names where it came from (info.txt source=, else the book).
     const char* src = b.source[0] ? b.source : b.name;
@@ -868,15 +959,45 @@ void loadRecent() {
     }
     sdUnlock();
 }
+// The recent list is written later, not as an article opens. Each open wrote
+// it twice (the place in the article left, the new one at the front), and a
+// file truncated and written again on the 1 TB exFAT card costs a search of
+// the card's free-space map: 1-2 s behind every tap on an article (16 Nov).
+// Now: in RAM at once, to the card after 3 s quiet (doba_lib::idle), before
+// sleep, power-off and lending the card to a computer (doba_lib::flush), and
+// in place: the file is kept at a fixed size, padded with empty lines, so
+// nothing is freed and found again.
+bool g_recentDirty = false;
+uint32_t g_recentDirtyAt = 0;
 void writeRecent() {
+    g_recentDirty = true;
+    g_recentDirtyAt = millis();
+}
+void flushRecent() {
+    if (!g_recentDirty || g_recentCount < 0) return;
+    g_recentDirty = false;
+    constexpr size_t SIZE = 8192;
+    static char* buf = nullptr;
+    if (!buf) buf = (char*)heap_caps_malloc(SIZE, MALLOC_CAP_SPIRAM);
+    if (!buf) return;
+    size_t n = 0;
+    for (int i = 0; i < g_recentCount; ++i) {
+        const int w = snprintf(buf + n, SIZE - n, "%s|%s|%lu\n", g_recent[i].dir, g_recent[i].title,
+                               (unsigned long)g_recent[i].off);
+        if (w <= 0 || n + w >= SIZE) break;
+        n += w;
+    }
+    memset(buf + n, '\n', SIZE - n);   // empty lines: read past
+    const uint32_t t0 = millis();
     sdLock();
-    File f = SD.open(kRecentPath, FILE_WRITE);
+    File f = SD.open(kRecentPath, "r+");
+    if (!f) f = SD.open(kRecentPath, FILE_WRITE);
     if (f) {
-        for (int i = 0; i < g_recentCount; ++i)
-            f.printf("%s|%s|%lu\n", g_recent[i].dir, g_recent[i].title, (unsigned long)g_recent[i].off);
+        f.write((const uint8_t*)buf, SIZE);
         f.close();
     }
     sdUnlock();
+    Serial.printf("[lib] recent saved in %lu ms\n", (unsigned long)(millis() - t0));
 }
 // Brings (dir, title) to the front; returns where reading stopped last time.
 uint32_t addRecent(const char* dir, const char* title) {
@@ -1774,6 +1895,11 @@ void renderDeleteAsk(int bi, uint8_t* fb) {
 // Marks every record of the document `raw` (its title, or "raw — chapter")
 // hidden in book bi's index. Under sdLock.
 bool hideDocument(int bi, const char* raw) {
+    // the article the list opens it by (menu.txt rows name it by its title)
+    Result at0;
+    sdUnlock();
+    const bool hasAt = findIn(bi, raw, at0);
+    sdLock();
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
     static PsArr<uint32_t, 4096> hits;
@@ -1786,6 +1912,7 @@ bool hideDocument(int bi, const char* raw) {
         // the document's articles: its own title and "raw — chapter"...
         static PsArr<uint64_t, 1024> arts;   // chunk << 32 | offset
         int na = 0;
+        if (hasAt) arts[na++] = (uint64_t)at0.chunk << 32 | at0.off;
         for (uint32_t i = 0; i < g_books[bi].count; ++i) {
             if (!readRec(f, i, rec)) break;
             // One document's records: "raw", "raw — chapter", the contents
@@ -1797,8 +1924,11 @@ bool hideDocument(int bi, const char* raw) {
             char* dash = strstr(t, " \xE2\x80\x94 ");
             if (dash) *dash = 0;
             const size_t T = strlen(t);
+            // a name cut at the index's 56 bytes ends in "…": its chapters
+            // carry a shorter start of it ("\376\377\0007\0007 — 3. ...")
+            const bool cut = L >= 3 && !strcmp(raw + L - 3, "\xE2\x80\xA6");
             const bool mine = !strncmp(t, raw, L) ? (t[L] == 0 || t[L] == ' ')
-                            : (dash && T < L && !strncmp(raw, t, T) && raw[T] == ' ');
+                            : (dash && T < L && T >= 6 && !strncmp(raw, t, T) && (raw[T] == ' ' || cut));
             if (!mine) continue;
             uint32_t off;
             memcpy(&off, rec + 116, 4);
@@ -2944,6 +3074,8 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
 }
 
 bool typing() { return g_view == V_SEARCH; }
+void idle() { if (g_recentDirty && millis() - g_recentDirtyAt > 3000) flushRecent(); }
+void flush() { flushRecent(); }
 void notePress(uint32_t ms) { g_pressMs = ms; }
 
 // A tap that only turns a list's page, or that lands on nothing, draws from RAM

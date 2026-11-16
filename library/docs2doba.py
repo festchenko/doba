@@ -822,10 +822,20 @@ READERS = {".pdf": read_pdf, ".epub": read_epub, ".html": read_html, ".htm": rea
 def write_book(out, name, source, articles, aliases=()):
     os.makedirs(out, exist_ok=True)
     if IMAGES:
-        os.makedirs(os.path.join(out, "img"), exist_ok=True)
+        # Packed (img/NN.dgp + index.dgx), as the big books keep theirs: one
+        # file a picture put ~5000 in a folder, and the card reads a folder
+        # from the top to find a name: 4 s a picture on the device (16 Nov).
+        import shutil
+        from dobapic import Packer
+        shutil.rmtree(os.path.join(out, "img"), ignore_errors=True)
+        pk = Packer(out)
         for nm, blob in IMAGES:
-            with open(os.path.join(out, "img", nm + ".dgi"), "wb") as f:
-                f.write(blob)
+            if len(nm) <= 10 and nm.isascii():
+                pk.add(nm, blob)
+            else:
+                with open(os.path.join(out, "img", nm + ".dgi"), "wb") as f:
+                    f.write(blob)
+        pk.close()
     records, pos = [], 0
     where = {}
     with open(os.path.join(out, "a0000.dta"), "wb") as f:

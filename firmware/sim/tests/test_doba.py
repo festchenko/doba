@@ -512,6 +512,7 @@ def test_recent_lists_what_was_read_and_opens_it_again(doba, book):
     since = doba.log_seq()
     doba.tap(200, RES_TOP + 30)
     doba.wait_log(r"\[lib\] open 'Knots'", since=since)
+    doba.wait_log(r"\[lib\] recent saved", since=since)   # written after 3 s quiet, not on the tap
     with open(os.path.join(doba.sd, "doba", "recent.txt")) as f:
         assert f.read().startswith("field|Knots")
     doba.tap(50, 30)                                        # BACK: the search
@@ -632,6 +633,7 @@ def test_a_long_text_opens_where_reading_stopped(doba, book):
     since = doba.log_seq()
     doba.console("libopen " + t, 800)
     doba.wait_log(r"\[lib\] resume 'Захар Беркут / I' at page 3", since=since)
+    doba.wait_log(r"\[lib\] recent saved", since=since)
     with open(os.path.join(doba.sd, "doba", "recent.txt"), encoding="utf-8") as f:
         assert re.search(r"^field\|.*\|[1-9]\d*$", f.read(), re.M)
 

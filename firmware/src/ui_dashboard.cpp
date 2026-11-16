@@ -233,6 +233,7 @@ void radioRailOffProbe() {
 bool g_offByPowerKey = false;
 
 void shutdownDevice(uint8_t* fb, const char* reason) {
+    doba_lib::flush();   // the recent list and reading places, before the power goes
     // Hold light sleep off for the whole shutdown, and never release it.
     //
     // LOAD-BEARING, not just a bus guard. Automatic light sleep re-arms the RTC
@@ -1665,6 +1666,7 @@ static void runConsoleLine(char* line) {
         } else {
             bool on = !strcasecmp(arg, "on") || !strcasecmp(arg, "1");
             settings::setUsbDrive(on);
+            if (on) doba_lib::flush();   // the card goes to the computer: nothing left unwritten
             usb_storage::setDriveEnabled(on);
             Serial.printf("[usbdrive] turned %s\n", on ? "on" : "off");
         }
@@ -2224,6 +2226,7 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
         // nothing to release.
 
         const bool busy = mapPrerenderStep();
+        if (!busy) doba_lib::idle();
 
         // Block until an input interrupt or a redraw request, with a fallback
         // tick that still satisfies the slowest thing the loop owes anyone (the

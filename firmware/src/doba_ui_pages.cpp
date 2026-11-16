@@ -287,6 +287,7 @@ Go tapMore(int x, int y) {
     if (r == M_USB && toggleHit(x)) {
         const bool on = x >= CTRL_X + CTRL_W - 75;
         settings::setUsbDrive(on);
+        if (on) doba_lib::flush();   // the card goes to the computer: nothing left unwritten
         usb_storage::setDriveEnabled(on);
     }
     if (r == M_BT && toggleHit(x)) settings::setBluetooth(x >= CTRL_X + CTRL_W - 75);

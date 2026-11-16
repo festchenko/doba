@@ -25,7 +25,9 @@ namespace doba_lib {
 int count();            // books found on the card (scanned once, then cached)
 int shelfCount();
 bool tapIsCheap(int x, int y);
-void notePress(uint32_t ms);   // how long the finger was down for the tap about to be handled   // a page arrow or nothing: answered from RAM, no spinner       // the same, a translation counted with its book (what the shelf shows)
+void notePress(uint32_t ms);
+void idle();    // the UI loop when nothing is happening: writes what waits (the recent list)
+void flush();   // writes it now: before sleep, power-off, lending the card over USB   // how long the finger was down for the tap about to be handled   // a page arrow or nothing: answered from RAM, no spinner       // the same, a translation counted with its book (what the shelf shows)
 void rescan();
 
 void renderSearch(kbd::Keyboard& k, uint8_t* fb);
