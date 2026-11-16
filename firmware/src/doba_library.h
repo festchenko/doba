@@ -23,6 +23,8 @@
 namespace doba_lib {
 
 int count();            // books found on the card (scanned once, then cached)
+int shelfCount();
+bool tapIsCheap(int x, int y);   // a page arrow or nothing: answered from RAM, no spinner       // the same, a translation counted with its book (what the shelf shows)
 void rescan();
 
 void renderSearch(kbd::Keyboard& k, uint8_t* fb);

@@ -802,7 +802,7 @@ void handleTap(int x, int y) {
             const int bl = settings::backlight();
             // The pages whose taps read the card: home (into the library or the
             // map), the library (books, shelves, letters) and an article (links).
-            if (screen == SCREEN_HOME || (screen == SCREEN_LIBRARY && !doba_lib::typing()))
+            if (screen == SCREEN_HOME || (screen == SCREEN_LIBRARY && !doba_lib::typing() && !doba_lib::tapIsCheap(x, y)))
                 ackBusy();
             {   // DOBA: what a tap cost before the redraw (opening a book page reads the card)
                 const uint32_t t0 = micros();

@@ -1169,6 +1169,15 @@ const EpdRect kBookSearch = {24, TOP + 104, W - 48, 56};
 constexpr int BODY_Y = TOP + 214;     // under the search box (and the A-Z / random links)
 const EpdRect kListPrev = {W - 24 - 56 - 12 - 56, H - 78, 56, 52};
 const EpdRect kListNext = {W - 24 - 56, H - 78, 56, 52};
+// The page arrows are small and sit low: a thumb lands on and below them (on the
+// device, 12 taps of 13 on "next" fell 0-17 px under its drawn edge). Their
+// touch area runs from 20 px above to the screen's bottom, and half the gap
+// between them sideways, plus 20 px on the outer side.
+bool hitPager(const EpdRect& r, int x, int y) {
+    const bool left = r.x == kListPrev.x;
+    const int x0 = left ? r.x - 20 : r.x - 6, x1 = left ? r.x + r.width + 6 : r.x + r.width + 24;
+    return x >= x0 && x < x1 && y >= r.y - 20 && y < H;
+}
 constexpr int LIST_ROW = 64;
 
 bool readRec(File& f, uint32_t i, uint8_t* rec) {
@@ -2112,6 +2121,10 @@ int count() {
     return g_bookCount;
 }
 
+// Books as the shelf shows them: a translation ("water_uk") is its book's
+// other language, not a book of its own (the home tile said 30, search 27).
+int shelfCount() { if (count() <= 0) return 0; return shelfBooks(); }
+
 void rescan() { g_bookCount = -1; g_view = V_HOME; }
 
 void fold(const char* in, char* out, size_t cap) {
@@ -2442,8 +2455,8 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
         case V_SHELF: {
             if (hit(kTabs, x, y)) { const int t = tabAt(x); g_view = t == 1 ? V_HOME : t == 2 ? V_RECENT : V_SHELF; g_listPage = 0; return false; }
             if (hit(kAllSearch, x, y)) { g_scope = -1; g_scopeBook = -1; g_searchFrom = V_SHELF; g_view = V_SEARCH; k.clear(); if (i18n::lang() == i18n::UK) k.layout = k.lastLetters = kbd::UA; return false; }
-            if (shelfPages() > 1 && hit(kListPrev, x, y)) { if (g_shelfPage > 0) --g_shelfPage; return false; }
-            if (shelfPages() > 1 && hit(kListNext, x, y)) { if (g_shelfPage + 1 < shelfPages()) ++g_shelfPage; return false; }
+            if (shelfPages() > 1 && hitPager(kListPrev, x, y)) { if (g_shelfPage > 0) --g_shelfPage; return false; }
+            if (shelfPages() > 1 && hitPager(kListNext, x, y)) { if (g_shelfPage + 1 < shelfPages()) ++g_shelfPage; return false; }
             const int b = shelfHit(x, y);
             if (b >= 0) { g_open = b; g_listPage = 0; g_bookAZ = false; g_view = V_BOOK; Serial.printf("[lib] book %s\n", g_books[b].dir); }
             return false;
@@ -2501,8 +2514,8 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
                     return openRecord(bi, i);
                 }
                 paginateMenu(bi);
-                if (g_menuPages > 1 && hit(kListPrev, x, y)) { if (g_listPage > 0) --g_listPage; return false; }
-                if (g_menuPages > 1 && hit(kListNext, x, y)) { if (g_listPage + 1 < g_menuPages) ++g_listPage; return false; }
+                if (g_menuPages > 1 && hitPager(kListPrev, x, y)) { if (g_listPage > 0) --g_listPage; return false; }
+                if (g_menuPages > 1 && hitPager(kListNext, x, y)) { if (g_listPage + 1 < g_menuPages) ++g_listPage; return false; }
                 const int i = menuHit(bi, x, y);
                 if (i < 0) return false;
                 if (g_menu[i].rec >= 0) return openRecord(bi, (uint32_t)g_menu[i].rec);
@@ -2542,8 +2555,8 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
             const int per = listRows() + 1;
             const uint32_t n = g_letterTo - g_letterFrom;
             const int pages = n ? (int)((n + per - 1) / per) : 1;
-            if (pages > 1 && hit(kListPrev, x, y)) { if (g_listPage > 0) --g_listPage; return false; }
-            if (pages > 1 && hit(kListNext, x, y)) { if (g_listPage + 1 < pages) ++g_listPage; return false; }
+            if (pages > 1 && hitPager(kListPrev, x, y)) { if (g_listPage > 0) --g_listPage; return false; }
+            if (pages > 1 && hitPager(kListNext, x, y)) { if (g_listPage + 1 < pages) ++g_listPage; return false; }
             const int top = BODY_Y - 30, r = (y - top) / LIST_ROW;
             const uint32_t i = g_letterFrom + (uint32_t)(g_listPage * per + r);
             if (y >= top && r < per && i < g_letterTo) return openRecord(g_open, i);
@@ -2553,8 +2566,8 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
             if (hit(kTabs, x, y)) { const int t = tabAt(x); g_view = t == 1 ? V_HOME : t == 2 ? V_RECENT : V_SHELF; g_listPage = 0; return false; }
             loadRecent();
             const int per = recentRows(), pages = (g_recentCount + per - 1) / per;
-            if (pages > 1 && hit(kListPrev, x, y)) { if (g_listPage > 0) --g_listPage; return false; }
-            if (pages > 1 && hit(kListNext, x, y)) { if (g_listPage + 1 < pages) ++g_listPage; return false; }
+            if (pages > 1 && hitPager(kListPrev, x, y)) { if (g_listPage > 0) --g_listPage; return false; }
+            if (pages > 1 && hitPager(kListNext, x, y)) { if (g_listPage + 1 < pages) ++g_listPage; return false; }
             const int r = (y - RECENT_TOP) / RECENT_ROW, i = g_listPage * per + r;
             if (y >= RECENT_TOP && r < per && i < g_recentCount) {
                 const int bi = bookIndex(g_recent[i].dir);
@@ -2615,6 +2628,13 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
 }
 
 bool typing() { return g_view == V_SEARCH; }
+
+// A tap that only turns a list's page, or that lands on nothing, draws from RAM
+// in tens of ms: no spinner for it (every tap in the library flashed one).
+bool tapIsCheap(int x, int y) {
+    if (y < ui::STATUS_H) return true;
+    return hitPager(kListPrev, x, y) || hitPager(kListNext, x, y);
+}
 
 bool libraryBack() {
     switch (g_view) {

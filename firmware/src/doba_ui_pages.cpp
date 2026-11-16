@@ -264,7 +264,7 @@ void renderMore(const DeviceState& s, uint8_t* fb) {
                 stepper(y, SROW_H, mesh_service::presetName(), fb);
                 break;
             case M_CARD:
-                snprintf(sub, sizeof sub, s.sdCard == SD_CARD_OK ? TRN(doba_lib::count(), "%d book", "%d books") : TR("no card"), doba_lib::count());
+                snprintf(sub, sizeof sub, s.sdCard == SD_CARD_OK ? TRN(doba_lib::shelfCount(), "%d book", "%d books") : TR("no card"), doba_lib::shelfCount());
                 caption(y, SROW_H, "CARD", sub, fb, true);
                 break;
             case M_ABOUT:

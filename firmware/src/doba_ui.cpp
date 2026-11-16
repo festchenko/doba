@@ -63,7 +63,7 @@ void renderHome(const DeviceState& s, uint8_t* fb) {
                 } else if (s.gpsFix || s.everHadFix) milgeo::mgrs(s.latitude, s.longitude, sub, sizeof sub);
                 else snprintf(sub, sizeof sub, TR("no fix yet"));
                 break;
-            case TO_LIBRARY: snprintf(sub, sizeof sub, TRN(doba_lib::count(), "%d book on card", "%d books on card"), doba_lib::count()); break;
+            case TO_LIBRARY: snprintf(sub, sizeof sub, TRN(doba_lib::shelfCount(), "%d book on card", "%d books on card"), doba_lib::shelfCount()); break;
             case TO_COMMS:
                 if (stealth::active()) snprintf(sub, sizeof sub, stealth::listen() ? TR("stealth · listening") : TR("stealth · radio off"));
                 else if (!mesh_service::enabled()) snprintf(sub, sizeof sub, TR("radio off"));
