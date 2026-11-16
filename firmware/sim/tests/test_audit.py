@@ -41,6 +41,7 @@ def test_a_topo_view_from_the_cache_keeps_its_greys(doba, tmp_path):
     a view already seen drew the topo thresholded, without its greys."""
     packs_around(doba.sd)
     boot(doba)
+    doba.console("topo dither off")   # the greys as the tiles hold them
     open_topo(doba)
     fresh = shot(doba, tmp_path, "fresh.png")
     doba.console("screen home", 600)

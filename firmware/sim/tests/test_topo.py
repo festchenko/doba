@@ -80,6 +80,7 @@ def test_topo_tiles_are_drawn_level_for_level(device, tmp_path):
             tiles[(Z, tx + dx, ty + dy)] = quadrant_tile(3, 12)
     write_packs(device.sd, tiles)
     device.reboot()
+    device.console("topo dither off")   # the levels as the tiles hold them
     show_map(device)
     img = glass(device, tmp_path)
     # under the sheet header (place, scale, grid: grey text), over the scale
@@ -102,6 +103,7 @@ def test_topo_is_north_up_and_centred(device, tmp_path):
     tiles[(Z, tx, ty)] = quadrant_tile(3, 12)
     write_packs(device.sd, tiles)
     device.reboot()
+    device.console("topo dither off")   # the levels as the tiles hold them
     show_map(device)
     img = glass(device, tmp_path)
     rider_x, rider_y = 270, 430                      # ui_dashboard buildMapScreenData
@@ -154,41 +156,3 @@ def test_position_readout_shows_mgrs(device, tmp_path):
     assert (strip < 128).mean() > 0.03          # three rows of text
     out = "\n".join(device.console("mils 6400"))
     assert "[mils] 6400" in out, out
-
-
-def test_measure_from_a_places_on_the_map_and_the_legend(device, tmp_path):
-    """Dragged: a tap on the cross sets A, and the strip reads from A; places
-    show as lettered tags; map options open a legend."""
-    sys.path.insert(0, HERE)
-    from test_doba import write_pois
-    fx, fy = tile_xy(LAT, LON, Z)
-    tx, ty = int(fx), int(fy)
-    tiles = {(Z, tx + dx, ty + dy): np.full((256, 256), 15, np.uint8)
-             for dy in range(-4, 5) for dx in range(-3, 4)}
-    write_packs(device.sd, tiles)
-    write_pois(os.path.join(device.sd, "doba", "map", "pois.dgp"), [
-        (LAT + 0.0012, LON + 0.0015, 1, "Ziekenhuis"), (LAT - 0.0010, LON - 0.0012, 4, ""),
-        (LAT + 0.0005, LON - 0.0020, 5, "Spar")])
-    device.reboot()
-    show_map(device)
-    device.screenshot(str(tmp_path / "places.png"))
-    device.swipe(270, 500, 200, 560)
-    time.sleep(1.5)
-    since = device.log_seq()
-    device.tap(270, 430)                                    # the cross
-    device.wait_log(r"\[map\] measure A set", since=since)
-    device.swipe(270, 500, 380, 420)
-    time.sleep(1.5)
-    device.screenshot(str(tmp_path / "measure.png"))
-    img = glass(device, tmp_path, "m2.png")
-    assert (img[815:960, :] < 128).mean() > 0.03
-    device.console("screen mapopts", wait_ms=800)
-    time.sleep(0.8)
-    device.screenshot(str(tmp_path / "opts.png"))
-    device.tap(270, 64 + 20 + 360 + 30 + 32)                # Legend
-    time.sleep(0.8)
-    device.screenshot(str(tmp_path / "legend.png"))
-    os.makedirs("/tmp/shots", exist_ok=True)
-    for n in ("places", "measure", "opts", "legend"):
-        import shutil
-        shutil.copy(str(tmp_path / f"{n}.png"), f"/tmp/shots/{n}.png")

@@ -486,6 +486,14 @@ bool liveScreen(Screen sc) {
 }
 bool tickDue(Screen sc, uint32_t lastDraw) {
     const uint32_t since = millis() - lastDraw;
+    if (sc == SCREEN_MAP) {
+        // the map: when something on it changed, else every 30 s like a page
+        static uint32_t lastKey = 0;
+        if (since < 1000) return false;
+        const uint32_t k = mapTickKey(g_state.snapshot());
+        if (k != lastKey || since >= 30000) { lastKey = k; return true; }
+        return false;
+    }
     if (liveScreen(sc)) return since >= 1000;
     if (since >= 30000) return true;
     static int lastMinute = -1;
@@ -746,7 +754,6 @@ void handleTap(int x, int y) {
                 // cycling layers: bike routes, toilets, bike shops).
                 if (mapPanned() && y >= mapCentreY() && y < mapCentreY() + kMapZoom.size) {
                     mapPanE = mapPanN = 0;
-                    milspec::measureClear();
                     Serial.println("[map] centre");
                     break;
                 }
@@ -763,19 +770,11 @@ void handleTap(int x, int y) {
                 }
                 if (y >= kMapZoom.zoomOutY && y < kMapZoom.zoomOutY + kMapZoom.size) {
                     const float before = mapMpp;
-                    if (mapMpp < mapMaxMpp()) mapMpp *= 2.0f;
+                    if (mapMpp * 2.0f <= mapMaxMpp() * 1.01f) mapMpp *= 2.0f;
                     Serial.printf("[map] zoom out -> %.2f m/px\n", mapMpp);
                     ackZoomTap(false, before);
                     break;
                 }
-            }
-            // DOBA: a tap on the cross of a dragged map sets A there (or clears
-            // it); the strip then measures from A to wherever the cross goes.
-            if (mapPanned() &&
-                abs(x - 270) < 56 && abs(y - milspec::kCrossY) < 56) {
-                milspec::measureToggleAtCross();
-                Serial.printf("[map] measure %s\n", milspec::measureOn() ? "A set" : "off");
-                break;
             }
             if (y < ui::STATUS_H) screen = SCREEN_HOME;   // DOBA: was the menu
             else if (y >= ui::MAP_STRIP_TOP) {
@@ -1734,7 +1733,7 @@ static void runConsoleLine(char* line) {
         noteActivity();
     } else if (!strcasecmp(cmd, "zoom")) {
         if (arg && !strcasecmp(arg, "in") && mapMpp > 0.2f) mapMpp /= 2.0f;
-        else if (arg && !strcasecmp(arg, "out") && mapMpp < mapMaxMpp()) mapMpp *= 2.0f;
+        else if (arg && !strcasecmp(arg, "out") && mapMpp * 2.0f <= mapMaxMpp() * 1.01f) mapMpp *= 2.0f;
         screen = SCREEN_MAP; noteActivity();
     } else if (!strcasecmp(cmd, "greytest")) {   // DOBA: panel grey levels card
         noteActivity();
@@ -1761,6 +1760,11 @@ static void runConsoleLine(char* line) {
         if (arg && !strcasecmp(arg, "canvas")) {
             const char* v = strtok(nullptr, " \t");
             topo::setCanvas(!(v && !strcasecmp(v, "off")));
+            mapCache.clear();
+            forceDraw = true;
+        } else if (arg && !strcasecmp(arg, "dither")) {
+            const char* v = strtok(nullptr, " \t");
+            topo::setDither(!(v && !strcasecmp(v, "off")));
             mapCache.clear();
             forceDraw = true;
         }

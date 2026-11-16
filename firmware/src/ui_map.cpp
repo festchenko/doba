@@ -10,7 +10,9 @@ float mapMpp = 2.0f;  // map zoom: 1/2/4/8/16/32 m per px (wide levels show tile
 // DOBA: the last map frame was a topo one. Topo packs carry zooms 9-16, so the
 // map may zoom out further than the vector maps' 32 m/px (z9 is ~190 m/px here).
 bool mapTopoActive = false;
-float mapMaxMpp() { return 200.0f; }   // ~z9: the widest the topo packs go
+// ~z4 (6 km/px at 52 N): all of Europe on the screen, off the overview pack
+// (base.dtp holds zooms 0-8; under z8 the cells give way to it).
+float mapMaxMpp() { return 6500.0f; }
 // Whether the next map frame may read tiles off the card. See renderMapScreen:
 // the first pass after any change is drawn from RAM alone so it lands at once.
 // Which zoom button is showing its pressed state (0 none, 1 in, 2 out). Held
@@ -186,13 +188,9 @@ void buildMapPeers(double lat, double lon, float rot, bool useMiles,
             if (vy > 0) t = fminf(t, (bottom - map.riderY) / vy);
             if (vy < 0) t = fminf(t, (top - map.riderY) / vy);
             // Slide in along the same line until it is clear of the chrome
-            // drawn over the map edge (compass, zoom column, scale bar), so the
-            // marker is neither buried nor mistaken for the compass needle.
-            const int compY = mapCompassCy(map.navBannerVisible) + (map.topo ? 56 : 0);
+            // drawn over the map edge (zoom column, scale bar), so the marker
+            // is not buried.
             auto underChrome = [&](float px, float py) {
-                const float cdx = px - kMapCompass.cx, cdy = py - compY;
-                const float cr = kMapCompass.r + 30;
-                if (cdx * cdx + cdy * cdy < cr * cr) return true;
                 if (px > kMapZoom.zoomX - 50 && py > kMapZoom.layersY - 50 &&
                     py < kMapZoom.zoomOutY + kMapZoom.size + 50) return true;
                 if (px < 190 + 50 && py > ui::MAP_STRIP_TOP - 48 - 50) return true;
@@ -449,6 +447,11 @@ bool mapPrerenderStep() {
         const DeviceState s = g_state.snapshot();
         buildMapScreenData(s, map);
         if (map.topo && topo::idleStep(map)) return true;
+        // A topo view needs no zoom +-1 frames kept: a zoom shows the canvas
+        // enlarged at once (drawZoomPreview), and topo frames skip the cache.
+        // Drawing them went through the canvas too and moved it to the other
+        // zoom, throwing away the margin the next drag needed.
+        if (map.topo) return false;
     }
     if (!mapCacheOn) return false;
     const uint32_t now = millis();
@@ -498,6 +501,31 @@ void farewellTest() {
 }
 
 
+// What the map would show, as a number: its next frame changes only if this
+// does. The map used to be drawn every second whether or not anything on it
+// had moved (330-390 ms of the UI task's CPU a second), which starved the
+// idle work that draws the canvas margin before the next drag.
+uint32_t mapTickKey(const DeviceState& s) {
+    MapScreenData map = {};
+    buildMapScreenData(s, map);
+    uint32_t h = 2166136261u;
+    auto mix = [&](const void* p, size_t n) {
+        const uint8_t* b = (const uint8_t*)p;
+        for (size_t i = 0; i < n; ++i) { h ^= b[i]; h *= 16777619u; }
+    };
+    const int32_t v[] = {(int32_t)lround(map.centerLat * 1e6), (int32_t)lround(map.centerLon * 1e6),
+                         map.riderX, map.riderY, (int32_t)lroundf(map.headingDeg),
+                         (int32_t)lroundf(map.metersPerPixel * 100), (int32_t)lroundf(map.northDeg),
+                         map.trackUp, map.navBannerVisible, map.panned, map.topo, map.peerCount,
+                         s.gpsFix, s.satellites, s.batteryPercent, s.charging, s.sdCard,
+                         (int32_t)(time(nullptr) / 60)};
+    mix(v, sizeof v);
+    mix(map.place, sizeof map.place);
+    mix(map.placeSub, sizeof map.placeSub);
+    for (int i = 0; i < map.peerCount && map.peers; ++i) mix(&map.peers[i], sizeof(MapPeer));
+    return h;
+}
+
 // DOBA: the map follows a finger while it drags (released, the drag is kept by
 // mapDrag). Each frame is the canvas round the view, copied (topo::drawQuick):
 // nothing comes off the card while the finger moves, so frames go out as fast
@@ -505,6 +533,24 @@ void farewellTest() {
 // its margin) the map waits for the finger to let go.
 bool liveDragging = false;
 uint32_t liveLastPaint = 0;
+
+// A live frame in black and white. The panel lands a grey by darkening and
+// lightening a pixel in turn, so every grey that moved under the finger (the
+// buildings, the woods) blinked on every frame. While the finger moves the
+// fills go to paper and the lines, roads and names to ink; the greys come back
+// with the frame drawn after it lets go.
+void inkOnly(uint8_t* fb) {
+    static uint8_t lut[256];
+    static bool built = false;
+    if (!built) {
+        for (int b = 0; b < 256; ++b) {
+            const uint8_t lo = (b & 0x0F) < 8 ? 0x0 : 0xF, hi = (b >> 4) < 8 ? 0x0 : 0xF;
+            lut[b] = (uint8_t)(hi << 4 | lo);
+        }
+        built = true;
+    }
+    for (size_t i = 0; i < fbSize; ++i) fb[i] = lut[fb[i]];
+}
 
 bool mapLiveDrag() {
     if (screen != SCREEN_MAP || powerOverlay || !touchWasDown) {
@@ -531,7 +577,7 @@ bool mapLiveDrag() {
     uint8_t* fb = epdc_framebuffer();
     memset(fb, 0xFF, fbSize);
     const bool ok = map.topo && topo::drawQuick(map, fb);
-    if (ok) ui_render_map(map, s, fb, /*baseDrawn=*/true);
+    if (ok) { ui_render_map(map, s, fb, /*baseDrawn=*/true); inkOnly(fb); }
     mapPanE = e;
     mapPanN = n;
     if (!ok) {

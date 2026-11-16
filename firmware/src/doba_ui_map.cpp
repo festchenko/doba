@@ -88,7 +88,7 @@ void renderLegend(const DeviceState& s, uint8_t* fb) {
     y += 48;
     section(y, "MARKS", fb);
     y += 50;
-    {   // saved point · going to · the cross · measure from A
+    {   // saved point · going to · the cross
         int x = 40;
         for (int k = 0; k < 3; ++k) {
             epd_draw_line(x, y - 12 + k, x - 10 + k, y + 7 - k, INK, fb);
@@ -109,11 +109,6 @@ void renderLegend(const DeviceState& s, uint8_t* fb) {
         epd_fill_rect({x - 2, y + 6, 5, 11}, INK, fb);
         ui::text(ui::font(ui::F_SMALL), 64, y - 2, TR("Cross"), fb, EPD_DRAW_ALIGN_LEFT, INK);
         ui::text(ui::font(ui::F_TINY), 64, y + 20, TR("drag the map: read here"), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
-        x = 290;
-        epd_fill_circle(x, y, 13, INK, fb);
-        ui::text(ui::font(ui::F_STRONG), x, y + 6, "A", fb, EPD_DRAW_ALIGN_CENTER, PAPER);
-        ui::text(ui::font(ui::F_SMALL), 318, y - 2, TR("Measure from A"), fb, EPD_DRAW_ALIGN_LEFT, INK);
-        ui::text(ui::font(ui::F_TINY), 318, y + 20, TR("tap the cross to set"), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     }
 
     y += 40;
@@ -128,7 +123,66 @@ void renderLegend(const DeviceState& s, uint8_t* fb) {
     }
 }
 
+// The legend's second page: what the map's areas look like. The topo tiles are
+// shown in ink and paper only (topo_layer.cpp: a grey is a dither, so a moved
+// map does not blink), so each sample is drawn the same way.
+int g_legendPage = 0;
+constexpr int L_LIGHT = 10, L_DARK = 5;   // maps/style.py LIGHT, DARK
+bool legInk(int lvl, int x, int y) {   // as topo_layer.cpp dith()
+    if (lvl <= 7) return true;
+    if (lvl >= 13) return false;
+    return !((x | y) & 1);
+}
+enum LegFill { LF_SOLID, LF_DOTS, LF_HATCH, LF_DASH, LF_GRAIN };
+// The pattern masks of maps/render.py pattern_mask(), at 1x.
+bool legMask(LegFill k, int x, int y) {
+    switch (k) {
+        case LF_DOTS:  { const int row = (y / 7) % 2; return y % 7 == 0 && (x + row * 3) % 7 == 0; }
+        case LF_HATCH: return (x + y) % 6 == 0;
+        case LF_DASH:  { const int row = (y / 6) % 2; return y % 6 == 0 && (x + row * 3) % 12 < 3; }
+        case LF_GRAIN: { const int row = (y / 5) % 2; return y % 10 == 0 && (x + row * 5) % 10 == 0; }
+        default: return true;
+    }
+}
+void legSwatch(int x0, int y0, int w, int h, LegFill k, int lvl, int edge, uint8_t* fb) {
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            if (legMask(k, x, y) && legInk(lvl, x0 + x, y0 + y)) epd_draw_pixel(x0 + x, y0 + y, INK, fb);
+    if (edge >= 0)
+        for (int t = 0; t < 2; ++t) {
+            epd_fill_rect({x0, y0 + t, w, 1}, INK, fb); epd_fill_rect({x0, y0 + h - 1 - t, w, 1}, INK, fb);
+            epd_fill_rect({x0 + t, y0, 1, h}, INK, fb); epd_fill_rect({x0 + w - 1 - t, y0, 1, h}, INK, fb);
+        }
+}
+void renderLegendFills(uint8_t* fb) {
+    epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
+    int y = TOP + 6;
+    section(y, "AREAS", fb);
+    y += 46;
+    struct Row { LegFill k; int lvl; int edge; const char* what; const char* hint; };
+    const Row rows[] = {
+        {LF_SOLID, L_LIGHT, 1, "Water", "lakes, rivers, sea: fine dots, a black shore"},
+        {LF_SOLID, L_LIGHT, 1, "Building", "zoomed in close, black outline"},
+        {LF_DOTS, L_DARK, -1, "Forest, wood", "staggered dots"},
+        {LF_DASH, L_DARK, -1, "Wetland, marsh", "short dashes"},
+        {LF_GRAIN, L_DARK, -1, "Sand, cemetery", "sparse grain"},
+        {LF_GRAIN, 0, -1, "Rock, scree", "black grain"},
+        {LF_HATCH, L_LIGHT, -1, "Town, industry", "dotted diagonal lines, zoomed out"},
+        {LF_HATCH, L_DARK, -1, "Military area", "dark diagonal lines"},
+        {LF_SOLID, L_LIGHT, -1, "Quarry", "fine dots, no outline"},
+        {LF_SOLID, 15, -1, "Fields, grass, open land", "plain paper"},
+    };
+    for (const Row& r : rows) {
+        legSwatch(24, y - 4, 72, 40, r.k, r.lvl, r.edge, fb);
+        if (r.lvl == 15) ui::frameRound({24, y - 4, 72, 40}, 2, 1, fb);
+        legendLine(y - 4, r.what, r.hint, fb);
+        y += 56;
+    }
+    ui::text(ui::font(ui::F_SMALL), 24, y + 20, TR("Tap for the first page"), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+}
+
 void renderMapOpts(const DeviceState& s, uint8_t* fb) {
+    if (g_legend && g_legendPage == 1) { renderLegendFills(fb); return; }
     if (g_legend) { renderLegend(s, fb); return; }
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     // No "up is north / course": the topo tiles are drawn as they are, north up.
@@ -143,19 +197,18 @@ void renderMapOpts(const DeviceState& s, uint8_t* fb) {
     y += MROW_H;
     caption(y, MROW_H, "PLACES", doba_pois::available() ? "hospitals, water, food... zoomed in" : "no places file on the card", fb);
     toggle(y, MROW_H, milspec::poisOn(), fb);
-    linkRow(kOpenLegend, "Legend", "contours, grid, marks, place letters", fb);
+    linkRow(kOpenLegend, "Legend", "contours, grid, marks, places, areas", fb);
     linkRow(kOpenPoints, "Saved points", nullptr, fb);
     const char* tips[] = {"Hold a finger on the map 1 s to drop a point.",
-                          "Drag the map: the strip reads the cross.",
-                          "Tap the cross to measure from there."};
-    for (int i = 0; i < 3; ++i)
+                          "Drag the map: the strip reads the cross."};
+    for (int i = 0; i < 2; ++i)
         ui::text(ui::font(ui::F_SMALL), 24, kOpenPoints.y + kOpenPoints.height + 56 + i * 36,
                  TR(tips[i]), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
 
 Go tapMapOpts(int x, int y) {
-    if (g_legend) return STAY;
-    if (hit(kOpenLegend, x, y)) { g_legend = true; return STAY; }
+    if (g_legend) { g_legendPage ^= 1; return STAY; }   // a tap turns the legend's page
+    if (hit(kOpenLegend, x, y)) { g_legend = true; g_legendPage = 0; return STAY; }
     if (hit(kOpenPoints, x, y)) return TO_POINTS;
     const int r = (y - MROW_TOP) / MROW_H;
     if (y < MROW_TOP || r >= MROWS) return STAY;

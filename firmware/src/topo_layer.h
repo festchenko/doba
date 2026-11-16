@@ -54,6 +54,8 @@ bool drawZoomPreview(uint8_t* fb, bool zoomIn);
 bool viewReady(const MapScreenData& map);
 // Console `topo canvas off`: every frame straight from the tiles (to compare).
 void setCanvas(bool on);
+// Console `topo dither off|on`: greys as greys, or (default) as ink-and-paper dots.
+void setDither(bool on);
 
 // Forget open packs and cached tiles (the card was removed or rewritten).
 void reset();

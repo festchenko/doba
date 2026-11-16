@@ -65,6 +65,36 @@ uint32_t rd32(const uint8_t* p) {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
+// Black and white only: a grey is an ordered dither of ink and paper, laid on
+// the world's pixels (so it moves with the map and never crawls). The panel
+// lands a grey by darkening and lightening a pixel in turn, so every grey that
+// moved (the buildings, the woods of a dragged map) blinked; ink and paper do
+// not. Console `topo dither off` brings the greys back to compare.
+bool g_dither = true;
+inline uint8_t dith(uint8_t lvl, int32_t wx, int32_t wy) {
+    // The panel's own four tones (maps/style.py): 0-7 dark and black, 8-12
+    // light, 13-15 paper. Dark goes to ink whole: it is the fine work (contours,
+    // the dots of a wood, the dashes of a marsh, hatching), one pixel wide, and a
+    // dither would drop some of it for good. Light is the broad fills (water,
+    // buildings): those are the ones dotted.
+    if (!g_dither) return lvl;
+    if (lvl <= 7) return 0;
+    if (lvl >= 13) return 15;
+    // light: one pixel in four, on the even world grid. A finer dither (Bayer)
+    // was tried: its ink fell beside the one-pixel diagonals of a town's hatch
+    // and the towns vanished; every line of this grid's slope meets it.
+    return ((wx | wy) & 1) ? 15 : 0;
+}
+// A decoded tile in place; tiles start on multiples of 256, so tile pixel
+// (x, y) dithers as world pixel (x, y) does.
+void ditherTile(uint8_t* px) {
+    for (int y = 0; y < TILE; ++y)
+        for (int x = 0; x < TILE; x += 2) {
+            uint8_t& b = px[y * (TILE / 2) + (x >> 1)];
+            b = (uint8_t)(dith(b >> 4, x, y) << 4 | dith(b & 0x0F, x + 1, y));
+        }
+}
+
 void packPath(int z, int x, int y, char* out, size_t n) {
     if (z <= CELL_Z) {
         snprintf(out, n, "%s/base.dtp", kRoot);
@@ -210,6 +240,7 @@ bool readTile(int z, int x, int y, Slot& s) {
     if (!ok) return false;
     if (!s.px) s.px = (uint8_t*)heap_caps_malloc(TILE_BYTES, MALLOC_CAP_SPIRAM);
     if (!s.px || !inflate(g_zbuf, len, s.px)) return false;
+    if (g_dither) ditherTile(s.px);
     s.solid = false;
     ++g_stats.decoded;
     return true;
@@ -344,7 +375,7 @@ static int drawDirect(const MapScreenData& map, uint8_t* fb) {
             if (!s->present) {
                 for (; x < run; ++x) putPortrait(fb, x, y, 15);
             } else if (s->solid) {
-                for (; x < run; ++x) putPortrait(fb, x, y, s->fill);
+                for (; x < run; ++x) putPortrait(fb, x, y, dith(s->fill, colW[x], wy));
             } else {
                 const uint8_t* row = s->px + py * (TILE / 2);
                 for (; x < run; ++x) {
@@ -427,7 +458,7 @@ void renderBlock(int br, int bc) {
             if (!sl->present) {
                 for (; cy < run; ++cy) putCanvas(cx, cy, 15);
             } else if (sl->solid) {
-                for (; cy < run; ++cy) putCanvas(cx, cy, sl->fill);
+                for (; cy < run; ++cy) putCanvas(cx, cy, dith(sl->fill, wx, g_cv.wy0 + cy));
             } else {
                 for (; cy < run; ++cy) {
                     const int py = (g_cv.wy0 + cy) & 0xFF;
@@ -671,6 +702,8 @@ bool idleStep(const MapScreenData& map) {
 
 static uint32_t g_generation = 1;
 namespace { uint32_t g_generationForCanvas() { return g_generation; } }
+void setDither(bool on) { g_dither = on; reset(); }
+
 void reset() {
     for (Slot& s : g_slots) s.valid = false;
     for (CellSeen& c : g_cells) c = CellSeen();

@@ -52,10 +52,6 @@ void drawPois(const MapScreenData& map, uint8_t* fb);
 const char* poiCode(int kind);
 
 // Measure: mark A at the cross; the strip then reads from A to the cross.
-bool measureOn();
-void measureToggleAtCross();   // set A at the cross, or clear it
-void measureClear();
-void drawMeasure(const MapScreenData& map, uint8_t* fb);
 
 // The 100 km square (MGRS letters, "LC") of a point, "" if none.
 void square(double lat, double lon, char* out, size_t n);

@@ -119,6 +119,7 @@ def test_a_zoom_shows_the_enlarged_map_at_once_then_the_sharp_one(doba, tmp_path
                   for dy in range(-6, 7) for dx in range(-4, 5)})
     write_packs(doba.sd, tiles)
     boot(doba)
+    doba.console("topo dither off")   # the stripes' own levels tell sharp from stale
     doba.console("timing")
     doba.gps(LAT, LON, speed_kmh=0)
     time.sleep(1.5)

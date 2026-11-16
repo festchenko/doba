@@ -111,10 +111,12 @@ void setFlag(const char* key, bool on, int8_t& cache) {
 }
 int8_t g_grid = -1, g_points = -1, g_pois = -1;
 // Measure: point A (lat 99 = none).
-double g_aLat = 99, g_aLon = 0;
 double g_vLat = 50, g_vLon = 30;   // the view's middle, last frame
 // The last frame's projection, for long-press -> point.
 struct Frame { bool ok; int rx, ry; float mpp, north; double lat, lon; } g_frame = {};
+// The projection of the last map frame: the one the tiles were drawn in, so a
+// point, the cross and a long press land where the map shows them.
+View g_view;
 }  // namespace
 
 bool gridOn() { return flag("grid", true, g_grid); }
@@ -124,13 +126,6 @@ void setPointsOn(bool on) { setFlag("pts", on, g_points); }
 bool poisOn() { return flag("pois", true, g_pois); }
 void setPoisOn(bool on) { setFlag("pois", on, g_pois); }
 
-bool measureOn() { return g_aLat < 90; }
-void measureClear() { g_aLat = 99; }
-void measureToggleAtCross() {
-    if (measureOn()) { measureClear(); return; }
-    double lat, lon;
-    if (screenToLatLon(SCREEN_W / 2, kCrossY, lat, lon)) { g_aLat = lat; g_aLon = lon; }
-}
 
 void square(double lat, double lon, char* out, size_t n) {
     char m[32];
@@ -205,27 +200,6 @@ void drawPois(const MapScreenData& map, uint8_t* fb) {
     }
 }
 
-void drawMeasure(const MapScreenData& map, uint8_t* fb) {
-    if (!measureOn() || !g_frame.ok) return;
-    const View v = viewFor(map);
-    double ax, ay;
-    v.toScreen(g_aLat, g_aLon, ax, ay);
-    const int top = ui::STATUS_H + (map.topo ? 52 : 0), bottom = ui::MAP_STRIP_TOP;
-    // A dashed line from A to the cross
-    const double cx = SCREEN_W / 2, cy = kCrossY, len = hypot(cx - ax, cy - ay);
-    for (double k = 0; k < len - 30; k += 1.0) {
-        if (fmod(k, 18.0) > 10.0) continue;
-        const int x = (int)lround(ax + (cx - ax) * k / len), y = (int)lround(ay + (cy - ay) * k / len);
-        if (y < top + 2 || y > bottom - 3 || x < 1 || x > SCREEN_W - 2) continue;
-        epd_fill_rect({x - 1, y - 1, 3, 3}, 0x00, fb);
-    }
-    const int x = (int)ax, y = (int)ay;
-    if (x < 16 || x > SCREEN_W - 16 || y < top + 16 || y > bottom - 16) return;
-    epd_fill_circle(x, y, 15, 0xFF, fb);
-    epd_fill_circle(x, y, 12, 0x00, fb);
-    ui::text(ui::font(ui::F_STRONG), x, y + 6, "A", fb, EPD_DRAW_ALIGN_CENTER, 0xFF);
-}
-
 bool lastView(double& lat, double& lon, float& mpp) {
     if (!g_frame.ok) return false;
     lat = g_vLat; lon = g_vLon; mpp = g_frame.mpp;
@@ -234,18 +208,13 @@ bool lastView(double& lat, double& lon, float& mpp) {
 
 bool screenToLatLon(int x, int y, double& lat, double& lon) {
     if (!g_frame.ok) return false;
-    const double dx = x - g_frame.rx, dy = y - g_frame.ry;
-    const double d = hypot(dx, dy) * g_frame.mpp;
-    const double brg = (atan2(dx, -dy) * 180.0 / M_PI - g_frame.north) * M_PI / 180.0;
-    const double R = 6371008.8, la1 = g_frame.lat * M_PI / 180.0, lo1 = g_frame.lon * M_PI / 180.0;
-    const double la2 = asin(sin(la1) * cos(d / R) + cos(la1) * sin(d / R) * cos(brg));
-    const double lo2 = lo1 + atan2(sin(brg) * sin(d / R) * cos(la1), cos(d / R) - sin(la1) * sin(la2));
-    lat = la2 * 180.0 / M_PI;
-    lon = lo2 * 180.0 / M_PI;
+    g_view.toGeo(x, y, lat, lon);
     return true;
 }
 
 void drawGrid(const MapScreenData& map, uint8_t* fb) {
+    // Wider than ~400 km across, a view spans UTM zones: no one grid fits it.
+    if (map.metersPerPixel > 800.0f) return;
     const View v = viewFor(map);
     const int top = ui::STATUS_H, bottom = ui::MAP_STRIP_TOP;
     const double spacing = map.metersPerPixel < 20.0f ? 1000.0
@@ -326,6 +295,8 @@ void drawTarget(const MapScreenData& map, const DeviceState& s, uint8_t* fb) {
     const double lon = have ? s.longitude : map.centerLon;
     if (map.metersPerPixel <= 0) return;
     g_frame = {true, map.riderX, map.riderY, map.metersPerPixel, map.northDeg, lat, lon};
+    g_view = viewFor(map);
+    const View& v = g_view;
     g_vLat = map.centerLat; g_vLon = map.centerLon;
     const int top0 = ui::STATUS_H, bottom0 = ui::MAP_STRIP_TOP;
     const int t = doba_points::target();
@@ -334,10 +305,9 @@ void drawTarget(const MapScreenData& map, const DeviceState& s, uint8_t* fb) {
         for (int i = 0; i < doba_points::count(); ++i) {
             if (i == t) continue;
             const doba_points::Point* q = doba_points::at(i);
-            double b, d;
-            milgeo::bearingDistance(lat, lon, q->lat, q->lon, b, d);
-            const double a = (b + map.northDeg) * M_PI / 180.0, px = d / map.metersPerPixel;
-            const int x = map.riderX + (int)lround(sin(a) * px), y = map.riderY - (int)lround(cos(a) * px);
+            double qx, qy;
+            v.toScreen(q->lat, q->lon, qx, qy);
+            const int x = (int)lround(qx), y = (int)lround(qy);
             if (x < 12 || x > SCREEN_W - 12 || y < top0 + 14 || y > bottom0 - 12) continue;
             for (int k = 0; k < 3; ++k) {
                 epd_draw_line(x, y - 12 + k, x - 10 + k, y + 7 - k, 0x00, fb);
@@ -354,13 +324,13 @@ void drawTarget(const MapScreenData& map, const DeviceState& s, uint8_t* fb) {
     const doba_points::Point* p = doba_points::at(t);
     if (!p) return;
     double b, d;
-    milgeo::bearingDistance(lat, lon, p->lat, p->lon, b, d);
-    const double a = (b + map.northDeg) * M_PI / 180.0;
-    const double px = d / map.metersPerPixel;
-    const double tx = map.riderX + sin(a) * px, ty = map.riderY - cos(a) * px;
+    milgeo::bearingDistance(lat, lon, p->lat, p->lon, b, d);   // the distance on its tag
+    double tx, ty;
+    v.toScreen(p->lat, p->lon, tx, ty);
     const int top = ui::STATUS_H, bottom = ui::MAP_STRIP_TOP, W = SCREEN_W;
     // Dashed, 3 px, stopping short of the rider and of the mark; clipped to the map.
-    const double len = px, ux = sin(a), uy = -cos(a);
+    const double len = hypot(tx - map.riderX, ty - map.riderY);
+    const double ux = len > 0 ? (tx - map.riderX) / len : 0, uy = len > 0 ? (ty - map.riderY) / len : -1;
     for (double k = 18; k < len - 20; k += 1.0) {
         if (fmod(k, 22.0) > 13.0) continue;
         const int x = map.riderX + (int)lround(ux * k), y = map.riderY + (int)lround(uy * k);
@@ -484,15 +454,14 @@ void drawStrip(const MapScreenData& map, const DeviceState& s, uint8_t* fb) {
     if (fix) snprintf(v3, sizeof v3, "%d", s.satellites);
     else snprintf(v3, sizeof v3, TR("no fix \xC2\xB7 %d"), s.satellites);
     const char* caps[3] = {c1, "Course", "Satellites"};
-    if (cross) {   // the cross: how far and which way from you (or from A), its height
-        const bool fromA = measureOn();
-        caps[0] = fromA ? "From A" : "From you";
+    if (cross) {   // the cross: how far and which way from you, its height
+        caps[0] = "From you";
         caps[1] = "Compass az";
         caps[2] = "Height";
-        const bool src = fromA || fix || s.everHadFix;
+        const bool src = fix || s.everHadFix;
         if (src) {
             double b, d;
-            milgeo::bearingDistance(fromA ? g_aLat : s.latitude, fromA ? g_aLon : s.longitude, lat, lon, b, d);
+            milgeo::bearingDistance(s.latitude, s.longitude, lat, lon, b, d);
             doba_points::formatDistance(d, v1, sizeof v1);
             // what to set on a compass: true azimuth less the declination here
             float mb = (float)b - milgeo::declination(lat, lon);

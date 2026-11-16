@@ -95,6 +95,7 @@ bool mapDrag(int x0, int y0, int x1, int y1);
 bool mapLongPress(int x, int y);
 void renderFarewell(uint8_t* fb);
 void farewellTest();
+uint32_t mapTickKey(const DeviceState& s);   // what the map would show; its frame changes only with it
 bool mapLiveDrag();                  // a frame of the map under a moving finger; true if painted
 
 }  // namespace uid

@@ -142,39 +142,10 @@ void drawScaleBar(float metersPerPixel, bool miles, uint8_t* fb) {
     ui::text(ui::font(ui::F_SMALL), x, y - 10, buf, fb, EPD_DRAW_ALIGN_LEFT, 0x00);
 }
 
-void drawCompass(int cx, int cy, float northDeg, bool trackUp, uint8_t* fb) {
-    epd_fill_circle(cx, cy, 28, 0xFF, fb);
-    for (int r = 26; r <= 28; ++r) epd_draw_circle(cx, cy, r, 0x00, fb);
-
-    // Needle points to true north.
-    float a = northDeg * (float)M_PI / 180.0f;
-    float nxd = sinf(a), nyd = -cosf(a);   // unit vector toward north
-    float pxd = -nyd, pyd = nxd;           // perpendicular
-    int tipX = cx + lroundf(nxd * 19), tipY = cy + lroundf(nyd * 19);
-    int b1X = cx + lroundf(pxd * 7), b1Y = cy + lroundf(pyd * 7);
-    int b2X = cx - lroundf(pxd * 7), b2Y = cy - lroundf(pyd * 7);
-    epd_fill_triangle(tipX, tipY, b1X, b1Y, b2X, b2Y, 0x00, fb);
-
-    if (trackUp) {
-        // underline marks track-up mode
-        epd_fill_rect({cx - 12, cy + 34, 24, 3}, 0x00, fb);
-    }
-}
-
 }  // namespace
 
 const MapTouchZones kMapZoom = {540 - 78, 560, 640, 76, 560 - 76 - 8};
 int mapCentreY() { return kMapZoom.layersY - kMapZoom.size - 8; }
-const MapCompassZone kMapCompass = {540 - 46, 64 + 48, 34};
-// Bottom edge of the turn-by-turn banner (ui_dashboard's kNavBanner is
-// {0, STATUS_H, 540, 138}); the compass drops below this while navigating.
-constexpr int kNavBannerBottom = 64 + 138;
-
-int mapCompassCy(bool navBannerVisible) {
-    return navBannerVisible ? kNavBannerBottom + kMapCompass.r + 14
-                            : kMapCompass.cy;
-}
-
 void ui_map_draw_zoom_button(bool zoomIn, bool pressed, uint8_t* fb) {
     EpdRect r = {kMapZoom.zoomX, zoomIn ? kMapZoom.zoomInY : kMapZoom.zoomOutY,
                  kMapZoom.size, kMapZoom.size};
@@ -234,14 +205,8 @@ void ui_render_map(const MapScreenData& map, const DeviceState& s, uint8_t* fb,
     renderMapTop(map, fb);
     milspec::drawPois(map, fb);   // DOBA: hospitals, water, food...
     milspec::drawTarget(map, s, fb);   // DOBA: the active waypoint
-    if (map.panned) milspec::drawMeasure(map, fb);   // DOBA: A -> the cross
     drawScaleBar(map.metersPerPixel, false, fb);
-    // The turn banner occupies the top of the map, exactly where the compass
-    // lives (compass spans y 78..146; the banner runs to y 202), so the north
-    // indicator was drawn underneath it and invisible while navigating. Drop it
-    // clear of the banner instead of hiding it.
-    drawCompass(kMapCompass.cx, mapCompassCy(map.navBannerVisible) + 56,   // DOBA: below the header band
-                map.northDeg, map.trackUp, fb);
+    // DOBA: no compass rose: the topo map is always north up, so it said nothing.
 
     // No map covers this position — tell the rider how to get one instead of
     // showing a blank screen.

@@ -695,10 +695,16 @@ bool epdc_begin() {
     }
     g_painter = &painter;
     painter.setIdleTimeout(PANEL_IDLE_OFF_S);
+    // Direct grey-to-grey transitions: a grey that changes to another grey is
+    // driven straight there in one paint, with the board's tuned trains, instead
+    // of being whitened first and darkened again. Without it every grey area
+    // that moved (the buildings on a dragged map) blinked and read dark for a
+    // frame. ~260 KB of PSRAM.
+    const bool direct = painter.setDirectTransitions(true);
 
     epd_set_rotation(DISPLAY_ROTATION);
-    Serial.printf("[epdc] ready: %d grey levels, internal left=%u psram left=%u\n",
-                  g_painter->greyLevels(),
+    Serial.printf("[epdc] ready: %d grey levels, direct %s, internal left=%u psram left=%u\n",
+                  g_painter->greyLevels(), direct ? "on" : "FAILED",
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     return true;

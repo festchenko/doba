@@ -53,18 +53,6 @@ struct MapScreenData {
     bool topo = false;
 };
 
-// Compass touch target (tap toggles north-up / track-up)
-struct MapCompassZone {
-    int cx, cy, r;
-};
-extern const MapCompassZone kMapCompass;
-
-// Screen centre-Y of the compass. It moves below the turn-by-turn banner while
-// navigating, so the hit test in ui_dashboard MUST ask rather than assume — the
-// drawn position and the tap target drifting apart is what made the north-up
-// button unreachable during navigation.
-int mapCompassCy(bool navBannerVisible);
-
 // Touch targets (zoom buttons on the right edge of the map area)
 struct MapTouchZones {
     int zoomX, zoomInY, zoomOutY, size;
