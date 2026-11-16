@@ -49,7 +49,7 @@ bool idleStep(const MapScreenData& map);
 bool drawQuick(const MapScreenData& map, uint8_t* fb);
 // On a zoom tap: the last view shown, enlarged 2x (in) or shrunk 2x (out) about
 // its centre, from the canvas, at once. The sharp frame follows.
-bool drawZoomPreview(uint8_t* fb, bool zoomIn);
+bool drawZoomPreview(uint8_t* fb, bool zoomIn, int pivotX, int pivotY);
 // This view is already drawn on the canvas: showing it is a copy.
 bool viewReady(const MapScreenData& map);
 // Console `topo canvas off`: every frame straight from the tiles (to compare).

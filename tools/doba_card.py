@@ -137,6 +137,10 @@ def write(a):
         if rs:
             subprocess.run([sys.executable, "-u", os.path.join(ROOT, "maps", "mergepacks.py"), "--jobs", str(a.jobs),
                             "--out", os.path.join(dst, "doba", "map")] + rs, check=True)
+            # the regions stop at z8: add the overview zooms (z4-7) to the merged base
+            base = os.path.join(dst, "doba", "map", "base.dtp")
+            if os.path.exists(base):
+                subprocess.run([sys.executable, "-u", os.path.join(ROOT, "maps", "overview.py"), base], check=True)
         for f in ("places.dgz", "pois.dgp"):
             p = os.path.join(a.data, f)
             if os.path.exists(p) and not same(p, os.path.join(dst, "doba", "map", f)):

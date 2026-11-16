@@ -113,11 +113,20 @@ int8_t g_grid = -1, g_points = -1, g_pois = -1;
 // Measure: point A (lat 99 = none).
 double g_vLat = 50, g_vLon = 30;   // the view's middle, last frame
 // The last frame's projection, for long-press -> point.
+double g_aLat = 99, g_aLon = 0;   // A: where a distance is measured from
 struct Frame { bool ok; int rx, ry; float mpp, north; double lat, lon; } g_frame = {};
 // The projection of the last map frame: the one the tiles were drawn in, so a
 // point, the cross and a long press land where the map shows them.
 View g_view;
 }  // namespace
+
+bool measureOn() { return g_aLat < 90; }
+void measureClear() { g_aLat = 99; }
+void measureToggleAtCross() {
+    if (measureOn()) { measureClear(); return; }
+    double lat, lon;
+    if (screenToLatLon(SCREEN_W / 2, kCrossY, lat, lon)) { g_aLat = lat; g_aLon = lon; }
+}
 
 bool gridOn() { return flag("grid", true, g_grid); }
 void setGridOn(bool on) { setFlag("grid", on, g_grid); }
@@ -200,6 +209,27 @@ void drawPois(const MapScreenData& map, uint8_t* fb) {
     }
 }
 
+void drawMeasure(const MapScreenData& map, uint8_t* fb) {
+    if (!measureOn() || !g_frame.ok) return;
+    const View v = viewFor(map);
+    double ax, ay;
+    v.toScreen(g_aLat, g_aLon, ax, ay);
+    const int top = ui::STATUS_H + (map.topo ? 52 : 0), bottom = ui::MAP_STRIP_TOP;
+    // A dashed line from A to the cross
+    const double cx = SCREEN_W / 2, cy = kCrossY, len = hypot(cx - ax, cy - ay);
+    for (double k = 0; k < len - 30; k += 1.0) {
+        if (fmod(k, 18.0) > 10.0) continue;
+        const int x = (int)lround(ax + (cx - ax) * k / len), y = (int)lround(ay + (cy - ay) * k / len);
+        if (y < top + 2 || y > bottom - 3 || x < 1 || x > SCREEN_W - 2) continue;
+        epd_fill_rect({x - 1, y - 1, 3, 3}, 0x00, fb);
+    }
+    const int x = (int)ax, y = (int)ay;
+    if (x < 16 || x > SCREEN_W - 16 || y < top + 16 || y > bottom - 16) return;
+    epd_fill_circle(x, y, 15, 0xFF, fb);
+    epd_fill_circle(x, y, 12, 0x00, fb);
+    ui::text(ui::font(ui::F_STRONG), x, y + 6, "A", fb, EPD_DRAW_ALIGN_CENTER, 0xFF);
+}
+
 bool lastView(double& lat, double& lon, float& mpp) {
     if (!g_frame.ok) return false;
     lat = g_vLat; lon = g_vLon; mpp = g_frame.mpp;
@@ -272,8 +302,13 @@ void drawGrid(const MapScreenData& map, uint8_t* fb) {
                             Label& L = labels[nl];
                             L.x = (int)(pass == 0 ? px + (x - px) * t : edge);
                             L.y = (int)(pass == 0 ? edge : py + (y - py) * t);
-                            const long km = (long)llround(g / 1000.0) % 100;
-                            snprintf(L.t, sizeof L.t, "%02ld", km);
+                            // 1 and 10 km lines: the two km digits of the
+                            // grid reference. 100 km lines: those are always
+                            // 00, so the whole km ("300", "5500"); the square
+                            // letters name the squares between them (below).
+                            const long km = (long)llround(g / 1000.0);
+                            if (spacing >= 100000.0) snprintf(L.t, sizeof L.t, "%ld", km % 10000);
+                            else snprintf(L.t, sizeof L.t, "%02ld", km % 100);
                             const bool clear = pass == 0
                                 ? (L.x > 34 && L.x < 440)                 // northing labels, compass
                                 : (L.y > top + 30 && L.y < bottom - 60);  // scale bar
@@ -287,6 +322,20 @@ void drawGrid(const MapScreenData& map, uint8_t* fb) {
         }
     }
     for (int i = 0; i < nl; ++i) labelBox(labels[i].x, labels[i].y, labels[i].t, fb);
+
+    // 100 km lines: the MGRS letters of each square, in its middle.
+    if (spacing >= 100000.0) {
+        for (double e = minE; e < maxE - 0.5; e += spacing)
+            for (double n = minN; n < maxN - 0.5; n += spacing) {
+                double lat, lon, x, y;
+                milgeo::fromUtm(zone, north, e + spacing / 2, n + spacing / 2, lat, lon);
+                v.toScreen(lat, lon, x, y);
+                if (x < 40 || x > SCREEN_W - 100 || y < top + 70 || y > bottom - 70) continue;
+                char sq[4];
+                square(lat, lon, sq, sizeof sq);
+                if (sq[0]) labelBox((int)x, (int)y, sq, fb);
+            }
+    }
 }
 
 void drawTarget(const MapScreenData& map, const DeviceState& s, uint8_t* fb) {
@@ -454,14 +503,15 @@ void drawStrip(const MapScreenData& map, const DeviceState& s, uint8_t* fb) {
     if (fix) snprintf(v3, sizeof v3, "%d", s.satellites);
     else snprintf(v3, sizeof v3, TR("no fix \xC2\xB7 %d"), s.satellites);
     const char* caps[3] = {c1, "Course", "Satellites"};
-    if (cross) {   // the cross: how far and which way from you, its height
-        caps[0] = "From you";
+    if (cross) {   // the cross: how far and which way from you (or from A), its height
+        const bool fromA = measureOn();
+        caps[0] = fromA ? "From A" : "From you";
         caps[1] = "Compass az";
         caps[2] = "Height";
-        const bool src = fix || s.everHadFix;
+        const bool src = fromA || fix || s.everHadFix;
         if (src) {
             double b, d;
-            milgeo::bearingDistance(s.latitude, s.longitude, lat, lon, b, d);
+            milgeo::bearingDistance(fromA ? g_aLat : s.latitude, fromA ? g_aLon : s.longitude, lat, lon, b, d);
             doba_points::formatDistance(d, v1, sizeof v1);
             // what to set on a compass: true azimuth less the declination here
             float mb = (float)b - milgeo::declination(lat, lon);

@@ -5,6 +5,7 @@ import re
 import time
 
 import numpy as np
+from PIL import Image
 
 from test_doba import boot, doba  # noqa: F401
 from test_topo import LAT, LON, Z, tile_xy, write_packs
@@ -164,3 +165,43 @@ def test_drags_one_after_another_the_same_way_stay_on_the_canvas(doba, tmp_path)
     direct = band(shot(doba, tmp_path, "direct.png"))
     same = (canvas == direct).mean()
     assert same > 0.999, "canvas and tiles differ on %.2f%% of the map" % (100 * (1 - same))
+
+
+def test_a_zoom_after_a_drag_previews_the_same_stretch_of_map(doba, tmp_path, monkeypatch):
+    """The zoom keeps the view's centre still, not the rider: a dragged map's
+    preview must show what the sharp frame then shows (it showed another
+    stretch of map for a moment)."""
+    P = Z - 1                                                      # the parent zoom
+    fx, fy = tile_xy(LAT, LON, P)
+    tx, ty = int(fx), int(fy)
+    tiles = {}
+    for dy in range(-4, 5):
+        for dx in range(-3, 4):
+            lvl = 1 + ((tx + dx) * 7 + (ty + dy) * 3) % 14        # a level per tile
+            tiles[(P, tx + dx, ty + dy)] = np.full((256, 256), lvl, np.uint8)
+            for cy in range(2):                                     # its four children alike
+                for cx in range(2):
+                    tiles[(Z, 2 * (tx + dx) + cx, 2 * (ty + dy) + cy)] = np.full((256, 256), lvl, np.uint8)
+    write_packs(doba.sd, tiles)
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    monkeypatch.setenv("OTP_SIM_FRAMES", str(frames))   # every paint kept
+    boot(doba)
+    doba.console("topo dither off")
+    open_z16(doba)
+    doba.console("zoom out")                                       # to P
+    time.sleep(2)
+    fill_canvas(doba)
+    doba.swipe(150, 650, 330, 420, ms=600)
+    time.sleep(1.5)
+    fill_canvas(doba)
+    time.sleep(1)
+    before = doba.status()["paints"]
+    doba.tap(500, 598)                                              # +
+    time.sleep(3)
+    sharp = shot(doba, tmp_path, "sharp.png")
+    # the first paint after the tap is the preview (the + button pressed on it)
+    preview = np.asarray(Image.open(frames / ("paint_%05d.png" % (before + 1))).convert("L"))
+    mid = slice(330, 530), slice(170, 370)                          # round the view's centre (270, 430)
+    same = (preview[mid] == sharp[mid]).mean()
+    assert same > 0.9, "the preview showed another place: %.0f%% alike" % (100 * same)

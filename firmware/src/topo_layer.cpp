@@ -422,7 +422,7 @@ struct Canvas {
     int validCount = 0;
     // The view last put on the screen from it: where, and where its centre was.
     bool shown = false;
-    int shownOx = 0, shownOy = 0, shownRiderX = 0, shownRiderY = 0;
+    int shownOx = 0, shownOy = 0;
 } g_cv;
 
 uint32_t g_generationForCanvas();
@@ -634,7 +634,6 @@ int drawBase(const MapScreenData& map, uint8_t* fb) {
     blit(fb, ox, oy);
     g_cv.shown = true;
     g_cv.shownOx = ox; g_cv.shownOy = oy;
-    g_cv.shownRiderX = map.riderX; g_cv.shownRiderY = map.riderY;
     return (int)(g_stats.missing - missingBefore);
 }
 
@@ -650,10 +649,13 @@ bool drawQuick(const MapScreenData& map, uint8_t* fb) {
     return true;
 }
 
-bool drawZoomPreview(uint8_t* fb, bool zoomIn) {
+bool drawZoomPreview(uint8_t* fb, bool zoomIn, int px, int py) {
     if (!g_canvasOn || !g_cv.shown || !g_cv.px) return false;
     g_inverted = epd_get_rotation() == EPD_ROT_INVERTED_PORTRAIT;
-    const int rx = g_cv.shownRiderX, ry = g_cv.shownRiderY;
+    // About the point the zoom keeps still: the view's centre. It is the rider
+    // only on an undragged map; a dragged one zoomed about the rider showed
+    // another stretch of map for a moment.
+    const int rx = px, ry = py;
     const int ox = g_cv.shownOx, oy = g_cv.shownOy;
     for (int y = 0; y < SCREEN_H; ++y) {
         // the new screen row in the old view: halved (in) or doubled (out) about the centre

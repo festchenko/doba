@@ -6,6 +6,9 @@
 #include "sim.h"
 
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <vector>
 #include <zlib.h>
@@ -31,10 +34,24 @@ bool epdc_begin() {
     return true;
 }
 uint8_t* epdc_framebuffer() { return g_fb.data(); }
+// OTP_SIM_FRAMES=<dir>: every paint is also kept as <dir>/paint_NNNNN.png, so a
+// test can see a frame that a later one covers (a zoom's preview, a spinner).
+static bool writePngOf(const std::vector<uint8_t>& buf, const std::string& path);
 void epdc_paint() {
-    std::lock_guard<std::mutex> lk(g_glassMutex);
-    g_glass = g_fb;
-    ++g_paints;
+    std::vector<uint8_t> copy;
+    uint32_t n;
+    {
+        std::lock_guard<std::mutex> lk(g_glassMutex);
+        g_glass = g_fb;
+        n = ++g_paints;
+        static const char* dir = getenv("OTP_SIM_FRAMES");
+        if (dir) copy = g_glass;
+    }
+    if (!copy.empty()) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/paint_%05u.png", getenv("OTP_SIM_FRAMES"), (unsigned)n);
+        writePngOf(copy, path);
+    }
 }
 void epdc_paint_wait() {}
 bool epdc_paint_idle() { return true; }
@@ -57,18 +74,24 @@ uint32_t sim::clearCount() { return g_clears.load(); }
 // Portrait, as the rider holds it: drawing (x, y) is native (y, 539 - x) for
 // the inverted-portrait rotation the UI uses (epd_compat.cpp).
 bool sim::writePng(const std::string& path) {
-    const int w = kNativeH, h = kNativeW;
-    std::vector<uint8_t> raw((size_t)(w + 1) * h);
+    std::vector<uint8_t> copy;
     {
         std::lock_guard<std::mutex> lk(g_glassMutex);
-        for (int y = 0; y < h; ++y) {
-            raw[(size_t)y * (w + 1)] = 0;
-            for (int x = 0; x < w; ++x) {
-                int nx, ny;
-                if (DISPLAY_ROTATION == EPD_ROT_INVERTED_PORTRAIT) { nx = y; ny = kNativeH - 1 - x; }
-                else { nx = kNativeW - 1 - y; ny = x; }
-                raw[(size_t)y * (w + 1) + 1 + x] = (uint8_t)(nativeLevel(g_glass, nx, ny) * 17);
-            }
+        copy = g_glass;
+    }
+    return writePngOf(copy, path);
+}
+
+static bool writePngOf(const std::vector<uint8_t>& buf, const std::string& path) {
+    const int w = kNativeH, h = kNativeW;
+    std::vector<uint8_t> raw((size_t)(w + 1) * h);
+    for (int y = 0; y < h; ++y) {
+        raw[(size_t)y * (w + 1)] = 0;
+        for (int x = 0; x < w; ++x) {
+            int nx, ny;
+            if (DISPLAY_ROTATION == EPD_ROT_INVERTED_PORTRAIT) { nx = y; ny = kNativeH - 1 - x; }
+            else { nx = kNativeW - 1 - y; ny = x; }
+            raw[(size_t)y * (w + 1) + 1 + x] = (uint8_t)(nativeLevel(buf, nx, ny) * 17);
         }
     }
     uLongf compLen = compressBound(raw.size());

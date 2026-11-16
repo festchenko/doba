@@ -685,7 +685,9 @@ void ackZoomTap(bool zoomIn, float mppBefore) {
     MapScreenData map = {};
     const DeviceState s = g_state.snapshot();
     buildMapScreenData(s, map);
-    if (fabsf(map.metersPerPixel - mppBefore) > 0.01f && map.topo && topo::drawZoomPreview(fb, zoomIn)) {
+    if (fabsf(map.metersPerPixel - mppBefore) > 0.01f && map.topo &&
+        topo::drawZoomPreview(fb, zoomIn, map.riderX + (int)lroundf(mapPanE / map.metersPerPixel),
+                              map.riderY - (int)lroundf(mapPanN / map.metersPerPixel))) {
         ui_render_map(map, s, fb, /*baseDrawn=*/true);
         if (dbgTiming) diag::log("map: zoom preview %s", zoomIn ? "in" : "out");
     }
@@ -754,6 +756,7 @@ void handleTap(int x, int y) {
                 // cycling layers: bike routes, toilets, bike shops).
                 if (mapPanned() && y >= mapCentreY() && y < mapCentreY() + kMapZoom.size) {
                     mapPanE = mapPanN = 0;
+                    milspec::measureClear();
                     Serial.println("[map] centre");
                     break;
                 }
@@ -775,6 +778,14 @@ void handleTap(int x, int y) {
                     ackZoomTap(false, before);
                     break;
                 }
+            }
+            // DOBA: a tap on the cross of a dragged map sets A there (or clears
+            // it); the strip then measures from A to wherever the cross goes.
+            if (mapPanned() &&
+                abs(x - 270) < 56 && abs(y - milspec::kCrossY) < 56) {
+                milspec::measureToggleAtCross();
+                Serial.printf("[map] measure %s\n", milspec::measureOn() ? "A set" : "off");
+                break;
             }
             if (y < ui::STATUS_H) screen = SCREEN_HOME;   // DOBA: was the menu
             else if (y >= ui::MAP_STRIP_TOP) {

@@ -205,6 +205,7 @@ void ui_render_map(const MapScreenData& map, const DeviceState& s, uint8_t* fb,
     renderMapTop(map, fb);
     milspec::drawPois(map, fb);   // DOBA: hospitals, water, food...
     milspec::drawTarget(map, s, fb);   // DOBA: the active waypoint
+    if (map.panned) milspec::drawMeasure(map, fb);   // DOBA: A -> the cross
     drawScaleBar(map.metersPerPixel, false, fb);
     // DOBA: no compass rose: the topo map is always north up, so it said nothing.
 

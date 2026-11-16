@@ -88,7 +88,7 @@ void renderLegend(const DeviceState& s, uint8_t* fb) {
     y += 48;
     section(y, "MARKS", fb);
     y += 50;
-    {   // saved point · going to · the cross
+    {   // saved point · going to · the cross · measure from A
         int x = 40;
         for (int k = 0; k < 3; ++k) {
             epd_draw_line(x, y - 12 + k, x - 10 + k, y + 7 - k, INK, fb);
@@ -109,6 +109,11 @@ void renderLegend(const DeviceState& s, uint8_t* fb) {
         epd_fill_rect({x - 2, y + 6, 5, 11}, INK, fb);
         ui::text(ui::font(ui::F_SMALL), 64, y - 2, TR("Cross"), fb, EPD_DRAW_ALIGN_LEFT, INK);
         ui::text(ui::font(ui::F_TINY), 64, y + 20, TR("drag the map: read here"), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
+        x = 290;
+        epd_fill_circle(x, y, 13, INK, fb);
+        ui::text(ui::font(ui::F_STRONG), x, y + 6, "A", fb, EPD_DRAW_ALIGN_CENTER, PAPER);
+        ui::text(ui::font(ui::F_SMALL), 318, y - 2, TR("Measure from A"), fb, EPD_DRAW_ALIGN_LEFT, INK);
+        ui::text(ui::font(ui::F_TINY), 318, y + 20, TR("tap the cross to set"), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     }
 
     y += 40;
@@ -200,8 +205,9 @@ void renderMapOpts(const DeviceState& s, uint8_t* fb) {
     linkRow(kOpenLegend, "Legend", "contours, grid, marks, places, areas", fb);
     linkRow(kOpenPoints, "Saved points", nullptr, fb);
     const char* tips[] = {"Hold a finger on the map 1 s to drop a point.",
-                          "Drag the map: the strip reads the cross."};
-    for (int i = 0; i < 2; ++i)
+                          "Drag the map: the strip reads the cross.",
+                          "Tap the cross to measure from there."};
+    for (int i = 0; i < 3; ++i)
         ui::text(ui::font(ui::F_SMALL), 24, kOpenPoints.y + kOpenPoints.height + 56 + i * 36,
                  TR(tips[i]), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }

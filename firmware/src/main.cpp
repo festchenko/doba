@@ -315,6 +315,9 @@ void setup() {
     // without confirming octal-PSRAM stability first.
 
     Serial.begin(115200);
+    // A host that holds the port without reading: drop log lines after 50 ms
+    // instead of waiting (tools/usbcdc_patch.py bounds the wait itself).
+    Serial.setTxTimeoutMs(50);
 #ifdef DEBUG_EARLY_USB
     // Diagnostic only. Normally TinyUSB is not started until usb_storage::begin()
     // calls USB.begin() (usb_storage.cpp), which happens LATE — from the UI task,
