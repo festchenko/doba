@@ -51,6 +51,7 @@
 #include "live_view.h"
 
 #include "ui_shared.h"
+#include "doba_mem.h"
 namespace uid {
 
 TouchDrvGT911 touch;
@@ -1271,6 +1272,7 @@ static void printMeshReport() {
 static void printConsoleHelp() {
     Serial.println("commands:");
     Serial.println("  help                 this list");
+    Serial.println("  mem [drop]           free memory (drop: let the map and picture caches go)");
     Serial.println("  cold [unaided]       GPS cold-start test (re-seed unless 'unaided')");
     Serial.println("  gpsoff <sec>         cut GPS power for N s, then re-seed (retention test)");
     Serial.println("  gpsver               query GPS module firmware version");
@@ -1769,6 +1771,9 @@ static void runConsoleLine(char* line) {
             Serial.printf("[dem] %s %.1f\n", wet ? "water" : "land", v);
         else
             Serial.println("[dem] none");
+    } else if (!strcasecmp(cmd, "mem")) {    // DOBA: mem | mem drop (let the caches go)
+        if (arg && !strcasecmp(arg, "drop")) { doba_mem::report("before"); doba_mem::dropCaches(); }
+        doba_mem::report("now");
     } else if (!strcasecmp(cmd, "topo")) {   // DOBA: topo layer diagnostics
         if (arg && !strcasecmp(arg, "canvas")) {
             const char* v = strtok(nullptr, " \t");

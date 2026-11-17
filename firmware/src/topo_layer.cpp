@@ -711,6 +711,23 @@ void reset() {
     for (CellSeen& c : g_cells) c = CellSeen();
     ++g_generation;
 }
+
+void trim() {
+    for (Slot& s : g_slots) {
+        s.valid = false;
+        if (s.px) { heap_caps_free(s.px); s.px = nullptr; }
+    }
+    for (IdxPage& q : g_idx) {
+        q.pack = -1;
+        if (q.data) { heap_caps_free(q.data); q.data = nullptr; }
+    }
+    if (g_zbuf) { heap_caps_free(g_zbuf); g_zbuf = nullptr; }
+    g_zbufLen = 0;
+    if (g_cv.px) { heap_caps_free(g_cv.px); g_cv.px = nullptr; }
+    g_cv.anchored = false;
+    invalidateCanvas();
+    ++g_generation;   // a layer drawn from the canvas is drawn again
+}
 uint32_t generation() { return g_generation; }
 
 Stats stats() { return g_stats; }

@@ -7,6 +7,7 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <esp_heap_caps.h>
+#include "doba_mem.h"
 #include <cstdio>
 #include <cstring>
 
@@ -549,7 +550,7 @@ uint8_t* fromPack(const char* name, size_t& len) {
     snprintf(path, sizeof path, "%s/%s/img/%02u.dgp", kRoot, g_books[g_book].dir, pack);
     File f = SD.open(path, FILE_READ);
     if (!f) return nullptr;
-    uint8_t* z = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    uint8_t* z = (uint8_t*)doba_mem::big(len);
     const bool ok = z && f.seek(off) && f.read(z, len) == len;
     f.close();
     if (!ok && z) { heap_caps_free(z); z = nullptr; }
@@ -566,9 +567,11 @@ uint8_t* cachedPic(const char* name, size_t& len) {
     for (PicCache& c : g_pics)
         if (c.z && c.book == g_book && !strncmp(c.name, name, sizeof c.name)) {
             c.used = ++g_picTick;
-            uint8_t* z = (uint8_t*)heap_caps_malloc(c.len, MALLOC_CAP_SPIRAM);
-            if (z) { memcpy(z, c.z, c.len); len = c.len; }
-            return z;
+            const uint8_t* src = c.z;
+            const size_t n = c.len;
+            uint8_t* z = (uint8_t*)heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
+            if (z) { memcpy(z, src, n); len = n; }
+            return z;   // no room: read from the card instead (big() may drop this very cache)
         }
     return nullptr;
 }
@@ -584,6 +587,13 @@ void keepPic(const char* name, const uint8_t* z, size_t len) {
     lru->book = (int8_t)g_book;
     snprintf(lru->name, sizeof lru->name, "%s", name);
     lru->used = ++g_picTick;
+}
+
+void dropPics() {
+    for (PicCache& c : g_pics) {
+        if (c.z) heap_caps_free(c.z);
+        c = PicCache();
+    }
 }
 
 void drawImage(const char* name, int y, int maxH, uint8_t* fb) {
@@ -602,7 +612,7 @@ void drawImage(const char* name, int y, int maxH, uint8_t* fb) {
             snprintf(path, sizeof path, "%s/%s/img/%s.dgi", kRoot, g_books[g_book].dir, name);
         File f = SD.open(path, FILE_READ);
         zlen = f ? f.size() : 0;
-        z = zlen > 8 ? (uint8_t*)heap_caps_malloc(zlen, MALLOC_CAP_SPIRAM) : nullptr;
+        z = zlen > 8 ? (uint8_t*)doba_mem::big(zlen) : nullptr;
         ok = z && f.read(z, zlen) == zlen;
         if (f) f.close();
     }
@@ -616,7 +626,7 @@ void drawImage(const char* name, int y, int maxH, uint8_t* fb) {
     }
     const int w = z[4] | (z[5] << 8), h = z[6] | (z[7] << 8);
     const size_t stride = (size_t)(w + 1) / 2, need = stride * h;
-    uint8_t* px = (uint8_t*)heap_caps_malloc(need + 1, MALLOC_CAP_SPIRAM);
+    uint8_t* px = (uint8_t*)doba_mem::big(need + 1);
     size_t got = 0;
     ok = px && inflateTo(z + 8, zlen - 8, (char*)px, need, &got) && got >= need;
     heap_caps_free(z);
@@ -3076,6 +3086,7 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
 bool typing() { return g_view == V_SEARCH; }
 void idle() { if (g_recentDirty && millis() - g_recentDirtyAt > 3000) flushRecent(); }
 void flush() { flushRecent(); }
+void dropCaches() { dropPics(); }
 void notePress(uint32_t ms) { g_pressMs = ms; }
 
 // A tap that only turns a list's page, or that lands on nothing, draws from RAM

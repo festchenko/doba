@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 #include <esp_heap_caps.h>
+#include "doba_mem.h"
 
 #include "milgeo.h"
 #include "sd_bus.h"
@@ -45,7 +46,7 @@ bool load() {
     if (f && f.read(h, 12) == 12 && !memcmp(h, "DGP1", 4)) {
         memcpy(&g_count, h + 4, 4);
         memcpy(&g_cellCount, h + 8, 4);
-        g_cells = (Cell*)heap_caps_malloc(sizeof(Cell) * g_cellCount, MALLOC_CAP_SPIRAM);
+        g_cells = (Cell*)doba_mem::big(sizeof(Cell) * g_cellCount);
         if (g_cells) {
             bool ok = true;
             for (uint32_t i = 0; ok && i < g_cellCount; ++i) {
@@ -58,6 +59,9 @@ bool load() {
             }
             g_dataOff = 12 + 12 * g_cellCount;
             if (ok) g_state = 1;
+        } else {
+            g_state = 0;   // no room this time: try again on the next call, not never
+            Serial.printf("[pois] no room for %lu cells\n", (unsigned long)g_cellCount);
         }
     }
     if (f) f.close();

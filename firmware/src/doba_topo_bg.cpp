@@ -6,7 +6,8 @@
 
 #if defined(ESP32)
 #include <esp_heap_caps.h>
-static void* bigAlloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_SPIRAM); }
+#include "doba_mem.h"
+static void* bigAlloc(size_t n) { return doba_mem::big(n); }
 #else
 static void* bigAlloc(size_t n) { return malloc(n); }
 #endif

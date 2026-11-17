@@ -59,6 +59,9 @@ void setDither(bool on);
 
 // Forget open packs and cached tiles (the card was removed or rewritten).
 void reset();
+// Lets go of the PSRAM the layer keeps as caches (canvas, tiles, index pages:
+// about 2.5 MB) for others; the next map frame reads them in again.
+void trim();
 // Moves on with every reset(): a map layer drawn before it is out of date.
 uint32_t generation();
 
