@@ -14,6 +14,8 @@ namespace doba_mem {
 // PSRAM for a buffer the caller frees with heap_caps_free(). nullptr only when
 // even with every cache let go there is no room.
 void* big(size_t n);
+// heap_caps_realloc in PSRAM, the same way: the old block stays when it fails.
+void* grow(void* p, size_t n);
 
 // Lets every cache go now (the map's canvas, tiles and index pages, the
 // library's pictures). Each fills again as it is used.

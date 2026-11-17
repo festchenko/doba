@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <esp_heap_caps.h>
+#include "doba_mem.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -77,7 +78,7 @@ FileInfo* fileFor(int lat, int lon) {
             f.nb = (uint16_t)rd16(h + 16);
             const size_t isz = (size_t)f.nb * f.nb * 8;
             if (f.n > 0 && f.block > 0 && f.block <= MAX_BLOCK && f.nb > 0 && f.nb <= 64) {
-                f.index = (uint32_t*)heap_caps_malloc(isz, MALLOC_CAP_SPIRAM);
+                f.index = (uint32_t*)doba_mem::big(isz);
                 if (f.index && fh.read((uint8_t*)f.index, isz) == isz) f.present = true;
             }
         }
@@ -95,12 +96,12 @@ const int16_t* blockFor(FileInfo& f, int bi, int bj) {
         if (!slot || b.used < slot->used) slot = &b;
     }
     const size_t raw = (size_t)f.block * f.block * 2;
-    if (!slot->h) slot->h = (int16_t*)heap_caps_malloc(MAX_BLOCK * MAX_BLOCK * 2, MALLOC_CAP_SPIRAM);
+    if (!slot->h) slot->h = (int16_t*)doba_mem::big(MAX_BLOCK * MAX_BLOCK * 2);
     if (!slot->h) return nullptr;
     const uint8_t* e = (const uint8_t*)&f.index[(bi * f.nb + bj) * 2];
     const uint32_t off = rd32(e), len = rd32(e + 4);
     if (len == 0 || len > 2 * raw) return nullptr;
-    uint8_t* z = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    uint8_t* z = (uint8_t*)doba_mem::big(len);
     if (!z) return nullptr;
     char path[40];
     pathFor(f.lat, f.lon, path, sizeof path);

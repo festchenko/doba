@@ -481,7 +481,7 @@ int widthOf(const EpdFont* f, const char* s, size_t n) {
 void addLine(uint32_t off, uint16_t len, uint8_t kind, uint8_t hyph = 0) {
     if (g_lineCount == g_lineCap) {
         const int cap = g_lineCap ? g_lineCap * 2 : 2048;
-        Line* n = (Line*)heap_caps_realloc(g_lines, cap * sizeof(Line), MALLOC_CAP_SPIRAM);
+        Line* n = (Line*)doba_mem::grow(g_lines, cap * sizeof(Line));
         if (!n) return;
         g_lines = n;
         g_lineCap = cap;
@@ -575,10 +575,20 @@ uint8_t* cachedPic(const char* name, size_t& len) {
         }
     return nullptr;
 }
+// At most 1 MB for all of them, so the cache is never what leaves a page short.
+constexpr size_t PIC_CACHE_BYTES = 1024 * 1024;
 void keepPic(const char* name, const uint8_t* z, size_t len) {
     if (len > 256 * 1024) return;
+    auto held = [] { size_t t = 0; for (const PicCache& c : g_pics) if (c.z) t += c.len; return t; };
+    while (held() + len > PIC_CACHE_BYTES) {   // the oldest go until this one fits the budget
+        PicCache* old = nullptr;
+        for (PicCache& c : g_pics) if (c.z && (!old || c.used < old->used)) old = &c;
+        if (!old) break;
+        heap_caps_free(old->z);
+        old->z = nullptr; old->len = 0; old->used = 0;
+    }
     PicCache* lru = &g_pics[0];
-    for (PicCache& c : g_pics) if (c.used < lru->used) lru = &c;
+    for (PicCache& c : g_pics) if (!c.z ? (lru->z != nullptr || c.used < lru->used) : (lru->z && c.used < lru->used)) lru = &c;
     if (lru->z) heap_caps_free(lru->z);
     lru->z = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
     if (!lru->z) return;
@@ -767,7 +777,7 @@ void layout() {
     // Pages: as many lines as fit between the header and the footer.
     g_pageCount = 0;
     if (!g_pageStarts)
-        g_pageStarts = (int*)heap_caps_malloc(MAX_PAGES * sizeof(int), MALLOC_CAP_SPIRAM);
+        g_pageStarts = (int*)doba_mem::big(MAX_PAGES * sizeof(int));
     if (!g_pageStarts) return;
     const int bodyTop = TOP + 66, bodyBottom = H - FOOT_H - 6;
     int y = bodyTop, k = 0;
@@ -845,8 +855,8 @@ void tidyText() {
 void extractLinks() {
     g_linkCount = 0;
     g_targetsLen = 0;
-    if (!g_links) g_links = (Link*)heap_caps_malloc(MAX_LINKS * sizeof(Link), MALLOC_CAP_SPIRAM);
-    if (!g_targets) g_targets = (char*)heap_caps_malloc(TARGETS_CAP, MALLOC_CAP_SPIRAM);
+    if (!g_links) g_links = (Link*)doba_mem::big(MAX_LINKS * sizeof(Link));
+    if (!g_targets) g_targets = (char*)doba_mem::big(TARGETS_CAP);
     size_t w = 0;
     Link cur = {};
     int state = 0;   // 0 text, 1 visible, 2 target
@@ -890,8 +900,8 @@ bool openArticle(const Result& r) {
     const Book& b = g_books[g_book];
     char path[96];
     snprintf(path, sizeof path, "%s/%s/a%04u.dta", kRoot, b.dir, (unsigned)r.chunk);
-    if (!g_text) g_text = (char*)heap_caps_malloc(MAX_TEXT + 1, MALLOC_CAP_SPIRAM);
-    uint8_t* z = (uint8_t*)heap_caps_malloc(r.len, MALLOC_CAP_SPIRAM);
+    if (!g_text) g_text = (char*)doba_mem::big(MAX_TEXT + 1);
+    uint8_t* z = (uint8_t*)doba_mem::big(r.len);
     if (!g_text || !z) { if (z) heap_caps_free(z); return false; }
     sdLock();
     File f = SD.open(path, FILE_READ);
@@ -988,7 +998,7 @@ void flushRecent() {
     g_recentDirty = false;
     constexpr size_t SIZE = 8192;
     static char* buf = nullptr;
-    if (!buf) buf = (char*)heap_caps_malloc(SIZE, MALLOC_CAP_SPIRAM);
+    if (!buf) buf = (char*)doba_mem::big(SIZE);
     if (!buf) return;
     size_t n = 0;
     for (int i = 0; i < g_recentCount; ++i) {
@@ -1097,7 +1107,7 @@ int fields(char* line, char** f, int n) {
 void loadSections() {
     defaultSections();
     g_entryCount = g_emergCount = 0;
-    if (!g_entries) g_entries = (Entry*)heap_caps_malloc(sizeof(Entry) * MAX_ENTRIES, MALLOC_CAP_SPIRAM);
+    if (!g_entries) g_entries = (Entry*)doba_mem::big(sizeof(Entry) * MAX_ENTRIES);
     char path[64];
     snprintf(path, sizeof path, "%s/sections.txt", kRoot);
     sdLock();
@@ -1446,7 +1456,7 @@ void findDocs(int bi) {
     g_docBook = bi;
     g_docCount = 0;
     if (g_books[bi].count > 4000) return;
-    if (!g_docs) g_docs = (Doc*)heap_caps_malloc(sizeof(Doc) * MAX_DOCS, MALLOC_CAP_SPIRAM);
+    if (!g_docs) g_docs = (Doc*)doba_mem::big(sizeof(Doc) * MAX_DOCS);
     if (!g_docs) return;
     char path[96];
     snprintf(path, sizeof path, "%s/%s/index.dti", kRoot, g_books[bi].dir);
@@ -1619,7 +1629,7 @@ void findMenu(int bi) {
     g_menuBook = bi;
     g_menuCount = 0;
     g_menuPicks = false;
-    if (!g_menu) g_menu = (MenuItem*)heap_caps_malloc(sizeof(MenuItem) * MAX_MENU, MALLOC_CAP_SPIRAM);
+    if (!g_menu) g_menu = (MenuItem*)doba_mem::big(sizeof(MenuItem) * MAX_MENU);
     if (!g_menu) return;
     char path[96];
     snprintf(path, sizeof path, "%s/%s/menu.txt", kRoot, g_books[bi].dir);
@@ -1793,7 +1803,7 @@ bool fatRmTree(char* p, size_t cap) {
     FF_DIR* d = (FF_DIR*)heap_caps_malloc(sizeof(FF_DIR), MALLOC_CAP_8BIT);
     constexpr int BATCH = 64;
     struct Ent { char name[FF_MAX_LFN + 1]; bool dir; };
-    Ent* ents = (Ent*)heap_caps_malloc(sizeof(Ent) * BATCH, MALLOC_CAP_SPIRAM);
+    Ent* ents = (Ent*)doba_mem::big(sizeof(Ent) * BATCH);
     bool ok = fi && d && ents;
     const size_t len = strlen(p);
     while (ok) {
@@ -2630,7 +2640,7 @@ int pageOfLine(int k) {
 }
 void buildToc() {
     g_tocCount = 0;
-    if (!g_toc_lines) g_toc_lines = (int*)heap_caps_malloc(MAX_TOC * sizeof(int), MALLOC_CAP_SPIRAM);
+    if (!g_toc_lines) g_toc_lines = (int*)doba_mem::big(MAX_TOC * sizeof(int));
     if (!g_toc_lines) return;
     for (int k = 0; k < g_lineCount && g_tocCount < MAX_TOC; ++k) {
         const Line& l = g_lines[k];

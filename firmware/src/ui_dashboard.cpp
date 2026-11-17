@@ -2120,6 +2120,11 @@ TRC("predraw");         const bool modalHoldsStill = powerOverlay;
             forceDraw = false;
             Screen prevScreen = lastScreen;
             const bool prevOverlay = lastOverlay;
+            if (prevScreen != screen) {   // one line a page: where PSRAM goes (doba_mem.cpp)
+                char why[24];
+                snprintf(why, sizeof why, "screen %d", (int)screen);
+                doba_mem::report(why);
+            }
             lastScreen = screen;
             lastOverlay = powerOverlay;
             DeviceState s = g_state.snapshot();

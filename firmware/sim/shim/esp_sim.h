@@ -50,15 +50,26 @@ static inline const char* esp_err_to_name(esp_err_t e) { (void)e; return e == ES
 #define MALLOC_CAP_8BIT (1 << 2)
 #define MALLOC_CAP_DMA (1 << 3)
 #define MALLOC_CAP_DEFAULT (1 << 12)
-static inline void* heap_caps_malloc(size_t n, uint32_t caps) { (void)caps; return malloc(n); }
-static inline void* heap_caps_calloc(size_t a, size_t b, uint32_t caps) { (void)caps; return calloc(a, b); }
-static inline void* heap_caps_realloc(void* p, size_t n, uint32_t caps) { (void)caps; return realloc(p, n); }
+// PSRAM is counted (host/arduino_sim.cpp): OTP_SIM_PSRAM_KB caps it, so a test
+// can run the device short of PSRAM the way the board runs (8 MB, most of it
+// taken by the panel and the map). Without the variable there is no cap.
+void* sim_ps_alloc(size_t n, bool zero);
+void* sim_ps_realloc(void* p, size_t n);
+bool sim_ps_free(void* p);   // false: not PSRAM, the caller frees it
+size_t sim_ps_free_size(void);
+size_t sim_ps_peak(void);
+static inline void* heap_caps_malloc(size_t n, uint32_t caps) { return (caps & MALLOC_CAP_SPIRAM) ? sim_ps_alloc(n, false) : malloc(n); }
+static inline void* heap_caps_calloc(size_t a, size_t b, uint32_t caps) { return (caps & MALLOC_CAP_SPIRAM) ? sim_ps_alloc(a * b, true) : calloc(a, b); }
+static inline void* heap_caps_realloc(void* p, size_t n, uint32_t caps) { return (caps & MALLOC_CAP_SPIRAM) ? sim_ps_realloc(p, n) : realloc(p, n); }
 static inline void* heap_caps_aligned_alloc(size_t al, size_t n, uint32_t caps) {
     (void)caps; void* p = NULL; if (posix_memalign(&p, al < sizeof(void*) ? sizeof(void*) : al, n)) return NULL; return p; }
-static inline void heap_caps_free(void* p) { free(p); }
-static inline size_t heap_caps_get_free_size(uint32_t caps) { return (caps & MALLOC_CAP_SPIRAM) ? 6u << 20 : 200u << 10; }
-static inline size_t heap_caps_get_largest_free_block(uint32_t caps) { return heap_caps_get_free_size(caps) / 2; }
-static inline size_t heap_caps_get_minimum_free_size(uint32_t caps) { return heap_caps_get_free_size(caps); }
+static inline void heap_caps_free(void* p) { if (!sim_ps_free(p)) free(p); }
+static inline size_t heap_caps_get_free_size(uint32_t caps) { return (caps & MALLOC_CAP_SPIRAM) ? sim_ps_free_size() : 200u << 10; }
+static inline size_t heap_caps_get_largest_free_block(uint32_t caps) { return (caps & MALLOC_CAP_SPIRAM) ? sim_ps_free_size() : 100u << 10; }
+static inline size_t heap_caps_get_minimum_free_size(uint32_t caps) {
+    if (!(caps & MALLOC_CAP_SPIRAM)) return heap_caps_get_free_size(caps);
+    const char* v = getenv("OTP_SIM_PSRAM_KB"); const size_t cap = v ? (size_t)atol(v) * 1024 : (8u << 20);
+    return sim_ps_peak() >= cap ? 0 : cap - sim_ps_peak(); }
 static inline size_t esp_get_free_heap_size(void) { return 200u << 10; }
 static inline size_t esp_get_minimum_free_heap_size(void) { return 150u << 10; }
 

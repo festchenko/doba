@@ -3,6 +3,7 @@
 // a long press and the farewell frame. Split out of ui_dashboard.cpp, whose task
 // loop calls it; the state the two share is in ui_shared.h.
 #include "ui_shared.h"
+#include "doba_mem.h"
 
 namespace uid {
 
@@ -242,8 +243,8 @@ void mapCacheAllocate() {
     mapCacheAllocated = true;
     const size_t bytes = fbSize;
     for (int i = 0; i < MapBaseCache::kSlots; ++i)
-        mapCache.attach(i, (uint8_t*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM));
-    mapPrerenderFb = (uint8_t*)heap_caps_malloc(fbSize, MALLOC_CAP_SPIRAM);
+        mapCache.attach(i, (uint8_t*)doba_mem::big(bytes));
+    mapPrerenderFb = (uint8_t*)doba_mem::big(fbSize);
 }
 
 void mapLayerKeep(const uint8_t* fb) { memcpy(mapLayerBeingKept, fb, fbSize); }

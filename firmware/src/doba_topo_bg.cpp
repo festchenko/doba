@@ -8,8 +8,10 @@
 #include <esp_heap_caps.h>
 #include "doba_mem.h"
 static void* bigAlloc(size_t n) { return doba_mem::big(n); }
+static void bigFree(void* p) { heap_caps_free(p); }
 #else
 static void* bigAlloc(size_t n) { return malloc(n); }
+static void bigFree(void* p) { free(p); }
 #endif
 
 namespace topo_bg {
@@ -68,7 +70,7 @@ bool build(int variant) {
     int16_t* row0 = (int16_t*)malloc(sizeof(int16_t) * W);
     int16_t* row1 = (int16_t*)malloc(sizeof(int16_t) * W);
     if (!g_line || !g_index || !grid || !row0 || !row1) {
-        free(row0); free(row1); free(grid);
+        free(row0); free(row1); bigFree(grid);
         return false;
     }
     Hill hs[kHills];
@@ -107,7 +109,7 @@ bool build(int variant) {
         }
         int16_t* t = row0; row0 = row1; row1 = t;
     }
-    free(row0); free(row1); free(grid);
+    free(row0); free(row1); bigFree(grid);
     g_variant = variant;
     return true;
 }
@@ -133,7 +135,7 @@ void draw(const EpdRect& r0, uint8_t* fb, int variant) {
     uint8_t* near = (uint8_t*)bigAlloc((size_t)n);   // content within kHalo along the row
     uint8_t* put = (uint8_t*)bigAlloc((size_t)(n + 7) / 8);
     uint8_t* ink = (uint8_t*)malloc((size_t)r.width);
-    if (!near || !put || !ink) { free(near); free(put); free(ink); return; }
+    if (!near || !put || !ink) { bigFree(near); bigFree(put); free(ink); return; }
     memset(put, 0, (size_t)(n + 7) / 8);
     for (int y = 0; y < r.height; ++y) {
         for (int x = 0; x < r.width; ++x) {
@@ -161,14 +163,14 @@ void draw(const EpdRect& r0, uint8_t* fb, int variant) {
             const int k = y * r.width + x;
             put[k >> 3] |= (uint8_t)(1 << (k & 7));
         }
-    free(near);
+    bigFree(near);
     free(ink);
     for (int k = 0; k < n; ++k)
         if (put[k >> 3] >> (k & 7) & 1) {
             const int x = r.x + k % r.width, y = r.y + k / r.width;
             epd_draw_pixel(x, y, g_inverted ? kLineDark : getBit(g_index, x, y) ? kIndex : kLine, fb);
         }
-    free(put);
+    bigFree(put);
 }
 
 void drawInverted(const EpdRect& r, uint8_t* fb, int variant) {

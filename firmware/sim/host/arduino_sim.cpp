@@ -204,3 +204,54 @@ void UpdateClass::abort() {
     if (f_) fclose(f_);
     f_ = nullptr;
 }
+
+
+// --- PSRAM, counted (esp_sim.h) ------------------------------------------------
+#include <unordered_map>
+namespace {
+std::mutex g_psMx;
+std::unordered_map<void*, size_t> g_ps;
+size_t g_psUsed = 0, g_psPeak = 0;
+size_t psCap() {
+    static const size_t cap = [] { const char* v = getenv("OTP_SIM_PSRAM_KB"); return v ? (size_t)atol(v) * 1024 : 0; }();
+    return cap;
+}
+}  // namespace
+extern "C" void* sim_ps_alloc(size_t n, bool zero) {
+    std::lock_guard<std::mutex> l(g_psMx);
+    if (psCap() && g_psUsed + n > psCap()) return nullptr;
+    void* p = zero ? calloc(1, n ? n : 1) : malloc(n ? n : 1);
+    if (!p) return nullptr;
+    g_ps[p] = n; g_psUsed += n;
+    if (g_psUsed > g_psPeak) g_psPeak = g_psUsed;
+    return p;
+}
+extern "C" void* sim_ps_realloc(void* p, size_t n) {
+    if (!p) return sim_ps_alloc(n, false);
+    std::lock_guard<std::mutex> l(g_psMx);
+    auto it = g_ps.find(p);
+    const size_t old = it == g_ps.end() ? 0 : it->second;
+    if (psCap() && g_psUsed - old + n > psCap()) return nullptr;
+    void* q = realloc(p, n ? n : 1);
+    if (!q) return nullptr;
+    if (it != g_ps.end()) g_ps.erase(it);
+    g_ps[q] = n; g_psUsed = g_psUsed - old + n;
+    if (g_psUsed > g_psPeak) g_psPeak = g_psUsed;
+    return q;
+}
+extern "C" bool sim_ps_free(void* p) {
+    if (!p) return true;
+    std::lock_guard<std::mutex> l(g_psMx);
+    auto it = g_ps.find(p);
+    if (it == g_ps.end()) return false;
+    g_psUsed -= it->second;
+    g_ps.erase(it);
+    free(p);
+    return true;
+}
+extern "C" size_t sim_ps_free_size(void) {
+    std::lock_guard<std::mutex> l(g_psMx);
+    const size_t cap = psCap() ? psCap() : (8u << 20);
+    return g_psUsed >= cap ? 0 : cap - g_psUsed;
+}
+extern "C" size_t sim_ps_peak(void) { std::lock_guard<std::mutex> l(g_psMx); return g_psPeak; }
