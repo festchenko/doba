@@ -19,6 +19,7 @@ uint8_t g_chatCh = 0;
 uint32_t g_chatDm = 0;
 double g_myLat = 0, g_myLon = 0;
 bool g_myPos = false;
+bool g_myPosLast = false;   // no fix now: g_myLat/Lon is the last known position
 // When each conversation was last looked at (millis), for its unread count.
 struct Seen { uint8_t ch; uint32_t dm; uint32_t ms; };
 constexpr int MAX_SEEN = 24;
@@ -369,7 +370,7 @@ void renderQuick(uint8_t* fb) {
         ui::fillRound(r, 10, 0xE6, fb);
         ui::text(ui::font(ui::F_LABEL), r.x + r.width / 2, r.y + r.height / 2 + 9, TR(kQuickText[i]), fb, EPD_DRAW_ALIGN_CENTER, INK);
     }
-    button(kSendPos, g_myPos ? "Send my position (MGRS)" : "My position: no fix yet", true, fb);
+    button(kSendPos, !g_myPos ? "My position: no fix yet" : g_myPosLast ? "Send my last position (no fix now)" : "Send my position (MGRS)", true, fb);
     ui::text(ui::font(ui::F_SMALL), 24, H - 34, TR("One tap sends it. Back returns to the chat."), fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
 
@@ -382,6 +383,7 @@ void sendToChat(const char* text) {
 void renderComms(const DeviceState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     g_myPos = s.gpsFix || s.everHadFix;
+    g_myPosLast = !s.gpsFix;
     g_myLat = s.latitude;
     g_myLon = s.longitude;
     const EpdFont* small = ui::font(ui::F_SMALL);
@@ -486,7 +488,8 @@ Go tapComms(int x, int y) {
             if (hit(kSendPos, x, y) && g_myPos) {
                 char m[64], g[32];
                 milgeo::mgrs(g_myLat, g_myLon, g, sizeof g);
-                snprintf(m, sizeof m, TR("I am at %s (%.5f, %.5f)"), g, g_myLat, g_myLon);
+                if (g_myPosLast) snprintf(m, sizeof m, TR("Last fix: %s (%.5f, %.5f)"), g, g_myLat, g_myLon);
+                else snprintf(m, sizeof m, TR("I am at %s (%.5f, %.5f)"), g, g_myLat, g_myLon);
                 sendToChat(m);
                 g_cv = CV_CHAT;
             }

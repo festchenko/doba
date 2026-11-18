@@ -253,7 +253,7 @@ bool deliver(bool status,const char* why) {
         diag::log("crash report: %s: delivered=%d still_queued_NVS=%d current_RAM=%d SD=%d",
             why,delivered,queued,currentPending && !currentDurable,sd_card::sdMounted());
     if(status && current.valid() && !currentPending)Serial.print(current.text);
-    if(status)diag::log("crash report: NVS_available=%d queued_NVS=%d current_RAM=%d SD=%d (crash-*.log appears in phone log list)",
+    if(status)diag::log("crash report: NVS_available=%d queued_NVS=%d current_RAM=%d SD=%d (crash-*.log goes to /logs on the card)",
         nvsAvailable,queued,currentPending,sd_card::sdMounted());
     return !remaining;
 }

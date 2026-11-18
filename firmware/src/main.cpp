@@ -572,6 +572,18 @@ void setup() {
             bool haveTime = now > 1735689600;   // clock set since 2025-01-01?
             gps_service::injectAiding(alat, alon, now, haveTime, 50000.0f, 30.0f);
             diag::log("gps warm-start seed: %.4f,%.4f time=%d", alat, alon, haveTime);
+            // DOBA: until the first fix, the last position IS the position, marked
+            // as such ("Last position · no fix now", "(last fix)" in an SOS). QA
+            // 18 Nov: indoors the SOS said "position unknown", Sun and Nearby
+            // waited for a fix, while the map already showed where Doba was.
+            // Sharing a position on the mesh still waits for a real fix.
+            g_state.with([&](DeviceState& s) {
+                if (!s.gpsFix && !s.everHadFix) {
+                    s.latitude = alat;
+                    s.longitude = alon;
+                    s.everHadFix = true;
+                }
+            });
         } else {
             diag::log("gps warm-start: no saved position");
         }

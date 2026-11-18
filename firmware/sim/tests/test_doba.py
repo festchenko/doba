@@ -991,3 +991,24 @@ def test_a_search_lists_the_medical_book_before_repair_guides(doba):
     rows = [l.split("] ", 1)[1] for l in doba.log(since) if l.startswith("[libsearch]") and "|" in l]
     assert rows[:2] == ["Tourniquet | med_en", "Tourniquet | appropedia"], rows
     assert set(rows[2:]) == {"Tourniquet Application | appropedia", "Tourniquet System | ifixit"}, rows
+
+
+def test_without_a_fix_the_last_position_stands_in_and_says_so(doba):
+    """QA 18 Nov, indoors: the map showed where Doba was, but the SOS said
+    'position unknown' and Sun and Nearby waited for a fix. After a restart
+    without a fix, the last saved position is used everywhere, marked as the
+    last one, and an SOS carries it."""
+    boot(doba)
+    doba.gps(51.99007, 6.58315, sats=8)
+    doba.wait_status(lambda s: s["ride"]["gps_fix"], timeout=15)
+    time.sleep(2)
+    doba.stop()
+    doba.launch(30)
+    doba.gps(51.99007, 6.58315, fix=False, sats=0)
+    doba.wait_status(lambda s: s["screen"] == "other" and s["paints"] > 0)
+    since = doba.log_seq()
+    doba.console("lang uk", 600)
+    doba.console("screen sos", 800)
+    time.sleep(1.5)
+    drawn = " ".join(l for l in doba.log(since) if "[i18n] drawn" in l)   # the message wraps on two lines
+    assert "SOS SOS SOS" in drawn and "32U LC" in drawn and "(last fix)" in drawn, drawn

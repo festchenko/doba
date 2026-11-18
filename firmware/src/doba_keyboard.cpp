@@ -128,7 +128,10 @@ int layoutKeys(const Keyboard& k, Key* out) {
     out[n++] = mk(MARGIN, y, u * 2, ROW_H, "", 3);
     strcpy(out[n - 1].label, lay == SYM ? kLayoutName[k.lastLetters] : "123");
     out[n++] = mk(MARGIN + u * 2, y, u * 2, ROW_H, "", 4);
-    strcpy(out[n - 1].label, lay == SYM ? "" : kLayoutName[lay == UA ? EN : lay + 1]);
+    // On 123 this key was blank and did nothing (QA 18 Nov): it goes to the
+    // other alphabet, the one before it to the last one used.
+    const int other = lay == SYM ? (k.lastLetters == UA ? EN : UA) : (lay == UA ? EN : lay + 1);
+    strcpy(out[n - 1].label, kLayoutName[other]);
     out[n++] = mk(MARGIN + u * 4, y, u * 5, ROW_H, "SPACE", 5);
     out[n++] = mk(MARGIN + u * 9, y, span - u * 9, ROW_H, "", 6);
     strncpy(out[n - 1].label, k.enterLabel, sizeof(out[n - 1].label) - 1);
@@ -212,6 +215,7 @@ Action Keyboard::tap(int x, int y) {
                 return CHANGED;
             case 4:
                 if (layout != SYM) layout = layout == UA ? EN : layout + 1;
+                else layout = lastLetters == UA ? EN : UA;
                 return CHANGED;
             case 5:
                 if (strlen(text) + 1 < sizeof(text)) strcat(text, " ");

@@ -320,7 +320,7 @@ void renderSetup(const DeviceState& s, uint8_t* fb) {
                 break;
             }
             case R_MORE: {
-                caption(y, SROW_H, "MORE", "USB, GPS, radio", fb);
+                caption(y, SROW_H, "MORE", "battery, GPS, card", fb);
                 const int top = y + (SROW_H - CTRL_H) / 2;
                 ui::frameRound({CTRL_X, top, CTRL_W, CTRL_H}, 8, 2, fb);
                 ui::text(ui::font(ui::F_SMALL), CTRL_X + CTRL_W / 2, top + CTRL_H / 2 + 8, TR("Open  \xE2\x80\xBA"), fb,

@@ -14,7 +14,7 @@ Power	Живлення
 SOS on	SOS увімкнено
 topo + MGRS grid	топо + сітка MGRS
 no fix yet	ще немає GPS
-%d book on card	%d книга на карті|%d книги на карті|%d книг на карті
+%d book on card	%d книга на картці|%d книги на картці|%d книг на картці
 stealth · listening	стелс · слухає
 stealth · radio off	стелс · радіо вимк.
 radio off	радіо вимкнено
@@ -68,7 +68,7 @@ ANGLES	Кути
 NATO mils	тисячні НАТО
 6000 mils (UA)	тисячні 60-00 (UA)
 MORE	Більше
-USB, GPS, radio	USB, GPS, радіо
+battery, GPS, card	батарея, GPS, картка
 Open  \xE2\x80\xBA	Відкрити  \xE2\x80\xBA
 %d nodes heard · settings save at once	почуто вузлів: %d · зберігається одразу
 # --- comms
@@ -154,7 +154,7 @@ POINTS	Точки
 your saved points	ваші збережені точки
 Places	Місця
 hospitals, water, food... zoomed in	лікарні, вода, їжа зблизька
-no places file on the card	на карті немає файлу місць
+no places file on the card	на картці немає файлу місць
 Legend	Легенда
 contours, grid, marks, place letters	горизонталі, сітка, позначки, літери місць
 Saved points	Збережені точки
@@ -318,7 +318,7 @@ all nodes must match	у всіх вузлів має збігатися
 RADIO MODE	Режим радіо
 %d book	%d книга|%d книги|%d книг
 no card	немає карти
-CARD	Карта
+CARD	Картка
 DOBA	ДОБА
 offline backcountry assistant \xC2\xB7 	офлайн-помічник у дорозі \xC2\xB7 
 CALLSIGN  (how the mesh sees you)	ПОЗИВНИЙ  (як вас бачить mesh)
@@ -401,7 +401,7 @@ UP	ВГОРУ
 DOWN	ВНИЗ
 NEXT	ДАЛІ
 NO BOOKS	КНИГ НЕМАЄ
-copy books to /doba/lib on the card	скопіюйте книги в /doba/lib на карті
+copy books to /doba/lib on the card	скопіюйте книги в /doba/lib на картці
 book not on this card	книги немає на цій карті
 Search	Пошук
 not in this article	немає в цій статті
@@ -429,7 +429,7 @@ From you	Від вас
 Compass az	Аз. компаса
 %d km	%d км
 NO MAP HERE	ТУТ НЕМАЄ МАПИ
-This area is not on the card	Цієї місцевості немає на карті
+This area is not on the card	Цієї місцевості немає на картці
 NO SD CARD	НЕМАЄ SD-КАРТИ
 Insert an exFAT card for maps	Вставте карту exFAT для мап
 SD CARD UNREADABLE	SD-КАРТА НЕ ЧИТАЄТЬСЯ
@@ -465,8 +465,8 @@ Down	Вниз
 Next	Далі
 # --- deleting a book
 Delete "%s"?	Видалити «%s»?
-frees %.1f GB on the card	звільнить %.1f ГБ на карті
-frees %lu MB on the card	звільнить %lu МБ на карті
+frees %.1f GB on the card	звільнить %.1f ГБ на картці
+frees %lu MB on the card	звільнить %lu МБ на картці
 It can only come back from a computer.	Повернути можна лише з комп’ютера.
 DELETE	ВИДАЛИТИ
 # --- battery
@@ -572,3 +572,5 @@ short dashes	короткі риски
 sparse grain	рідке зерно
 staggered dots	точки в шаховому порядку
 zoomed in close, black outline	при великому наближенні, чорний контур
+Send my last position (no fix now)	Надіслати останню позицію (зараз без GPS)
+Last fix: %s (%.5f, %.5f)	Остання позиція: %s (%.5f, %.5f)

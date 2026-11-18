@@ -156,6 +156,13 @@ void setup() {
             bool haveTime = now > 1735689600;
             gps_service::injectAiding(alat, alon, now, haveTime, 50000.0f, 30.0f);
             diag::log("gps warm-start seed: %.4f,%.4f time=%d", alat, alon, haveTime);
+            g_state.with([&](DeviceState& s) {   // as main.cpp: the last position stands in
+                if (!s.gpsFix && !s.everHadFix) {
+                    s.latitude = alat;
+                    s.longitude = alon;
+                    s.everHadFix = true;
+                }
+            });
         } else {
             diag::log("gps warm-start: no saved position");
         }
