@@ -164,6 +164,13 @@ const char* poiCode(int kind) {
 
 void drawPois(const MapScreenData& map, uint8_t* fb) {
     if (!poisOn() || map.metersPerPixel <= 0 || map.metersPerPixel > 25.0f) return;
+    // The places round the middle of what is on screen. map.centerLat/Lon is
+    // the position (GPS or the last one): with the map dragged to Cherkasy it
+    // was still Groenlo, and the places came from there, off screen (18 Nov).
+    const View v = viewFor(map);
+    const int top = ui::STATUS_H + (map.topo ? 56 : 0), bottom = ui::MAP_STRIP_TOP;
+    double midLat, midLon;
+    v.toGeo(SCREEN_W / 2, (top + bottom) / 2, midLat, midLon);
     // The SD scan is not per frame: the nearest few hundred round the view's
     // middle, again only when the view has moved a good part of a screen.
     static PsArr<doba_pois::Poi, 60> cache;
@@ -171,14 +178,14 @@ void drawPois(const MapScreenData& map, uint8_t* fb) {
     static double qLat = 99, qLon = 0;
     static float qMpp = 0;
     double b, moved;
-    milgeo::bearingDistance(qLat, qLon, map.centerLat, map.centerLon, b, moved);
+    milgeo::bearingDistance(qLat, qLon, midLat, midLon, b, moved);
     if (cn < 0 || qLat > 90 || moved > 150.0 * map.metersPerPixel || qMpp != map.metersPerPixel) {
-        cn = doba_pois::nearest(map.centerLat, map.centerLon, 0, cache, 60);
-        qLat = map.centerLat; qLon = map.centerLon; qMpp = map.metersPerPixel;
+        cn = doba_pois::nearest(midLat, midLon, 0, cache, 60);
+        qLat = midLat; qLon = midLon; qMpp = map.metersPerPixel;
+        Serial.printf("[pois] %d near %.4f,%.4f at %.1f m/px, nearest %.0f m\n", cn, midLat, midLon,
+                      map.metersPerPixel, cn > 0 ? cache[0].dist : -1.0);
     }
     if (cn <= 0) return;
-    const View v = viewFor(map);
-    const int top = ui::STATUS_H + (map.topo ? 56 : 0), bottom = ui::MAP_STRIP_TOP;
     const EpdFont* f = ui::monoFont(13);
     for (int i = cn - 1; i >= 0; --i) {   // nearest drawn last, on top
         double x, y;

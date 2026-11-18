@@ -1771,6 +1771,14 @@ static void runConsoleLine(char* line) {
             Serial.printf("[dem] %s %.1f\n", wet ? "water" : "land", v);
         else
             Serial.println("[dem] none");
+    } else if (!strcasecmp(cmd, "pois")) {   // DOBA: pois -> the layer's state and what is round the map's middle
+        double la = 0, lo = 0;
+        milspec::screenToLatLon(480, 280, la, lo);   // the last map frame's middle
+        static doba_pois::Poi near[5];
+        const int n = doba_pois::nearest(la, lo, 0, near, 5);
+        Serial.printf("[pois] layer %s, %.1f m/px (shown at <= 25), %d near %.4f,%.4f\n",
+                      milspec::poisOn() ? "on" : "OFF", mapMpp, n, la, lo);
+        for (int i = 0; i < n; ++i) Serial.printf("  %.0f m  kind %d  %s\n", near[i].dist, near[i].kind, near[i].name);
     } else if (!strcasecmp(cmd, "mem")) {    // DOBA: mem | mem drop (let the caches go)
         if (arg && !strcasecmp(arg, "drop")) { doba_mem::report("before"); doba_mem::dropCaches(); }
         doba_mem::report("now");

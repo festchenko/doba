@@ -794,3 +794,48 @@ def test_a_finger_held_on_a_document_deletes_that_document_only(doba, tmp_path):
     assert name in hidden, (name, flags)
     assert len(hidden) >= 3, flags                     # with its chapter and its bare name
     assert not flags.get("Water Guide", 0) & 2, flags  # the other document stays
+
+
+def test_places_follow_the_view_not_the_position(doba):
+    """Dragged 30 km from the position, the places shown are those round the
+    view. They came from round the position, off screen, so Cherkasy showed
+    none while the fix was in Groenlo (18 Nov)."""
+    os.makedirs(os.path.join(doba.sd, "doba", "map"), exist_ok=True)
+    write_pois(os.path.join(doba.sd, "doba", "map", "pois.dgp"), [
+        (52.0425, 6.6175, 1, "Home hospital"),
+        (52.0430, 7.0600, 1, "Far hospital"), (52.0420, 7.0610, 5, "Far shop")])
+    boot(doba)
+    doba.gps(52.0421, 6.6170)
+    time.sleep(2)
+    doba.console("screen map", 800)
+    doba.console("zoom out", 800)
+    doba.console("zoom out", 800)                           # ~24 m/px: places still shown
+    time.sleep(1)
+    since = doba.log_seq()
+    for _ in range(4):                                      # the view goes east, ~12 km a drag
+        doba.swipe(500, 500, 20, 500)
+        time.sleep(1.2)
+    try:
+        doba.wait_log(r"\[pois\] 2 near 52\.0\d+,7\.1", since=since, timeout=10)
+    except Exception:
+        print("\n".join(l for l in doba.log(since) if "pois" in l or "map" in l)[-3000:])
+        raise
+
+
+def test_an_article_far_bigger_than_its_packed_size_opens_whole(doba, tmp_path):
+    """The text buffer is sized from the packed article (doba_library.cpp,
+    openArticle). Text that packs 100:1 overflows the first guess and is
+    inflated again at full size, not cut at a few pages."""
+    src = tmp_path / "in"
+    src.mkdir()
+    line = "Boil the water for one minute, longer high in the mountains, then let it cool.\n\n"
+    (src / "Water notes.txt").write_text("Water notes\n\n" + line * 5000, encoding="utf-8")
+    out = os.path.join(doba.sd, "doba", "lib", "notes")
+    subprocess.run([sys.executable, os.path.join(LIB, "docs2doba.py"), str(src), out, "--name", "Notes"],
+                   check=True, capture_output=True)
+    boot(doba)
+    since = doba.log_seq()
+    doba.console("libopen Water notes", 800)
+    got = doba.wait_log(r"\[lib\] open '[^']*' pages=\d+", since=since)
+    pages = int(re.search(r"pages=(\d+)", got).group(1))
+    assert pages > 150, got

@@ -7,6 +7,7 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <esp_heap_caps.h>
+#include <algorithm>
 #include "doba_mem.h"
 #include <cstdio>
 #include <cstring>
@@ -40,6 +41,7 @@ constexpr int W = 540, H = 960, TOP = ui::STATUS_H;
 constexpr uint8_t INK = 0x00, PAPER = 0xFF;
 constexpr int REC = 128, KEY = 56, HDR = 32;
 constexpr size_t MAX_TEXT = 1536 * 1024;      // inflated article cap (PSRAM)
+constexpr size_t SOURCE_ROOM = 256;           // kept free for the "Source:" line
 constexpr int MAX_BOOKS = 64;   // one bit each in a uint64 mask (BookMask)
 typedef uint64_t BookMask;
 constexpr int RESULTS = 6;
@@ -60,6 +62,7 @@ char g_lastQuery[256] = "\x01";   // forces the first search
 
 // The open article.
 char* g_text = nullptr;          // inflated UTF-8, NUL-terminated
+size_t g_textCap = 0;           // what g_text holds (without the NUL): sized to the article, not MAX_TEXT
 size_t g_textLen = 0;
 char g_title[KEY + 1] = {};
 struct Line { uint32_t off; uint16_t len; uint8_t kind; uint8_t hyph; };   // a wrapped line; hyph: ends in a hyphen
@@ -900,16 +903,28 @@ bool openArticle(const Result& r) {
     const Book& b = g_books[g_book];
     char path[96];
     snprintf(path, sizeof path, "%s/%s/a%04u.dta", kRoot, b.dir, (unsigned)r.chunk);
-    if (!g_text) g_text = (char*)doba_mem::big(MAX_TEXT + 1);
     uint8_t* z = (uint8_t*)doba_mem::big(r.len);
-    if (!g_text || !z) { if (z) heap_caps_free(z); return false; }
+    if (!z) return false;
     sdLock();
     File f = SD.open(path, FILE_READ);
     bool ok = f && f.seek(r.off) && f.read(z, r.len) == r.len;
     if (f) f.close();
     sdUnlock();
+    // The text gets room for this article (about 8x its packed size), not
+    // MAX_TEXT: a 1.5 MB buffer held for a 20 KB page was most of what left
+    // a picture no room (18 Nov). Too small, and it is inflated again at full size.
     size_t n = 0;
-    ok = ok && inflateTo(z, r.len, g_text, MAX_TEXT, &n);
+    for (size_t want = std::min(MAX_TEXT, std::max<size_t>(64 * 1024, (size_t)r.len * 8 + 16 * 1024)); ok;) {
+        if (g_textCap != want) {
+            if (g_text) heap_caps_free(g_text);
+            g_text = (char*)doba_mem::big(want + 1);
+            g_textCap = g_text ? want : 0;
+            if (!g_text) { g_textLen = 0; g_lineCount = 0; g_pageCount = 0; ok = false; break; }
+        }
+        ok = inflateTo(z, r.len, g_text, g_textCap - SOURCE_ROOM, &n);
+        if (!ok || n < g_textCap - SOURCE_ROOM || g_textCap == MAX_TEXT) break;
+        want = MAX_TEXT;   // filled it: there is more
+    }
     heap_caps_free(z);
     if (!ok) return false;
     g_textLen = n;
@@ -918,8 +933,8 @@ bool openArticle(const Result& r) {
     extractLinks();
     // Every article names where it came from (info.txt source=, else the book).
     const char* src = b.source[0] ? b.source : b.name;
-    const int add = snprintf(g_text + g_textLen, MAX_TEXT + 1 - g_textLen, TR("\nFSource: %s"), src);
-    if (add > 0 && g_textLen + add <= MAX_TEXT) g_textLen += add;
+    const int add = snprintf(g_text + g_textLen, g_textCap + 1 - g_textLen, TR("\nFSource: %s"), src);
+    if (add > 0 && g_textLen + add <= g_textCap) g_textLen += add;
     g_text[g_textLen] = 0;
     snprintf(g_title, sizeof g_title, "%s", r.title);
     g_current = r;
