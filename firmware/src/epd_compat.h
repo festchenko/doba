@@ -198,3 +198,6 @@ EpdRect epd_get_string_rect(const EpdFont* font, const char* string, int x, int 
 #ifdef __cplusplus
 }
 #endif
+
+// DOBA: the last epdc_paint(): converting the frame, and the driver call (us)
+extern uint32_t g_lastExpandUs, g_lastPaintCallUs;

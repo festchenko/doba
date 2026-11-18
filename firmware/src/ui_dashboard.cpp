@@ -133,6 +133,8 @@ static inline void IRAM_ATTR uiWakeFromIsr() {
 // queues it; the loop takes taps off the queue whenever it gets round to them.
 struct TouchEv { int16_t x0, y0, x1, y1; uint32_t downMs, upMs; };
 QueueHandle_t g_touchQ = nullptr;
+// DOBA: tap-to-glass latency: the release, then when its frame was handed to the panel and was on it
+uint32_t g_latTapUp = 0, g_latPainted = 0;
 TaskHandle_t g_touchTask = nullptr;
 static void IRAM_ATTR onTouchIrq() {
     touchIrq = true;
@@ -506,6 +508,15 @@ bool tickDue(Screen sc, uint32_t lastDraw) {
         static uint32_t lastKey = 0;
         if (since < 1000) return false;
         const uint32_t k = mapTickKey(g_state.snapshot());
+        if (k != lastKey || since >= 30000) { lastKey = k; return true; }
+        return false;
+    }
+    if (sc == SCREEN_HOME) {
+        // the home page: when what it shows changed, else every 30 s. Drawing
+        // it every second cost 110-360 ms of every second (18 Nov).
+        static uint32_t lastKey = 0;
+        if (since < 1000) return false;
+        const uint32_t k = doba_ui::homeKey(g_state.snapshot());
         if (k != lastKey || since >= 30000) { lastKey = k; return true; }
         return false;
     }
@@ -1784,6 +1795,38 @@ static void runConsoleLine(char* line) {
             Serial.printf("[dem] %s %.1f\n", wet ? "water" : "land", v);
         else
             Serial.println("[dem] none");
+    } else if (!strcasecmp(cmd, "fbdump")) {   // DOBA: the glass as raw 4-bit pixels (remote tests)
+        // Base64 lines, each with its offset: other tasks' log lines may land
+        // between them, never inside one.
+        static const char* kB64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        Serial.printf("\nFBDUMP %u %d %d\n", (unsigned)fbSize, epd_width(), epd_height());
+        const uint8_t* src = shadowFb ? shadowFb : epdc_framebuffer();
+        static char line[1100];
+        for (size_t o = 0; o < fbSize; o += 768) {
+            const size_t n = std::min<size_t>(768, fbSize - o);
+            int k = snprintf(line, sizeof line, "FB %u ", (unsigned)o);
+            for (size_t i = 0; i < n; i += 3) {
+                const uint32_t v = (uint32_t)src[o + i] << 16 | (i + 1 < n ? src[o + i + 1] << 8 : 0) | (i + 2 < n ? src[o + i + 2] : 0);
+                line[k++] = kB64[v >> 18 & 63]; line[k++] = kB64[v >> 12 & 63];
+                line[k++] = i + 1 < n ? kB64[v >> 6 & 63] : '=';
+                line[k++] = i + 2 < n ? kB64[v & 63] : '=';
+            }
+            line[k++] = '\n'; line[k] = 0;
+            Serial.write((const uint8_t*)line, k);
+        }
+        Serial.printf("FBEND\n");
+    } else if (!strcasecmp(cmd, "tap")) {    // DOBA: tap x y [x2 y2 [ms]] -> a finger, from the console (remote tests)
+        int v[5] = {0, 0, -1, -1, 120};
+        int n = 0;
+        for (char* t = arg; t && n < 5; t = strtok(nullptr, " \t")) v[n++] = atoi(t);
+        if (n >= 2 && g_touchQ) {
+            if (v[2] < 0) { v[2] = v[0]; v[3] = v[1]; }
+            const uint32_t now = millis();
+            const TouchEv ev = {(int16_t)v[0], (int16_t)v[1], (int16_t)v[2], (int16_t)v[3], now - (uint32_t)v[4], now};
+            xQueueSend(g_touchQ, &ev, 0);
+            if (uiWake) xSemaphoreGive(uiWake);
+            Serial.printf("[tap] %d,%d -> %d,%d held=%d at=%lu\n", v[0], v[1], v[2], v[3], v[4], (unsigned long)now);
+        } else Serial.println("tap x y [x2 y2 [ms]]");
     } else if (!strcasecmp(cmd, "pois")) {   // DOBA: pois -> the layer's state and what is round the map's middle
         double la = 0, lo = 0;
         milspec::screenToLatLon(480, 280, la, lo);   // the last map frame's middle
@@ -2053,15 +2096,20 @@ TRC("touch");         if (touchOk && g_touchQ) {
             static uint32_t lastTapMs = 0;
             while (xQueueReceive(g_touchQ, &ev, 0) == pdTRUE) {
                 touchDownAt = ev.downMs;
-                Serial.printf("[touch] %d,%d -> %d,%d held=%lu at=%lu scr=%d\n", ev.x0, ev.y0, ev.x1, ev.y1,
-                              (unsigned long)(ev.upMs - ev.downMs), (unsigned long)ev.upMs, (int)screen);
+                Serial.printf("[touch] %d,%d -> %d,%d held=%lu at=%lu scr=%d picked up after %lu ms\n", ev.x0, ev.y0,
+                              ev.x1, ev.y1, (unsigned long)(ev.upMs - ev.downMs), (unsigned long)ev.upMs, (int)screen,
+                              (unsigned long)(millis() - ev.upMs));
+                g_latTapUp = ev.upMs;
                 if (mapDrag(ev.x0, ev.y0, ev.x1, ev.y1)) {
                     noteActivity();   // DOBA: a finger drawn across the map moves it
                     continue;
                 }
-                // Real releases now, so only a double read of one tap is filtered.
-                if (millis() - lastTapMs < 120) continue;
-                lastTapMs = millis();
+                // Real releases now, so only a double read of one tap is filtered:
+                // by when the fingers lifted, not when the loop got to them. Two
+                // keys typed while a frame was painting reach here together, and
+                // the second used to be thrown away as a "double read" (18 Nov).
+                if (ev.upMs - lastTapMs < 120) continue;
+                lastTapMs = ev.upMs;
                 noteActivity();
                 const uint32_t held = ev.upMs - ev.downMs;
                 doba_ui::setPressMs(held);
@@ -2070,6 +2118,10 @@ TRC("touch");         if (touchOk && g_touchQ) {
                 else if (held >= 800 && mapLongPress(ev.x1, ev.y1)) {}   // DOBA
                 else handleTap(ev.x1, ev.y1);
             }
+        }
+        if (g_latPainted && epdc_paint_idle()) {
+            Serial.printf("[lat] tap -> on the glass %lu ms\n", (unsigned long)(millis() - g_latTapUp));
+            g_latPainted = 0; g_latTapUp = 0;
         }
         // DOBA: a finger dragging the map: the map goes with it.
         if (touchOk) mapLiveDrag();
@@ -2252,6 +2304,12 @@ TRC("rendered");                     if (screen == SCREEN_HOME) ui::statusBar(s,
 
             refresh(screenChanged, fastInPage, listFast, wantClean, false,
                     mapTransition || bandCleared);
+            if (g_latTapUp) {
+                g_latPainted = millis();
+                Serial.printf("[lat] tap -> paint started %lu ms (screen %d; convert %lu ms, driver call %lu ms)\n",
+                              (unsigned long)(g_latPainted - g_latTapUp), (int)screen,
+                              (unsigned long)(g_lastExpandUs / 1000), (unsigned long)(g_lastPaintCallUs / 1000));
+            }
         }
 
         // The epdiy path managed panel rails by hand here — poweron before an

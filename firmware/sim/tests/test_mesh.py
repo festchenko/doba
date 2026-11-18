@@ -493,3 +493,26 @@ def test_stealth_holds_every_transmission_and_sends_the_queue_when_it_ends(mesh)
     mesh.dev.console("stealth off", 800)
     mesh.dev_wait(lambda: any(is_port(h, M.PORT_TEXT) and h["data"]["payload"] == b"held in stealth"
                               for h in mesh.sent(since=0)), "the held message after stealth")
+
+
+def test_chats_and_nodes_survive_a_restart(mesh):
+    """/doba/mesh.bin: the chat ring and the node table, keys included, are
+    kept on the card a few seconds after they change and read back at boot.
+    A reboot (or the 3-minute sleep) used to forget them all (18 Nov)."""
+    a = alex()
+    mesh.deliver(a.nodeinfo(packet_id=0x51))
+    mesh.deliver(a.text("still there after a restart?", packet_id=0x52))
+    mesh.dev_wait(lambda: any(x.text == "still there after a restart?" for x in mesh.history()), "the message")
+    mesh.dev.wait_log(r"mesh: chats and nodes kept on the card \(1 messages, 1 nodes\)", since=0, timeout=20)
+    dev = mesh.dev
+    dev.stop()
+    dev.launch()
+    since = 0
+    dev.wait_log(r"mesh: 1 messages and 1 nodes back from the card", since=since, timeout=15)
+    m2 = Mesh(dev, radio_on=False)   # still on from before the restart
+    assert [x.text for x in m2.history()] == ["still there after a restart?"]
+    assert {n.num: n for n in m2.nodes()}[ALEX].long_name == "Alex Rivera"
+    # its key came back too: a DM goes PKI-encrypted at once, no NodeInfo needed
+    pid = m2.send("back again", dest=ALEX).mesh_queued.packet_id
+    dm = m2.wait_sent(lambda h: h["id"] == pid, "the DM", ear=a, pki_from=m2.public_key)
+    assert dm["pki"] and dm["data"]["payload"] == b"back again"

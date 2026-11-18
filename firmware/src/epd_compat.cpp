@@ -551,6 +551,10 @@ uint8_t* g_levels = nullptr;   // 8bpp level indices — what paint() consumes
 // epdiy uses luminance, EPD_Painter uses level indices, and getting this
 // backwards renders everything inverted (it did, on the first hardware run).
 uint8_t g_lut[16];
+// One framebuffer byte (two pixels) -> both levels, as one little-endian
+// 16-bit store: the even pixel in the low byte. A table of 256 halves the
+// lookups and the PSRAM writes of the per-pixel loop it replaced.
+uint16_t g_lut2[256];
 
 void buildLut() {
     for (int v = 0; v < 16; ++v) {
@@ -558,6 +562,7 @@ void buildLut() {
         // two intermediate levels. Rounded so 0x0/0xF map exactly to 3/0.
         g_lut[v] = (uint8_t)(((15 - v) * 3 + 7) / 15);
     }
+    for (int b = 0; b < 256; ++b) g_lut2[b] = (uint16_t)(g_lut[b & 0x0F] | g_lut[b >> 4] << 8);
 }
 
 }  // namespace
@@ -716,14 +721,15 @@ int epdc_grey_levels() { return g_painter ? g_painter->greyLevels() : 0; }
 // one pass over 259200 bytes. Shared by paint and the dirty-rect scrub, which
 // needs the same 8bpp frame to diff the glass against.
 static void expandLevels() {
-    const uint8_t* src = g_fb4;
-    uint8_t* dst = g_levels;
-    for (int y = 0; y < kNativeH; ++y) {
-        for (int b = 0; b < kBytesPerRow; ++b) {
-            const uint8_t byte = *src++;
-            *dst++ = g_lut[byte & 0x0F];   // even x
-            *dst++ = g_lut[byte >> 4];     // odd x
-        }
+    // Four source bytes -> eight levels -> two 32-bit stores. g_levels is
+    // word-aligned (heap) and the frame is a multiple of 4 bytes.
+    const uint32_t* src = (const uint32_t*)g_fb4;
+    uint32_t* dst = (uint32_t*)g_levels;
+    const size_t words = (size_t)kNativeH * kBytesPerRow / 4;
+    for (size_t i = 0; i < words; ++i) {
+        const uint32_t w = src[i];
+        dst[2 * i]     = g_lut2[w & 0xFF] | (uint32_t)g_lut2[(w >> 8) & 0xFF] << 16;
+        dst[2 * i + 1] = g_lut2[(w >> 16) & 0xFF] | (uint32_t)g_lut2[w >> 24] << 16;
     }
 }
 
@@ -799,14 +805,19 @@ void panelHoldArm() {
 }
 }  // namespace
 
+uint32_t g_lastExpandUs = 0, g_lastPaintCallUs = 0;
 void epdc_paint() {
     if (!g_painter) return;
     panelHoldArm();
     PAINT_TRACE("expand enter");
+    const uint32_t t0 = micros();
     expandLevels();
+    const uint32_t t1 = micros();
     PAINT_TRACE("expand done, paint enter");
     g_painter->paint(g_levels);
     PAINT_TRACE("paint returned");
+    g_lastExpandUs = t1 - t0;
+    g_lastPaintCallUs = micros() - t1;
 }
 
 void epdc_clear_dirty(int tolerance) {

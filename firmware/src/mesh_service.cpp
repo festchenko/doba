@@ -17,6 +17,9 @@
 #include "mesh_crypto.h"
 #include "device_state.h"
 #include "settings.h"
+#include <SD.h>
+#include "sd_bus.h"
+#include "sd_card.h"
 
 namespace {
 
@@ -1235,9 +1238,130 @@ void followRegion() {
     }
 }
 
+// --- Kept on the card: the chats and the nodes (/doba/mesh.bin) ------------------
+//
+// A reboot (or the 3-minute sleep, 18 Nov) used to forget every message and
+// every neighbour, keys included: a DM to the Heltec then failed until its next
+// NodeInfo, hours away. The ring and the node table are written whole (16 KB)
+// a few seconds after they last changed, and read back before the radio
+// starts. millis() stamps are meaningless after a reboot: they are rebuilt
+// from the wall-clock ones, or left 0 (age unknown).
+constexpr const char* kStorePath = "/doba/mesh.bin";
+constexpr uint32_t kStoreMagic = 0x31534D44;   // "DMS1"
+struct StoreHead {
+    uint32_t magic, msgSize, nodeSize, history, nodeMax;
+    int32_t msgCount, msgHead, unread, nodeUsed;
+    uint32_t myNode;
+};
+uint32_t storeHash = 0, storeSeenHash = 0, storeChangedMs = 0;
+
+uint32_t storeStateHash() {
+    uint32_t h = 2166136261u;
+    auto mix = [&](const void* p, size_t n) {
+        const uint8_t* b = (const uint8_t*)p;
+        for (size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 16777619u;
+    };
+    take();
+    mix(&msgCount, sizeof msgCount); mix(&msgHead, sizeof msgHead); mix(&unread, sizeof unread);
+    mix(&nodeUsed, sizeof nodeUsed);
+    if (msgs) for (int i = 0; i < MESH_MSG_HISTORY; ++i) {
+        mix(&msgs[i].id, sizeof msgs[i].id); mix(&msgs[i].status, 1); mix(msgs[i].text, 8);
+    }
+    for (int i = 0; i < nodeUsed; ++i) {
+        mix(&nodes[i].num, 4); mix(&nodes[i].lastHeardUtc, 4); mix(&nodes[i].hasPublicKey, 1);
+        mix(nodes[i].shortName, sizeof nodes[i].shortName); mix(&nodes[i].latitude, 8);
+    }
+    give();
+    return h;
+}
+
+void storeSave() {
+    if (!msgs || !sd_card::sdMounted()) return;
+    StoreHead hd = {kStoreMagic, (uint32_t)sizeof(Message), (uint32_t)sizeof(Node), MESH_MSG_HISTORY,
+                    MESH_NODE_MAX, 0, 0, 0, 0, myNodeNum};
+    static Message* m = nullptr;      // a copy, so the lock is not held over the card
+    static Node* nd = nullptr;
+    if (!m) m = (Message*)heap_caps_malloc(sizeof(Message) * MESH_MSG_HISTORY, MALLOC_CAP_SPIRAM);
+    if (!nd) nd = (Node*)heap_caps_malloc(sizeof(Node) * MESH_NODE_MAX, MALLOC_CAP_SPIRAM);
+    if (!m || !nd) return;
+    take();
+    hd.msgCount = msgCount; hd.msgHead = msgHead; hd.unread = unread; hd.nodeUsed = nodeUsed;
+    memcpy(m, msgs, sizeof(Message) * MESH_MSG_HISTORY);
+    memcpy(nd, nodes, sizeof(Node) * MESH_NODE_MAX);
+    give();
+    sdLock();
+    if (!SD.exists("/doba")) SD.mkdir("/doba");
+    File f = SD.open("/doba/mesh.tmp", FILE_WRITE);
+    bool ok = f && f.write((const uint8_t*)&hd, sizeof hd) == sizeof hd &&
+              f.write((const uint8_t*)m, sizeof(Message) * MESH_MSG_HISTORY) == sizeof(Message) * MESH_MSG_HISTORY &&
+              f.write((const uint8_t*)nd, sizeof(Node) * MESH_NODE_MAX) == sizeof(Node) * MESH_NODE_MAX;
+    if (f) f.close();
+    if (ok) { SD.remove(kStorePath); ok = SD.rename("/doba/mesh.tmp", kStorePath); }
+    sdUnlock();
+    diag::log("mesh: chats and nodes kept on the card (%d messages, %d nodes)%s", hd.msgCount, hd.nodeUsed,
+              ok ? "" : " — FAILED");
+}
+
+void storeLoad() {
+    if (!msgs || !sd_card::sdMounted()) return;
+    StoreHead hd = {};
+    sdLock();
+    File f = SD.open(kStorePath, FILE_READ);
+    bool ok = f && f.read((uint8_t*)&hd, sizeof hd) == sizeof hd && hd.magic == kStoreMagic &&
+              hd.msgSize == sizeof(Message) && hd.nodeSize == sizeof(Node) &&
+              hd.history == MESH_MSG_HISTORY && hd.nodeMax == MESH_NODE_MAX && hd.myNode == myNodeNum &&
+              hd.msgCount >= 0 && hd.msgCount <= MESH_MSG_HISTORY && hd.nodeUsed >= 0 && hd.nodeUsed <= MESH_NODE_MAX;
+    if (ok) {
+        take();
+        ok = f.read((uint8_t*)msgs, sizeof(Message) * MESH_MSG_HISTORY) == sizeof(Message) * MESH_MSG_HISTORY &&
+             f.read((uint8_t*)nodes, sizeof(Node) * MESH_NODE_MAX) == sizeof(Node) * MESH_NODE_MAX;
+        if (ok) {
+            msgCount = hd.msgCount; msgHead = hd.msgHead % MESH_MSG_HISTORY; unread = hd.unread; nodeUsed = hd.nodeUsed;
+            const uint32_t nowUtc = (uint32_t)time(nullptr), nowMs = millis();
+            auto rebuilt = [&](uint32_t utc) -> uint32_t {
+                if (!utc || nowUtc < 1700000000u || utc > nowUtc) return 0;
+                const uint32_t ago = (nowUtc - utc) * 1000u;
+                return ago < nowMs ? nowMs - ago : 1;   // older than this boot: as old as it gets
+            };
+            for (int i = 0; i < MESH_MSG_HISTORY; ++i) {
+                msgs[i].ms = rebuilt(msgs[i].utc);
+                if (msgs[i].status == TX_PENDING) msgs[i].status = TX_FAILED;   // the outbox did not survive
+            }
+            for (int i = 0; i < nodeUsed; ++i) {
+                nodes[i].lastHeardMs = rebuilt(nodes[i].lastHeardUtc);
+                nodes[i].positionMs = nodes[i].hasPosition ? nodes[i].lastHeardMs : 0;
+                nodePriv[i] = NodePrivate();
+                if (nodes[i].hasPublicKey && haveKeys)
+                    nodePriv[i].haveKey = mesh::pkiSharedKey(myPrivKey, nodes[i].publicKey, nodePriv[i].key);
+            }
+            changed = true;
+        } else {
+            msgCount = 0; msgHead = 0; unread = 0; nodeUsed = 0;
+            memset(msgs, 0, sizeof(Message) * MESH_MSG_HISTORY);
+            for (Node& n : nodes) n = Node();
+        }
+        give();
+    }
+    if (f) f.close();
+    sdUnlock();
+    if (ok) diag::log("mesh: %d messages and %d nodes back from the card", hd.msgCount, hd.nodeUsed);
+    storeSeenHash = storeHash = storeStateHash();
+}
+
+// Mesh task, each pass: save once the state has been still for 5 s.
+void storeTick() {
+    static uint32_t lastCheck = 0;
+    if (millis() - lastCheck < 1000) return;
+    lastCheck = millis();
+    const uint32_t h = storeStateHash();
+    if (h != storeSeenHash) { storeSeenHash = h; storeChangedMs = millis(); return; }
+    if (h != storeHash && millis() - storeChangedMs >= 5000) { storeSave(); storeHash = h; }
+}
+
 void task(void*) {
     uint8_t frame[mesh::MAX_RADIO_LEN];
     ensureKeys();
+    storeLoad();
     for (;;) {
         // Blocks until the radio interrupt (or a queued message) wakes us, with a
         // 250 ms backstop for the outbox's own timers. Nothing here spins.
@@ -1256,6 +1380,7 @@ void task(void*) {
 
         applyPendingConfig();
         followRegion();
+        storeTick();
 
         if (!radioUp || !meshEnabled) {
             vTaskDelay(pdMS_TO_TICKS(500));

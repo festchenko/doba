@@ -37,6 +37,7 @@ uint8_t* epdc_framebuffer() { return g_fb.data(); }
 // OTP_SIM_FRAMES=<dir>: every paint is also kept as <dir>/paint_NNNNN.png, so a
 // test can see a frame that a later one covers (a zoom's preview, a spinner).
 static bool writePngOf(const std::vector<uint8_t>& buf, const std::string& path);
+uint32_t g_lastExpandUs = 0, g_lastPaintCallUs = 0;
 void epdc_paint() {
     std::vector<uint8_t> copy;
     uint32_t n;

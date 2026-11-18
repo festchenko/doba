@@ -40,6 +40,66 @@ const Tile kTiles[8] = {
 // lines keep clear of whatever is drawn, so they depend on the rest of the
 // page: drawn once for a page, and copied in while the page under them is the
 // same (the hash of the page without them).
+void tileSubtitle(const Tile& t, const DeviceState& s, char* sub, size_t n) {
+    sub[0] = 0;
+    switch (t.go) {
+        case TO_MAP: snprintf(sub, n, TR("topo + MGRS grid")); break;
+        case TO_POINTS:
+            if (doba_points::target() >= 0 && (s.gpsFix || s.everHadFix)) {
+                double b, d;
+                doba_points::fromHere(doba_points::target(), s.latitude, s.longitude, b, d);
+                char az[8], ds[16];
+                milgeo::mils((float)b, milspec::milsSystem(), az, sizeof az);
+                doba_points::formatDistance(d, ds, sizeof ds);
+                snprintf(sub, n, "> %.8s %s %s", doba_points::at(doba_points::target())->name, az, ds);
+            } else if (s.gpsFix || s.everHadFix) milgeo::mgrs(s.latitude, s.longitude, sub, n);
+            else snprintf(sub, n, TR("no fix yet"));
+            break;
+        case TO_LIBRARY: snprintf(sub, n, TRN(doba_lib::shelfCount(), "%d book on card", "%d books on card"), doba_lib::shelfCount()); break;
+        case TO_COMMS:
+            if (stealth::active()) snprintf(sub, n, stealth::listen() ? TR("stealth · listening") : TR("stealth · radio off"));
+            else if (!mesh_service::enabled()) snprintf(sub, n, TR("radio off"));
+            else snprintf(sub, n, TR("%d new · %d nodes"), mesh_service::unreadCount(),
+                          mesh_service::nodeCount());
+            break;
+        case TO_SOS: sosSubtitle(sub, n); break;
+        case TO_SUN: sunSubtitle(s, sub, n); break;
+        case TO_POWER:
+            if (s.batteryPercent) snprintf(sub, n, TR("%u%%%s · sleep / off"), s.batteryPercent, s.charging ? " charging" : "");
+            else snprintf(sub, n, TR("sleep / off"));
+            break;
+        case TO_SETUP: {
+            const int m = settings::tzMinutes();
+            snprintf(sub, n, TR("UTC%+d · %s"), m / 60, milspec::milsSystem() == 6400 ? "6400" : "60-00");
+            break;
+        }
+        default: break;
+    }
+}
+
+// What the home page shows, as a number: the page is redrawn when this
+// changes (or every 30 s), not every second. Every tile's words, the stealth
+// bar's state, the SOS state and what the status bar carries.
+uint32_t homeKeyOf(const DeviceState& s) {
+    uint32_t h = 2166136261u;
+    auto mix = [&](const void* p, size_t n) {
+        const uint8_t* b = (const uint8_t*)p;
+        for (size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 16777619u;
+    };
+    char sub[64];
+    for (const Tile& t : kTiles) { tileSubtitle(t, s, sub, sizeof sub); mix(sub, strlen(sub)); }
+    const bool on = stealth::active();
+    const uint8_t flags[] = {(uint8_t)on, (uint8_t)stealth::listen(),
+                             (uint8_t)(on && g_stealthOffAsk && millis() - g_stealthOffAsk < 5000),
+                             (uint8_t)sosActive(), (uint8_t)s.gpsFix, (uint8_t)s.charging, (uint8_t)s.batteryPercent};
+    mix(flags, sizeof flags);
+    const int unread = mesh_service::unreadCount();
+    mix(&unread, sizeof unread);
+    const uint32_t minute = (uint32_t)(time(nullptr) / 60);
+    mix(&minute, sizeof minute);
+    return h;
+}
+
 uint8_t* g_homeDone = nullptr;   // the last page with its lines
 uint32_t g_homeHash = 0;
 
@@ -88,40 +148,7 @@ void renderHomePage(const DeviceState& s, uint8_t* fb) {
         const uint8_t fg = dark ? PAPER : INK;
         const char* title = sos && sosActive() ? TR("SOS on") : TR(t.title);
         ui::text(ui::font(ui::F_TITLE), t.r.x + 18, t.r.y + 46, title, fb, EPD_DRAW_ALIGN_LEFT, fg);
-        sub[0] = 0;
-        switch (t.go) {
-            case TO_MAP: snprintf(sub, sizeof sub, TR("topo + MGRS grid")); break;
-            case TO_POINTS:
-                if (doba_points::target() >= 0 && (s.gpsFix || s.everHadFix)) {
-                    double b, d;
-                    doba_points::fromHere(doba_points::target(), s.latitude, s.longitude, b, d);
-                    char az[8], ds[16];
-                    milgeo::mils((float)b, milspec::milsSystem(), az, sizeof az);
-                    doba_points::formatDistance(d, ds, sizeof ds);
-                    snprintf(sub, sizeof sub, "> %.8s %s %s", doba_points::at(doba_points::target())->name, az, ds);
-                } else if (s.gpsFix || s.everHadFix) milgeo::mgrs(s.latitude, s.longitude, sub, sizeof sub);
-                else snprintf(sub, sizeof sub, TR("no fix yet"));
-                break;
-            case TO_LIBRARY: snprintf(sub, sizeof sub, TRN(doba_lib::shelfCount(), "%d book on card", "%d books on card"), doba_lib::shelfCount()); break;
-            case TO_COMMS:
-                if (stealth::active()) snprintf(sub, sizeof sub, stealth::listen() ? TR("stealth · listening") : TR("stealth · radio off"));
-                else if (!mesh_service::enabled()) snprintf(sub, sizeof sub, TR("radio off"));
-                else snprintf(sub, sizeof sub, TR("%d new · %d nodes"), mesh_service::unreadCount(),
-                              mesh_service::nodeCount());
-                break;
-            case TO_SOS: sosSubtitle(sub, sizeof sub); break;
-            case TO_SUN: sunSubtitle(s, sub, sizeof sub); break;
-            case TO_POWER:
-                if (s.batteryPercent) snprintf(sub, sizeof sub, TR("%u%%%s · sleep / off"), s.batteryPercent, s.charging ? " charging" : "");
-                else snprintf(sub, sizeof sub, TR("sleep / off"));
-                break;
-            case TO_SETUP: {
-                const int m = settings::tzMinutes();
-                snprintf(sub, sizeof sub, TR("UTC%+d · %s"), m / 60, milspec::milsSystem() == 6400 ? "6400" : "60-00");
-                break;
-            }
-            default: break;
-        }
+        tileSubtitle(t, s, sub, sizeof sub);
         // Subtitle may be long (MGRS): shrink to fit the tile.
         const bool mono = t.go == TO_POINTS && sub[0] >= '0' && sub[0] <= '9';   // a grid reference
         const EpdFont* sf = mono ? ui::font(ui::F_MONO) : ui::font(ui::F_SMALL);
@@ -661,5 +688,6 @@ Go back(Page p) {
 }
 
 void dropHomeCache() { pg::dropHomeCache(); }
+uint32_t homeKey(const DeviceState& s) { return pg::homeKeyOf(s); }
 
 }  // namespace doba_ui

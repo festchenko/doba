@@ -58,5 +58,7 @@ Go back(Page p);
 
 // The home page keeps its last frame (contour lines and all): let it go.
 void dropHomeCache();
+// What the home page shows, hashed: it is redrawn when this changes.
+uint32_t homeKey(const DeviceState& s);
 
 }  // namespace doba_ui

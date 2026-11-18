@@ -839,3 +839,26 @@ def test_an_article_far_bigger_than_its_packed_size_opens_whole(doba, tmp_path):
     got = doba.wait_log(r"\[lib\] open '[^']*' pages=\d+", since=since)
     pages = int(re.search(r"pages=(\d+)", got).group(1))
     assert pages > 150, got
+
+
+def test_keys_typed_faster_than_the_panel_paints_are_all_kept(doba):
+    """Two keys whose taps reach the UI in the same pass (the second landed
+    while the first frame was painting) are two keys. The double-read filter
+    went by when the loop saw them, not when the finger lifted, and ate the
+    second (18 Nov: "the keyboard misses letters")."""
+    boot(doba)
+    doba.console("mesh on", 800)
+    for xy in [(395, 360), (150, 260), (360, 908)]:     # Comms, Everyone, Write
+        doba.tap(*xy)
+        time.sleep(0.8)
+    since = doba.log_seq()
+    for xy in [(322, 751), (401, 668), (322, 751), (401, 668)]:   # h i h i, fast typing
+        doba.tap(*xy)
+        time.sleep(0.15)
+    time.sleep(1.5)
+    doba.tap(468, 918)                                  # Send
+    try:
+        doba.wait_log(r"\[comms\] send to ch0: hihi$", since=since, timeout=10)
+    except Exception:
+        print("\n".join(l for l in doba.log(0) if "touch" in l or "comms" in l or "mesh" in l)[-3000:])
+        raise
