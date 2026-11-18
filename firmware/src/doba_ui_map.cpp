@@ -279,9 +279,14 @@ int g_pointsScroll = 0;
 int g_pointSel = -1;
 bool g_deleteArmed = false;
 const char* g_pointsNote = nullptr;     // a one-off line ("no fix yet")
-constexpr int PROW_TOP = TOP + 436, PROW_H = 80, PROW_N = 4;
+constexpr int PROW_TOP = TOP + 510, PROW_H = 80, PROW_N = 3;
 const EpdRect kMark = {24, TOP + 306, (W - 48 - 14) / 2, 64};
 const EpdRect kAdd = {24 + (W - 48 - 14) / 2 + 14, TOP + 306, (W - 48 - 14) / 2, 64};
+// "Way back": one tap marks where you stand as the point to come back to (the
+// car, the camp) and makes it the target: the home page and the map then show
+// its azimuth and distance. Again later moves it.
+const EpdRect kBack = {24, TOP + 384, W - 48, 64};
+const char* const kBackNames[] = {"Way back", "Шлях назад"};
 const EpdRect kUp = {W - 24 - 56 - 12 - 56, H - 78, 56, 52};
 const EpdRect kDown = {W - 24 - 56, H - 78, 56, 52};
 
@@ -494,6 +499,7 @@ void renderPoints(const DeviceState& s, uint8_t* fb) {
     }
     button(kMark, "Mark here", true, fb);
     button(kAdd, "Enter coords", false, fb);
+    button(kBack, "Way back: mark here, lead me back", false, fb);
 
     const int n = doba_points::count();
     if (g_pointsScroll > n - 1) g_pointsScroll = n > 0 ? ((n - 1) / PROW_N) * PROW_N : 0;
@@ -566,6 +572,26 @@ Go tapPoints(int x, int y, const DeviceState& s) {
         const int i = doba_points::add(nullptr, lat, lon);
         g_pointsNote = i < 0 ? "list full" : "marked";
         if (i >= 0) g_pointsScroll = (i / PROW_N) * PROW_N;
+        return STAY;
+    }
+    if (hit(kBack, x, y)) {
+        if (!here(s, lat, lon)) { g_pointsNote = "no fix yet"; return STAY; }
+        static uint32_t armedMs = 0;   // as Mark here: without a fix, a second tap
+        if (!s.gpsFix && (armedMs == 0 || millis() - armedMs > 6000)) {
+            armedMs = millis();
+            g_pointsNote = "no GPS: tap again";
+            return STAY;
+        }
+        armedMs = 0;
+        for (int k = doba_points::count() - 1; k >= 0; --k)
+            for (const char* nm : kBackNames)
+                if (!strcmp(doba_points::at(k)->name, nm)) { doba_points::remove(k); break; }
+        const int i = doba_points::add(TR("Way back"), lat, lon);
+        if (i < 0) { g_pointsNote = "list full"; return STAY; }
+        doba_points::setTarget(i);
+        g_pointsScroll = (i / PROW_N) * PROW_N;
+        g_pointsNote = "way back marked";
+        Serial.printf("[points] way back %.5f,%.5f (#%d, target)\n", lat, lon, i);
         return STAY;
     }
     if (hit(kAdd, x, y)) {

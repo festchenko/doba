@@ -1,5 +1,6 @@
 // DOBA: SOS, SUN, MORE and BATTERY.
 #include "doba_ui_shared.h"
+#include "doba_checkin.h"
 
 namespace doba_ui {
 namespace pg {
@@ -216,7 +217,7 @@ void renderSun(const DeviceState& s, uint8_t* fb) {
 // --- MORE ----------------------------------------------------------------------
 
 const char* hoursText(float h);
-enum MoreRow { M_BT, M_WIFI, M_BATT, M_OWNER, M_GPS, M_MODE, M_CARD, M_ABOUT, M_COUNT };
+enum MoreRow { M_BT, M_WIFI, M_BATT, M_LONG, M_CHECKIN, M_OWNER, M_GPS, M_MODE, M_CARD, M_ABOUT, M_COUNT };
 int moreRowY(int r) { return TOP + 4 + SEC_H + r * SROW_H; }
 
 void renderMore(const DeviceState& s, uint8_t* fb) {
@@ -245,6 +246,23 @@ void renderMore(const DeviceState& s, uint8_t* fb) {
                 else snprintf(sub, sizeof sub, "%s", br.charging ? TR("charging") : TR("measuring..."));
                 caption(y, SROW_H, "BATTERY", sub, fb);
                 button({CTRL_X, y + (SROW_H - CTRL_H) / 2, CTRL_W, CTRL_H}, "Details  \xE2\x80\xBA", false, fb);
+                break;
+            }
+            case M_LONG:
+                // A long outage: light off, sleep after 1 min, a check-in every 6 h.
+                caption(y, SROW_H, "72-HOUR MODE", checkin::longMode() ? "on: no light, sleep in 1 min"
+                                                                          : "for a long outage", fb);
+                toggle(y, SROW_H, checkin::longMode(), fb);
+                break;
+            case M_CHECKIN: {
+                // "OK" + position to the group every N hours, also from sleep.
+                char st[16], last[8];
+                if (checkin::hours()) snprintf(st, sizeof st, TR("every %d h"), checkin::hours());
+                else snprintf(st, sizeof st, "%s", TR("off"));
+                if (checkin::hours() && checkin::sentLast(last, sizeof last)) snprintf(sub, sizeof sub, TR("OK + position; last %s"), last);
+                else snprintf(sub, sizeof sub, "%s", TR("OK + position to all"));
+                caption(y, SROW_H, "CHECK-IN", sub, fb);
+                stepper(y, SROW_H, st, fb);
                 break;
             }
             case M_OWNER: {
@@ -287,6 +305,8 @@ Go tapMore(int x, int y) {
     if (y < moreRowY(0) || r >= M_COUNT) return STAY;
     if (r == M_BT && toggleHit(x)) settings::setBluetooth(x >= CTRL_X + CTRL_W - 75);
     if (r == M_WIFI && toggleHit(x)) settings::setWifi(x >= CTRL_X + CTRL_W - 75);
+    if (r == M_LONG && toggleHit(x)) checkin::setLongMode(x >= CTRL_X + CTRL_W - 75);
+    if (r == M_CHECKIN && x >= CTRL_X) checkin::stepHours(stepperHit(x) < 0 ? -1 : 1);
     if (r == M_GPS && x >= CTRL_X) return TO_GPSDEBUG;
     if (r == M_BATT && x >= CTRL_X) return TO_BATTERY;
     if (r == M_OWNER) {

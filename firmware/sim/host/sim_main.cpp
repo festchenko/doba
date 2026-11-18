@@ -8,6 +8,7 @@
 #include "device_state.h"
 #include "gps_service.h"
 #include "rtc_clock.h"
+#include "doba_checkin.h"
 #include "settings.h"
 #include "doba_battery.h"
 #include "board_power.h"
@@ -151,6 +152,7 @@ void setup() {
     ui_dashboard::bootStatus("Qwiic", true);
     {
         double alat, alon;
+        checkin::begin(false);   // DOBA: woken by the check-in timer?
         if (settings::lastPosition(alat, alon)) {
             time_t now = time(nullptr);
             bool haveTime = now > 1735689600;

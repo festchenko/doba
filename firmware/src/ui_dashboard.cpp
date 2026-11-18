@@ -35,7 +35,8 @@
 #include "doba_i18n.h"    // DOBA: lang command
 #include "doba_points.h" // DOBA
 #include "doba_dem.h"    // DOBA
-#include "doba_library.h" // DOBA
+#include "doba_library.h"
+#include "doba_checkin.h" // DOBA
 #include "i2c_bus.h"
 #include "usb_storage.h"
 #include <esp_random.h>
@@ -395,6 +396,12 @@ void shutdownDevice(uint8_t* fb, const char* reason) {
     // simply re-armed for deep sleep. The button is the ONLY way back on.
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     esp_sleep_enable_ext0_wakeup((gpio_num_t)BOARD_BOOT_BTN, 0);
+    // DOBA: the check-in (doba_checkin.h) is the one other way back: the
+    // chip's timer, for the next "OK" to the group.
+    if (const uint32_t next = checkin::secondsToNext()) {
+        esp_sleep_enable_timer_wakeup((uint64_t)next * 1000000ULL);
+        diag::log("sleep: check-in timer in %lu s", (unsigned long)next);
+    }
     diag::storageStage(7);
     if (g_offByPowerKey) {
         board_battery_ship_mode();   // the lights go out here on battery
@@ -459,7 +466,7 @@ void touchTask(void*) {
 // Inactivity auto-sleep: any input refreshes this; the task deep-sleeps after
 // a quiet period (unless riding / navigating / phone connected).
 uint32_t lastActivityMs = 0;
-constexpr uint32_t AUTO_SLEEP_MS = 3 * 60 * 1000;    // 3 minutes idle (user, 18 Nov)
+#define AUTO_SLEEP_MS (checkin::idleSleepMs())   // 3 minutes idle (user, 18 Nov); 1 in the 72-hour mode
 // Console override for bench/battery testing. UI task owns both this flag and
 // the command parser. RAM only: every reset restores automatic shutdown.
 bool autoSleepEnabled = true;
@@ -1334,6 +1341,7 @@ static void printConsoleHelp() {
     Serial.println("  mesh forget <slot>   delete a private channel");
     Serial.println("  mesh channel <name> [key]   set the channel (where — retunes)");
     Serial.println("  mesh <on|off>        power the LoRa radio");
+    Serial.println("  checkin [now]        the check-in: state, or send one at the next pass");
     Serial.println("  libopen <title>      open an article (any book)");
     Serial.println("  libsearch <text>     what a search of every book lists, in order");
     Serial.println("  libtext              the open article's lines as the reader keeps them");
@@ -1703,6 +1711,10 @@ static void runConsoleLine(char* line) {
         i18n::setLang(!strcasecmp(arg, "uk") ? i18n::UK : i18n::EN);
     } else if (!strcasecmp(cmd, "libtext")) {   // DOBA: the open article's text as laid out (QA)
         doba_lib::dumpText();
+    } else if (!strcasecmp(cmd, "checkin")) {   // DOBA: checkin [now]
+        if (arg && !strcasecmp(arg, "now")) checkin::dueNow();
+        Serial.printf("[checkin] every %d h, 72-hour mode %s, next in %lu s\n", checkin::hours(),
+                      checkin::longMode() ? "on" : "off", (unsigned long)checkin::secondsToNext());
     } else if (!strcasecmp(cmd, "libsearch") && arg) {   // DOBA: libsearch <text>, the rest of the line
         char t[160];
         const char* rest = strtok(nullptr, "");
@@ -1966,6 +1978,9 @@ TRC("loop");
             lv.page = (unsigned char)screen;
             live_view::publish(lv);
         }
+
+        // A wake only for the check-in: sent, back to sleep.
+        if (checkin::tick(g_state.snapshot())) shutdownDevice(epdc_framebuffer(), "check-in sent");
 
         // Auto-sleep after a quiet period to save battery. Wake with POWER.
         const bool usbPower = onUsbPower();   // first: unplugging restarts the countdown

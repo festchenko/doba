@@ -414,6 +414,7 @@ guides	посібник|посібники|посібників
 books	книга|книги|книг
 texts	текст|тексти|текстів
 documents	документ|документи|документів
+cards	картка|картки|карток
 # --- map strip and header
 MGRS --	MGRS --
 \xE2\x80\xBA %.12s  \xC2\xB7  az %s  \xC2\xB7  %s	\xE2\x80\xBA %.12s  \xC2\xB7  аз %s  \xC2\xB7  %s
@@ -581,3 +582,16 @@ Last position \xC2\xB7 %s ago	Остання позиція \xC2\xB7 %s тому
 no GPS: tap again	без GPS: ще раз
 marked	позначено
 added	додано
+First aid	Перша допомога
+bleeding, CPR, burns, cold, water	кровотеча, СЛР, опіки, холод, вода
+Way back	Шлях назад
+Way back: mark here, lead me back	Шлях назад: позначити тут
+way back marked	шлях назад позначено
+72-HOUR MODE	РЕЖИМ 72 ГОДИНИ
+CHECK-IN	ПЕРЕВІРКА ЗВ’ЯЗКУ
+every %d h	кожні %d год
+off	вимк.
+on: no light, sleep in 1 min	без світла, сон за 1 хв
+for a long outage	для довгого блекауту
+OK + position; last %s	OK + позиція; востаннє %s
+OK + position to all	OK + позиція всім

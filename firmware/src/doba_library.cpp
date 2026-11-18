@@ -49,7 +49,9 @@ const char* kRoot = "/doba/lib";
 
 struct Book { char dir[32]; char name[40]; char source[64]; uint32_t count; uint32_t shown; char unit[16]; char about[100];
               int8_t twin;      // the same book in the other language (<dir>_uk with twin.map), or -1
-              bool isTwin; };   // a translation: reached from its source, not shown on the shelf
+              bool isTwin;      // a translation: reached from its source, not shown on the shelf
+              bool isDraft;     // info.txt draft=1: not yet checked by a person (Doba's first-aid cards)
+              bool isUk; };     // info.txt lang=uk (the language of the notes the reader adds)
 PsArr<Book, MAX_BOOKS> g_books;
 int g_bookCount = -1;      // -1 = not scanned yet
 int g_book = 0;
@@ -247,9 +249,53 @@ IdxFile* openIndex(int bi) {   // under sdLock
     return lru->f ? &lru->f : nullptr;
 }
 
+#include "doba_aid_books.inc"
+
+// Doba's own first-aid cards (library/aid) travel inside the firmware and are
+// written to the card when missing or different: the home page's first-aid
+// bar then works on any card, and a firmware with new cards brings them.
+// Under sdLock.
+void ensureAid() {
+    if (!SD.exists(kRoot)) return;   // no library on this card: leave it alone
+#if OTP_SIM
+    // The sim's tests build their own small libraries and count their books:
+    // the cards go in only where a test asks for them.
+    if (!SD.exists("/doba/aid.on")) return;
+#endif
+    for (const auto& f : kAidFiles) {
+        char path[96];
+        snprintf(path, sizeof path, "%s/%s", kRoot, f.path);
+        bool same = false;
+        File r = SD.open(path, FILE_READ);
+        if (r) {
+            if ((size_t)r.size() == f.size) {
+                same = true;
+                uint8_t buf[256];
+                for (size_t at = 0; same && at < f.size;) {
+                    const size_t n = r.read(buf, f.size - at < sizeof buf ? f.size - at : sizeof buf);
+                    if (!n || memcmp(buf, f.data + at, n)) same = false;
+                    at += n;
+                }
+            }
+            r.close();
+        }
+        if (same) continue;
+        char dir[96];
+        snprintf(dir, sizeof dir, "%s", path);
+        *strrchr(dir, '/') = 0;
+        if (!SD.exists(dir)) SD.mkdir(dir);
+        File w = SD.open(path, FILE_WRITE);
+        if (!w) { Serial.printf("[lib] can't write %s\n", path); continue; }
+        const size_t n = w.write(f.data, f.size);
+        w.close();
+        Serial.printf("[lib] first-aid card file %s written (%u bytes)\n", path, (unsigned)n);
+    }
+}
+
 void scan() {
     g_bookCount = 0;
     sdLock();
+    ensureAid();
     closeIndexes();   // book numbers are about to change
     File root = SD.open(kRoot);
     if (root && root.isDirectory()) {
@@ -276,6 +322,7 @@ void scan() {
             if (!ok) continue;
             b.count = rd32(h + 8);
             b.source[0] = 0;
+            b.isDraft = b.isUk = false;
             snprintf(b.name, sizeof b.name, "%s", b.dir);
             snprintf(path, sizeof path, "%s/%s/info.txt", kRoot, b.dir);
             File info = SD.open(path, FILE_READ);
@@ -292,6 +339,8 @@ void scan() {
                     snprintf(out, cap, "%.*s", (int)len, n);
                 };
                 b.source[0] = b.unit[0] = b.about[0] = 0;
+                b.isDraft = strstr(buf, "\ndraft=1") != nullptr;
+                b.isUk = strstr(buf, "\nlang=uk") != nullptr;
                 field("name=", b.name, sizeof b.name);
                 field("source=", b.source, sizeof b.source);
                 field("\nunit=", b.unit, sizeof b.unit);
@@ -1001,8 +1050,11 @@ bool openArticle(const Result& r) {
     // A twin is a machine translation, and in medicine it gets things wrong
     // ("do not tie the knot over the wound" came out as nonsense, QA 18 Nov):
     // every page of it says so under the title.
-    if (b.isTwin) {
-        static const char kNote[] = "\nCМашинний переклад: якщо щось незрозуміло, звіряйте з англійським текстом (EN).";
+    if (b.isTwin || b.isDraft) {
+        // A draft (Doba's own first-aid cards before a medic has read them)
+        // says so the same way.
+        const char* kNote = b.isDraft ? (b.isUk ? "\nCЧернетка: цей текст ще не перевірив медик." : "\nCDraft: a medic has not yet checked this text.")
+                                      : "\nCМашинний переклад: якщо щось незрозуміло, звіряйте з англійським текстом (EN).";
         const size_t nl = strlen(kNote);
         const char* firstEnd = (const char*)memchr(g_text, '\n', g_textLen);
         const size_t at = firstEnd ? (size_t)(firstEnd - g_text) : g_textLen;
@@ -3428,6 +3480,17 @@ bool takePlace(double& lat, double& lon, char* name, size_t n) {
     g_geoPending = false;
     lat = g_geoLat; lon = g_geoLon;
     snprintf(name, n, "%s", g_geoName);
+    return true;
+}
+
+// The home page's first-aid bar: the library, opened on a book's own page
+// (its menu), not on the shelves. false: no such book on the card.
+bool showBook(const char* dir) {
+    count();
+    const int b = bookIndex(dir);
+    if (b < 0) { Serial.printf("[lib] no book %s\n", dir); return false; }
+    g_open = b; g_listPage = 0; g_bookAZ = false; g_view = V_BOOK;
+    Serial.printf("[lib] book %s\n", g_books[b].dir);
     return true;
 }
 

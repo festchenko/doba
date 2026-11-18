@@ -44,7 +44,8 @@ void leaveArticle();
 bool libraryBack();
 bool typing();                       // the search keyboard is up (taps are keys: no "busy" mark)
 // Open an article by its title, in the first book that has it (a console command for tests).
-bool openTitle(const char* title);                  // section/search view -> library home; false at home
+bool openTitle(const char* title);
+bool showBook(const char* dir);   // the library on that book's page (home's first-aid bar)                  // section/search view -> library home; false at home
 const char* libraryTitle();          // status-bar title for the current library view                 // forget the link history
 
 // Title folding, identical to library/zim2doba.py fold(): lower case, accents

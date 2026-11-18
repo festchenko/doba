@@ -16,6 +16,7 @@
 #include "device_state.h"
 #include "gps_service.h"
 #include "rtc_clock.h"
+#include "doba_checkin.h"
 #include "settings.h"
 #include "doba_battery.h"
 #include "sd_card.h"
@@ -567,6 +568,7 @@ void setup() {
     // sky. Position alone still narrows the search; time is added when valid.
     {
         double alat, alon;
+        checkin::begin(esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER);   // DOBA: woken by the check-in timer?
         if (settings::lastPosition(alat, alon)) {
             time_t now = time(nullptr);
             bool haveTime = now > 1735689600;   // clock set since 2025-01-01?

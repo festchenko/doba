@@ -1,0 +1,154 @@
+# Doba first-aid cards, English. "= Title | line under it", "# heading",
+# "- step", other lines are text. Draft: to be checked by a medic before use.
+
+= How to use these cards | read first
+Short steps for the first minutes, until help comes. They do not replace training.
+# Always first
+- Make sure you are safe: traffic, fire, gas, water, electricity, shooting. Do not become the second casualty.
+- Call 112 (or have someone call) as early as you can. 112 works across Europe; in Ukraine also 103 for an ambulance, 101 for rescue.
+- Stop heavy bleeding first, then check breathing.
+- Say what you do. Write down times (tourniquet, when symptoms started).
+Draft: these cards have not yet been checked by a medic.
+
+= Severe bleeding | press, pack, tourniquet
+# Do now
+- Call 112. Protect your hands (gloves, a plastic bag) if you can.
+- Press hard, straight on the wound, with a cloth or your hands. Keep pressing; do not lift to look.
+- Blood soaks through: put more cloth on top and press harder. Do not remove the first layer.
+- Deep wound in the neck, armpit or groin, or bleeding that will not stop: pack the wound. Push cloth or gauze deep into it until it is full, then press hard for at least 3 minutes.
+- Arm or leg, blood spurting or pooling, or pressure does not stop it: tourniquet (next card).
+- Lay the person down, keep them warm, and keep checking breathing.
+# Do not
+- Do not pull out an object stuck in the wound: pad around it and press around it.
+- Do not give food or drink.
+
+= Tourniquet | arm or leg only
+- Only on an arm or a leg.
+- Put it 5 to 7 cm above the wound, not on a joint. If you cannot see the wound: high on the limb, as close to the body as you can.
+- Pull the strap tight, then twist the rod until the bleeding stops. Lock the rod.
+- Write the time on the tourniquet or on the forehead: "T 14:20".
+- Do not loosen it and do not take it off. Only medical staff remove it.
+- Still bleeding: put a second tourniquet just above the first.
+- It hurts a lot. That is normal and means it works.
+# No tourniquet
+- Improvise: a strip of cloth at least 4 cm wide, and a stick to twist it. Never wire, string or a thin cord.
+- Until then: press hard on the wound.
+
+= CPR | 30 pushes, 2 breaths
+- Safe? Shout and shake the shoulders.
+- No answer and not breathing normally (gasping is not normal breathing): call 112, put the phone on speaker, send someone for an AED (defibrillator).
+- Kneel beside them. Heel of one hand in the centre of the chest, the other hand on top.
+- Push down 5 to 6 cm, 100 to 120 times a minute (the beat of "Stayin' Alive"). Let the chest rise fully between pushes.
+- After 30 pushes: tilt the head back, lift the chin, pinch the nose, give 2 breaths of 1 second each, watching the chest rise.
+- Cannot or will not give breaths: just push, without stopping.
+- AED arrives: switch it on and do what it says.
+- Do not stop until help takes over, the person wakes and breathes normally, or you are exhausted. Change with someone every 2 minutes.
+# Child or drowning
+- Give 5 breaths first, then 30 pushes and 2 breaths.
+- Child: one hand (or two fingers for a baby), a third of the chest's depth.
+
+= Unconscious, breathing | on the side
+- Not responding but breathing normally: put them on their side (recovery position).
+- Near arm out at a right angle, far hand under the cheek, far knee bent; roll them towards you by the knee.
+- Tilt the head back so the mouth points down and can drain.
+- Call 112. Check breathing every minute. Breathing stops: CPR.
+- Keep them warm.
+- Suspected neck or back injury (a fall, a crash): move them only to keep the airway open.
+
+= Choking | back blows, belly thrusts
+- Can cough or speak: let them cough. Stay with them.
+- Cannot breathe, speak or cough: lean them forward, give up to 5 hard blows between the shoulder blades with the heel of your hand.
+- Still choking: stand behind, fist just above the navel, other hand on it, pull hard in and up, up to 5 times.
+- Repeat 5 blows and 5 thrusts until it comes out.
+- They go limp: lower them down, call 112, start CPR.
+- Baby under 1 year: face down on your forearm, 5 back blows; then on the back, 5 chest pushes with two fingers. No belly thrusts.
+- Pregnant or very large person: chest thrusts instead of belly thrusts.
+- After belly thrusts, a doctor should check them.
+
+= Burn | cool 20 minutes
+- Stop the burning: put out flames, move away from the heat.
+- Cool the burn under cool running water for 20 minutes. Not ice, not iced water. Still helps up to 3 hours later.
+- Take off rings, watches and clothing near the burn, unless stuck to the skin.
+- Cover loosely with cling film or a clean cloth that does not shed fluff.
+- Keep the person warm (cool the burn, not the person).
+# Call 112
+- Burn bigger than their hand, on the face, hands, feet, groin or a joint, in the mouth or throat, from chemicals or electricity, or on a child.
+# Do not
+- No butter, oil, cream, toothpaste. Do not burst blisters.
+- Chemical: brush off powder first, then rinse for at least 20 minutes.
+
+= Broken bone | do not straighten
+- Keep the limb still, as you found it. Do not try to straighten it.
+- Open wound over the bone: cover it with a clean cloth, press around the bone, not on it.
+- Splint only if you must move: pad it, and tie it to something stiff (a board, sticks, rolled newspaper) so the joint above and below cannot move.
+- Check fingers or toes after tying: cold, pale, blue or numb, then loosen.
+- Arm: a sling; a leg can be tied to the other leg.
+- Neck or back injury possible: do not move them unless there is danger.
+- Watch for shock: pale, cold, sweaty, fast pulse. Lay them down, keep warm.
+- Nothing to eat or drink: they may need an operation.
+
+= Hypothermia | cold, shivering, confused
+# Signs
+- Shivering, slurred speech, clumsy, confused, sleepy. Severe: shivering stops.
+# Do
+- Out of wind, rain and snow. Into a shelter, a car, a building.
+- Wet clothes off, dry clothes on. Insulate from the ground. Cover the head.
+- Warm slowly: blankets, a sleeping bag, your body against theirs. Warm sweet drinks only if fully awake.
+- Handle gently and keep them lying down.
+- Call 112. Not breathing normally: CPR.
+# Do not
+- No alcohol. Do not rub the arms and legs. No hot bath for a severe case.
+
+= Heat stroke | hot, confused: cool now
+# Signs
+- Hot skin, headache, confusion, strange behaviour, fainting, fits. May have stopped sweating.
+# Do
+- Call 112: this kills.
+- Into the shade, clothes off down to underwear.
+- Cool fast: pour cool water over them and fan; cold packs or ice in the neck, armpits and groin. Into cool water if you can.
+- Sips of water only if fully awake.
+- Unconscious and breathing: on the side. Not breathing: CPR.
+# Heat exhaustion
+- Sweaty, weak, dizzy, headache, still thinking clearly: rest in the shade, drink water or rehydration solution, cool down. Gets worse: as heat stroke.
+
+= Safe water | boil, bleach, settle
+- Cloudy: let it settle, pour off the clear water, filter it through a clean cloth first.
+- Boil: a full rolling boil for 1 minute (3 minutes above 2000 m). Let it cool, keep it covered.
+- No fire: unscented household bleach (4 to 6 % chlorine). 2 drops per litre; 4 drops if cloudy or very cold. Stir, wait 30 minutes. It should smell slightly of chlorine; if not, add the same again and wait 15 minutes more.
+- Purification tablets: as the packet says.
+- Sun: clear plastic bottle up to 2 litres, clear water, 6 hours in full sun (2 days if cloudy).
+- Fuel, chemicals or poison in the water: boiling does not help. Find other water.
+- Store safe water covered, in a clean container; scoop out with a clean cup.
+# Rehydration solution
+- 1 litre of safe water, 6 level teaspoons of sugar, half a level teaspoon of salt. Small sips often.
+
+= Carbon monoxide | out to fresh air
+# Signs
+- Headache, dizziness, sickness, tiredness, confusion. Several people or pets ill at once. Better outside.
+# Do
+- Everyone out into fresh air now. Do not go back in.
+- Call 112. Unconscious: on the side. Not breathing: CPR.
+# Prevent
+- Never run a generator, a grill, a gas heater or a camping stove inside, in a garage or in a tent. Generators at least 6 m from windows and doors.
+
+= Radiation or chemicals | in, stay in, listen
+# Radiation
+- Get inside a solid building, now. Go to the middle or the basement, away from windows.
+- Close windows and doors, switch off the ventilation.
+- Were outside: take off the outer clothes, put them in a bag. Wash hands, face and hair with soap and water (no conditioner).
+- Stay inside until the authorities say otherwise (at least 24 hours). Listen to the radio.
+- Iodine tablets only when the authorities say so.
+# Chemical cloud
+- Go away from the smell, across the wind.
+- Chlorine is heavier than air: go up, to high floors. Ammonia is lighter: go down.
+- Cover nose and mouth with a wet cloth. Close windows and doors, seal gaps with wet cloth or tape.
+- Splashed: take off the clothes, rinse the skin and eyes with plenty of water for 20 minutes.
+
+= Calling for help | 112, three of anything
+- 112: emergency number across Europe and in Ukraine. Say where you are first (the MGRS from Position), then what happened.
+- Doba: SOS on the home page, hold 5 seconds. It is sent over the radio with your position and repeated every 5 minutes.
+- Three of anything means distress: 3 whistle blasts, 3 flashes, 3 shouts, 3 fires in a triangle. Repeat every minute.
+- Morse SOS: three short, three long, three short.
+- On the ground, big (3 m) and contrasting: V = need help, X = need medical help, an arrow = we went this way.
+- To an aircraft: both arms up (a Y) = yes, we need help. One arm up, one down = no.
+- Stay where you are if people know your route: it is easier to find you.

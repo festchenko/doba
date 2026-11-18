@@ -22,29 +22,32 @@ Doba is firmware and a data pipeline for the **LilyGo T5 E-Paper S3 Pro**: a 4.7
 
 - **topographic maps with a military grid (MGRS)**, your position, points and places nearby;
 - **an offline library**: Wikipedia with pictures, field medicine, repair guides, field manuals, classics, dictionaries and your own EPUB/PDF books;
-- **text messaging without any network** over LoRa, compatible with **Meshtastic**;
+- **text messaging without any network** over LoRa, compatible with **Meshtastic**, with an SOS and a timed "I am OK" check-in;
+- **first-aid cards** in English and Ukrainian, one tap from home;
 - **a paper card when switched off**: e-ink keeps the image with no power, so the off screen shows where you were, tomorrow's daylight, an *if found* card and an emergency crib.
 
 There is no account, no cloud, no app, and nothing transmits unless you switch the radio on. The radio is the only thing that can transmit: there is no Bluetooth and no Wi-Fi in the firmware.
 
-> **Status:** personal project, in active use. Built and tested on the simulator and on real hardware (H752-01). The interface is in **English and Ukrainian**.
+> **Status:** personal project, in active use. Built and tested on the simulator (120+ automated tests) and on real hardware (H752-01); a full QA pass on 18 Nov 2026. The interface is in **English and Ukrainian**.
 
 ## Features
 
 | | |
 |---|---|
 | **Maps** | Vector topographic tiles drawn for 4-grey e-ink: roads, buildings, forests, water, contour lines from a DEM, hillside heights. North-up or course-up, from street level to the whole country. Most of Europe plus Ukraine, built region by region. |
+| **First aid** | A bar on the home page opens Doba's own short cards, in the interface's language: severe bleeding, tourniquet, CPR, recovery position, choking, burns, fractures, hypothermia, heat stroke, safe water, carbon monoxide, radiation and chemicals, calling for help. They travel inside the firmware and are written to the card by themselves. Marked as a draft until a medic has checked them. |
 | **Navigation** | MGRS position with 1 m digits, latitude/longitude, magnetic declination, azimuth in mils (6000 UA or 6400 NATO) and degrees. A measuring cross: distance and compass azimuth from you or from point A, ground height and water depth under it. |
-| **Points & places** | Save points from GPS, from the map or typed as MGRS; "go here" with distance and azimuth. Nearby: hospitals, doctors, pharmacies, water, food shops, farms, shelters, bunkers, underground parking, all from OpenStreetMap, offline. |
-| **Library** | Kiwix ZIM archives converted to a light format the ESP32 reads quickly: Wikipedia (EN, UK) with pictures, WikiMed, iFixit, Appropedia, Stack Exchange Q&A, Wikisource and Gutenberg classics, Wikivoyage, Wiktionary, US field manuals, plus your own PDF/EPUB/Markdown. Topic pages (first aid, water, fire, shelter, food…) and three emergency buttons. |
+| **Points & places** | Save points from GPS, from the map or typed as MGRS; "go here" with distance and azimuth. **Way back**: one tap marks where you stand (the car, the camp) and leads you back to it. Without a GPS fix (indoors), the last position stands in, with its age. Nearby: hospitals, doctors, pharmacies, water, food shops, farms, shelters, bunkers, underground parking, all from OpenStreetMap, offline. |
+| **Library** | Kiwix ZIM archives converted to a light format the ESP32 reads quickly: Wikipedia (EN, UK) with pictures, WikiMed, iFixit, Appropedia, Stack Exchange Q&A, Wikisource and Gutenberg classics, Wikivoyage, Wiktionary, US field manuals, plus your own PDF/EPUB/Markdown. Topic pages (first aid, water, fire, shelter, food…) and three emergency buttons. Search puts the medical books first. First-aid rows open on the article's "what to do" part. Ukrainian machine translations say so under every title. |
 | **Reader** | Serif text with Cyrillic hyphenation, pictures and captions, contents, links and back, text size. Long books **reopen where you stopped**, even after a restart. |
-| **Comms** | LoRa SX1262, Meshtastic-compatible channels and direct messages, node list with distance and bearing, quick phrases, an on-screen keyboard (EN/UA). **SOS** repeats your MGRS position on the mesh every 5 minutes. |
+| **Comms** | LoRa SX1262, Meshtastic-compatible channels and direct messages, node list with distance and bearing, quick phrases, an on-screen keyboard (EN/UA). **SOS** repeats your MGRS position on the mesh every 5 minutes (the last known one, with its age, when there is no fix). **Check-in**: every 2–24 h Doba sends "OK", its name, position and time to the channel, waking from sleep to do it. |
 | **Stealth** | One switch: radio silent (or listen-only), light off, screen dim. |
 | **Sun & moon** | Sunrise, sunset, civil twilight, daylight left and moon phase, offline. |
 | **Battery** | Measured current and time left at this pace, and an estimated split of where the charge goes (GPS, radio, light, screen updates). |
-| **Power** | Switched off from the menu, the battery is fully disconnected (ship mode), so the device keeps for months and starts with the POWER key. |
+| **72-hour mode** | One switch for a long outage: light off, sleep after 1 minute idle, a check-in every 6 hours. |
+| **Power** | Sleeps after 3 minutes idle (not on the cable). Switched off from the menu, the battery is fully disconnected (ship mode), so the device keeps for months and starts with the POWER key. |
 | **Off screen** | MGRS and coordinates where it was switched off, time and charge, a map, tomorrow's light, the *if found* card and an emergency crib (112, SOS in Morse, ground-to-air signals, rule of three). |
-| **Library management** | Delete a whole book from its page to free space on the card. |
+| **Library management** | Delete a whole book from its page to free space on the card. Books go onto the card with a card reader (`tools/doba_card.py write`); the device does not act as a USB drive. |
 
 ## Screens
 

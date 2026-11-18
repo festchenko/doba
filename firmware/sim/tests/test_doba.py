@@ -97,7 +97,7 @@ def test_points_from_the_card_show_azimuth_and_go_to_sets_the_map(doba):
     time.sleep(2)
     doba.console("screen points", 800)
     time.sleep(0.8)
-    doba.tap(270, TOP + 436 + 40)                           # CAMP
+    doba.tap(270, TOP + 510 + 40)                           # CAMP
     time.sleep(0.8)
     doba.tap(270, 960 - 196 + 40)                           # GO TO
     doba.wait_status(lambda s: s["screen"] == "map", timeout=5)
@@ -570,7 +570,7 @@ def test_nearby_lists_the_nearest_of_each_kind_and_a_tap_goes_there(doba):
     time.sleep(2)
     doba.console("screen points", 800)
     time.sleep(0.8)
-    doba.tap(440, TOP + 436 - 24)                           # Nearby places ›
+    doba.tap(440, TOP + 510 - 24)                           # Nearby places ›
     time.sleep(1.0)
     doba.screenshot(os.path.join(doba.dir, "nearby.png"))
     since = doba.log_seq()
@@ -1037,3 +1037,83 @@ def test_a_first_aid_row_opens_on_what_to_do(doba):
         doba.wait_log(r"\[lib\] open at 'Management', page ([2-9]|[1-9][0-9])\b", since=since)
     except Exception:
         raise AssertionError([l for l in doba.log(since) if "[lib]" in l])
+
+
+def test_first_aid_is_one_tap_from_home_and_says_it_is_a_draft(doba):
+    """QA 18 Nov: in trouble the library's articles kept what to do on page 15.
+    Home has a first-aid bar: Doba's own short cards, in the interface's
+    language, each saying it is a draft until a medic has read it."""
+    # The cards travel in the firmware (library/aid/make_inc.py): on a card
+    # with a library, Doba writes them itself.
+    os.makedirs(os.path.join(doba.sd, "doba", "lib"), exist_ok=True)
+    open(os.path.join(doba.sd, "doba", "aid.on"), "w").close()   # the sim writes them only when asked
+    boot(doba)
+    assert os.path.exists(os.path.join(doba.sd, "doba", "lib", "aid_uk", "index.dti"))
+    doba.screenshot(os.path.join(doba.dir, "aid_home.png"))
+    since = doba.log_seq()
+    doba.tap(270, 818)                                       # the first-aid bar
+    doba.wait_log(r"\[lib\] book aid_en", since=since)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(200, TOP + 176 + 50 + 40 + 88)                 # the second row: Severe bleeding
+    doba.wait_log(r"\[lib\] open 'Severe bleeding'", since=since)
+    time.sleep(0.8)
+    doba.screenshot(os.path.join(doba.dir, "aid_card.png"))
+    doba.console("libtext", 800)
+    text = "\n".join(l for l in doba.log(since) if l.startswith("[libtext]"))
+    assert "CDraft: a medic has not yet checked this text." in text and "BPress hard" in text, text
+    doba.console("lang uk", 600)
+    doba.console("screen home", 800)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(270, 818)
+    doba.wait_log(r"\[lib\] book aid_uk", since=since)
+    time.sleep(0.8)
+    doba.screenshot(os.path.join(doba.dir, "aid_menu_uk.png"))
+
+
+def test_way_back_marks_here_as_the_target_and_moves_on_a_second_tap(doba):
+    """One tap on Position: where you stand becomes 'Way back', the target (home
+    and the map show its azimuth and distance). Later it moves, never doubles."""
+    boot(doba)
+    doba.gps(52.0421, 6.6170)
+    doba.wait_status(lambda s: s["ride"]["gps_fix"], timeout=15)
+    doba.console("screen points", 800)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(270, TOP + 384 + 30)                           # Way back
+    doba.wait_log(r"\[points\] way back 52\.04210,6\.61700 \(#0, target\)", since=since)
+    doba.gps(52.0500, 6.6300)
+    time.sleep(2)
+    since = doba.log_seq()
+    doba.tap(270, TOP + 384 + 30)
+    doba.wait_log(r"\[points\] way back 52\.05000,6\.63000 \(#0, target\)", since=since)
+    with open(os.path.join(doba.sd, "doba", "points.txt")) as f:
+        lines = [l for l in f.read().splitlines() if l.startswith("Way back;")]
+    assert len(lines) == 1 and lines[0].startswith("Way back;52.05"), lines
+
+
+def test_the_72_hour_mode_dims_and_checks_in_with_ok_and_position(doba):
+    """72-hour mode: light off, check-in every 6 h. A check-in sends 'OK', the
+    name, the MGRS and the time to the channel."""
+    boot(doba)
+    doba.gps(52.0421, 6.6170)
+    doba.wait_status(lambda s: s["ride"]["gps_fix"], timeout=15)
+    doba.console("screen more", 800)
+    time.sleep(0.8)
+    doba.tap(500, TOP + 4 + 34 + 3 * 78 + 39)               # 72-HOUR MODE: on
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.console("checkin", 600)
+    try:
+        doba.wait_log(r"\[checkin\] every 6 h, 72-hour mode on", since=since)
+    except Exception:
+        raise AssertionError(doba.log(since)[-15:])
+    doba.console("mesh on", 600)                            # (a check-in turns it on too; slower in the sim)
+    doba.wait_status(lambda s: s.get("mesh", {}).get("enabled", True), timeout=10)
+    time.sleep(2)
+    doba.console("checkin now", 600)
+    try:
+        doba.wait_log(r"\[checkin\] sent: OK \S.* 32U LC \d+ \d+ \d{4}Z", since=since, timeout=20)
+    except Exception:
+        raise AssertionError([l for l in doba.log(0) if "checkin" in l or "mesh" in l or "stealth" in l][-25:])

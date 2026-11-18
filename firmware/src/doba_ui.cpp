@@ -12,14 +12,17 @@ namespace pg {
 struct Tile { EpdRect r; const char* title; Go go; };
 void sosSubtitle(char* out, size_t n);
 void renderStealthBar(uint8_t* fb);
+void renderAidBar(uint8_t* fb);
 void sunSubtitle(const DeviceState& s, char* out, size_t n);
 // The design canvas's home: 24 px margins, 14 px gaps, rounded tiles.
 constexpr int MARGIN = 24, TILE_GAP = 14;
 constexpr int TILE_W = (W - 2 * MARGIN - TILE_GAP) / 2;
 constexpr int STEALTH_H = 72;
 constexpr int TILE_TOP = TOP + 6;
-constexpr int TILE_H = (H - 24 - STEALTH_H - TILE_GAP - TILE_TOP - 3 * TILE_GAP) / 4;
+constexpr int AID_H = 64;   // the first-aid bar, over the stealth bar
+constexpr int TILE_H = (H - 24 - STEALTH_H - TILE_GAP - AID_H - TILE_GAP - TILE_TOP - 3 * TILE_GAP) / 4;
 const EpdRect kStealthBar = {MARGIN, H - 24 - STEALTH_H, W - 2 * MARGIN, STEALTH_H};
+const EpdRect kAidBar = {MARGIN, H - 24 - STEALTH_H - TILE_GAP - AID_H, W - 2 * MARGIN, AID_H};
 uint32_t g_stealthOffAsk = 0;   // a short tap on a lit stealth bar: say to hold
 uint32_t g_pressMs = 0;         // how long the finger was down for this tap
 
@@ -163,7 +166,23 @@ void renderHomePage(const DeviceState& s, uint8_t* fb) {
                      EPD_DRAW_ALIGN_CENTER, PAPER);
         }
     }
+    renderAidBar(fb);
     renderStealthBar(fb);
+}
+
+// First aid, one tap from home (QA 18 Nov: in trouble, the library's
+// encyclopedia articles kept what to do on page 15). Doba's own short cards,
+// in the language of the interface.
+void renderAidBar(uint8_t* fb) {
+    const EpdRect r = kAidBar;
+    ui::frameRound(r, 8, 3, fb);
+    // a cross, drawn: the bar is found without reading
+    const int cx = r.x + 36, cy = r.y + r.height / 2;
+    epd_fill_rect({cx - 7, cy - 20, 14, 40}, INK, fb);
+    epd_fill_rect({cx - 20, cy - 7, 40, 14}, INK, fb);
+    ui::text(ui::font(ui::F_KEY), r.x + 70, r.y + 30, TR("First aid"), fb, EPD_DRAW_ALIGN_LEFT, INK);
+    ui::text(ui::font(ui::F_SMALL), r.x + 70, r.y + r.height - 12, TR("bleeding, CPR, burns, cold, water"), fb,
+             EPD_DRAW_ALIGN_LEFT, ui::GREY);
 }
 
 // The stealth bar: one tap hides the device; going loud again takes a second
@@ -199,6 +218,11 @@ Go tapHome(int x, int y) {
         else if (g_pressMs >= kHoldMs) { stealth::set(false); g_stealthOffAsk = 0; }
         else g_stealthOffAsk = millis();
         return STAY;
+    }
+    if (hit(kAidBar, x, y)) {
+        const bool uk = i18n::lang() == i18n::UK;
+        if (!doba_lib::showBook(uk ? "aid_uk" : "aid_en")) doba_lib::showBook(uk ? "aid_en" : "aid_uk");
+        return TO_LIBRARY;
     }
     for (const Tile& t : kTiles)
         if (hit(t.r, x, y)) {
