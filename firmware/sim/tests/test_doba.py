@@ -953,3 +953,22 @@ def test_a_donation_line_and_an_empty_example_are_not_shown(doba):
     assert "Накладіть турнікет вище рани." in text, text
     assert "Підтримайте" not in text and "Завантажити" not in text and "Немає прикладів" not in text, text
 
+
+
+def test_a_machine_translation_says_so_under_the_title(doba):
+    """QA 18 Nov: the Ukrainian twins are machine translations, and in medicine
+    they get things dangerously wrong. Every page of a twin says so; the
+    source book does not."""
+    import struct
+    lib = os.path.join(doba.sd, "doba", "lib")
+    write_book(os.path.join(lib, "med"), "Med", [("Tourniquet", "TTourniquet\nP" + "Text. " * 40)])
+    write_book(os.path.join(lib, "med_uk"), "Мед", [("Турнікет", "TТурнікет\nP" + "Текст. " * 40)])
+    open(os.path.join(lib, "med_uk", "twin.map"), "wb").write(b"DOBATW1\0" + struct.pack("<I", 0))
+    boot(doba)
+    for title, note in (("Турнікет", True), ("Tourniquet", False)):
+        since = doba.log_seq()
+        doba.console("libopen " + title, 800)
+        doba.wait_log(r"\[lib\] open", since=since)
+        doba.console("libtext", 800)
+        text = "\n".join(l for l in doba.log(since) if l.startswith("[libtext]"))
+        assert ("Машинний переклад" in text) == note, text

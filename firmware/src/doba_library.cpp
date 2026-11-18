@@ -41,7 +41,7 @@ constexpr int W = 540, H = 960, TOP = ui::STATUS_H;
 constexpr uint8_t INK = 0x00, PAPER = 0xFF;
 constexpr int REC = 128, KEY = 56, HDR = 32;
 constexpr size_t MAX_TEXT = 1536 * 1024;      // inflated article cap (PSRAM)
-constexpr size_t SOURCE_ROOM = 256;           // kept free for the "Source:" line
+constexpr size_t SOURCE_ROOM = 384;           // kept free for the "Source:" line
 constexpr int MAX_BOOKS = 64;   // one bit each in a uint64 mask (BookMask)
 typedef uint64_t BookMask;
 constexpr int RESULTS = 6;
@@ -972,6 +972,21 @@ bool openArticle(const Result& r) {
     g_textLen = n;
     g_text[n] = 0;
     tidyText();
+    // A twin is a machine translation, and in medicine it gets things wrong
+    // ("do not tie the knot over the wound" came out as nonsense, QA 18 Nov):
+    // every page of it says so under the title.
+    if (b.isTwin) {
+        static const char kNote[] = "\nCМашинний переклад: якщо щось незрозуміло, звіряйте з англійським текстом (EN).";
+        const size_t nl = strlen(kNote);
+        const char* firstEnd = (const char*)memchr(g_text, '\n', g_textLen);
+        const size_t at = firstEnd ? (size_t)(firstEnd - g_text) : g_textLen;
+        if (g_text[0] == 'T' && g_textLen + nl <= g_textCap) {
+            memmove(g_text + at + nl, g_text + at, g_textLen - at);
+            memcpy(g_text + at, kNote, nl);
+            g_textLen += nl;
+            g_text[g_textLen] = 0;
+        }
+    }
     extractLinks();
     // Every article names where it came from (info.txt source=, else the book).
     const char* src = b.source[0] ? b.source : b.name;

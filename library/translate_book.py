@@ -40,6 +40,27 @@ def split_sentences(text):
     return out
 
 
+# Words the translator gets wrong in these books, fixed after it: "knots" came
+# out as "ноти" (musical notes) all through knots_uk, disaster_uk and
+# medicine_uk (QA 18 Nov). Applied only when the English line has the word.
+GLOSSARY = [
+    (re.compile(r"\bknots?\b", re.I), [
+        (r"\bНоти\b", "Вузли"), (r"\bноти\b", "вузли"), (r"\bНот\b", "Вузлів"), (r"\bнот\b", "вузлів"),
+        (r"\bнотами\b", "вузлами"), (r"\bнотах\b", "вузлах"), (r"\bнотам\b", "вузлам"),
+        (r"\bНота\b", "Вузол"), (r"\bнота\b", "вузол"), (r"\bноту\b", "вузол"), (r"\bноти\b", "вузли"),
+        (r"\bKnots\b", "Вузли"), (r"\bknots\b", "вузли"), (r"\bKnot\b", "Вузол"), (r"\bknot\b", "вузол"),
+    ]),
+]
+
+
+def glossary(src, uk):
+    for when, fixes in GLOSSARY:
+        if when.search(src):
+            for a, b in fixes:
+                uk = re.sub(a, b, uk)
+    return uk
+
+
 def setup(model):
     import argostranslate.package as pkg
     import argostranslate.sbd as sbd
@@ -140,7 +161,7 @@ def main():
             return s
         if s not in memo:
             try:
-                memo[s] = t.translate(s)
+                memo[s] = glossary(s, t.translate(s))
             except Exception as e:
                 print("  !! " + str(e)[:80], file=sys.stderr)
                 memo[s] = s

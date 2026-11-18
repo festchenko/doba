@@ -130,3 +130,12 @@ def test_a_long_title_is_translated_whole(tmp_path):
                    check=True, capture_output=True)
     idx = open(os.path.join(out, "index.dti"), "rb").read()
     assert idx[32:88].rstrip(b"\0") == key("Укр " + title).rstrip(b"\0")
+
+
+def test_knots_are_knots_not_music():
+    """Argos turned "knots" into "ноти" (musical notes) all through knots_uk."""
+    sys.path.insert(0, LIB)
+    from translate_book import glossary
+    assert glossary("Knots for Mountaineering", "Ноти для гірського") == "Вузли для гірського"
+    assert glossary("Tie the knot", "Зв'яжіть ноту") == "Зв'яжіть вузол"
+    assert glossary("Sheet music", "Ноти") == "Ноти"   # only where the English has the word
