@@ -806,6 +806,41 @@ bool junkLine(const char* b, size_t n) {
     if (is("прослухати вимову") || is("Від ??") || is("Корінь: --.") || is("listen")) return true;
     return n >= 4 && !memcmp(b + n - 4, ": []", 4);   // an empty transcription
 }
+// Wiki markup that slipped through the converter, inside one line: a caption's
+// "|thumb]]" tail, a "{{template}}". Cut in place; returns the new length.
+// QA 18 Nov: "джгут зі спеціальним кріпленням.|thumb]]" under a picture.
+uint32_t stripCrumbs(char* l, uint32_t n) {
+    for (int guard = 0; guard < 8; ++guard) {
+        char* end = (char*)memmem(l, n, "]]", 2);
+        char* open = (char*)memmem(l, n, "{{", 2);
+        if (end) {
+            char* bar = nullptr;
+            for (char* p = end; p > l; --p)
+                if (p[-1] == '|') { bar = p - 1; break; } else if (p[-1] == '[') break;
+            char* from = bar ? bar : end;
+            const uint32_t cut = (uint32_t)(end + 2 - from);
+            memmove(from, end + 2, n - (uint32_t)(end + 2 - l));
+            n -= cut;
+            continue;
+        }
+        if (open) {
+            char* close = (char*)memmem(open, n - (uint32_t)(open - l), "}}", 2);
+            if (!close) break;
+            const uint32_t cut = (uint32_t)(close + 2 - open);
+            memmove(open, close + 2, n - (uint32_t)(close + 2 - l));
+            n -= cut;
+            if (open > l && open[-1] == ' ' && (uint32_t)(open - l) < n && open[0] == ' ') {   // "a {{x}} b": one space
+                memmove(open, open + 1, n - (uint32_t)(open + 1 - l));
+                --n;
+            }
+            continue;
+        }
+        break;
+    }
+    while (n > 1 && l[n - 1] == ' ') --n;
+    return n;
+}
+
 void tidyText() {
     constexpr int MAXL = 8192;
     static PsArr<uint32_t, MAXL> st, ln;
@@ -818,6 +853,9 @@ void tidyText() {
         i = e + 1;
     }
     if (nl >= MAXL) return;   // too long to bother: as it is
+    for (int k = 0; k < nl; ++k)
+        if (ln[k] > 1 && g_text[st[k]] != 'I' && (memmem(g_text + st[k], ln[k], "]]", 2) || memmem(g_text + st[k], ln[k], "{{", 2)))
+            ln[k] = stripCrumbs(g_text + st[k], ln[k]);
     static PsArr<uint8_t, MAXL> keep;
     for (int k = 0; k < nl; ++k) {
         const char* l = g_text + st[k];
@@ -3296,6 +3334,18 @@ void follow(int link) {
 }
 
 }  // namespace
+
+void dumpText() {
+    if (!g_text) { Serial.println("[libtext] none"); return; }
+    Serial.printf("[libtext] %u bytes\n", (unsigned)g_textLen);
+    size_t i = 0;
+    while (i < g_textLen) {
+        size_t e = i;
+        while (e < g_textLen && g_text[e] != '\n') ++e;
+        Serial.printf("[libtext] %.*s\n", (int)(e - i), g_text + i);
+        i = e + 1;
+    }
+}
 
 bool takePlace(double& lat, double& lon, char* name, size_t n) {
     if (!g_geoPending) return false;

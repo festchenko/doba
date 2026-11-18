@@ -931,3 +931,19 @@ def test_a_place_in_an_article_opens_on_the_map(doba, tmp_path):
             break
     assert hit, "no tap reached the place link"
     doba.wait_log(r"\[map\] over the target Rynok Square ho", since=since, timeout=5)
+
+
+def test_wiki_markup_left_in_a_line_is_cut(doba):
+    """A caption's '|thumb]]' tail and '{{...}}' templates that slipped past the
+    converter (wiki_uk 'Джгут', QA 18 Nov) do not reach the page."""
+    body = ("TДжгут\nCджгут зі спеціальним кріпленням.|thumb]]\n"
+            "PТурнікет {{cite web|url=x}} накладають вище рани.\nP" + "Текст. " * 40)
+    write_book(os.path.join(doba.sd, "doba", "lib", "med"), "Med", [("Джгут", body)])
+    boot(doba)
+    since = doba.log_seq()
+    doba.console("libopen Джгут", 800)
+    doba.wait_log(r"\[lib\] open", since=since)
+    doba.console("libtext", 800)
+    text = "\n".join(l for l in doba.log(since) if l.startswith("[libtext]"))
+    assert "thumb" not in text and "{{" not in text and "]]" not in text, text
+    assert "кріпленням." in text and "Турнікет накладають вище рани." in text, text

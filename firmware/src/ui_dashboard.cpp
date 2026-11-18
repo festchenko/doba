@@ -1724,6 +1724,8 @@ static void runConsoleLine(char* line) {
         diag::log("dbg timing %s", dbgTiming ? "ON" : "OFF");
     } else if (!strcasecmp(cmd, "lang") && arg) {   // DOBA: lang en|uk
         i18n::setLang(!strcasecmp(arg, "uk") ? i18n::UK : i18n::EN);
+    } else if (!strcasecmp(cmd, "libtext")) {   // DOBA: the open article's text as laid out (QA)
+        doba_lib::dumpText();
     } else if (!strcasecmp(cmd, "libopen") && arg) {   // DOBA: libopen <title>, the rest of the line
         char t[160];
         const char* rest = strtok(nullptr, "");
