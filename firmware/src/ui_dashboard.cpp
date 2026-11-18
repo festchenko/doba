@@ -640,7 +640,21 @@ void dobaGo(doba_ui::Go g) {
     switch (g) {
         case doba_ui::STAY:        break;
         case doba_ui::TO_HOME:     screen = SCREEN_HOME; break;
-        case doba_ui::TO_MAP:      screen = SCREEN_MAP; break;
+        case doba_ui::TO_MAP:
+            screen = SCREEN_MAP;
+            if (doba_ui::g_mapToTarget) {   // over the target, the position a pan away
+                doba_ui::g_mapToTarget = false;
+                const int t = doba_points::target();
+                MapScreenData m = {};
+                buildMapScreenData(g_state.snapshot(), m);
+                if (t >= 0 && doba_points::at(t)) {
+                    const double la0 = m.centerLat, lo0 = m.centerLon;
+                    mapPanN = (float)((doba_points::at(t)->lat - la0) * 110540.0);
+                    mapPanE = (float)((doba_points::at(t)->lon - lo0) * 111320.0 * cos(la0 * M_PI / 180.0));
+                    Serial.printf("[map] over the target %s: %.0f m E, %.0f m N\n", doba_points::at(t)->name, mapPanE, mapPanN);
+                }
+            }
+            break;
         case doba_ui::TO_POSITION: screen = SCREEN_POINTS; break;
         case doba_ui::TO_LIBRARY:  screen = SCREEN_LIBRARY; break;
         case doba_ui::TO_ARTICLE:  screen = SCREEN_ARTICLE; break;

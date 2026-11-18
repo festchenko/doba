@@ -3251,8 +3251,31 @@ bool jumpToHeading(const char* name) {
     return false;
 }
 
+// A place in the text (Wikivoyage's listings carry geo: links): where it is
+// goes to the map, with the words of the link as its name. QA 18 Nov: half the
+// links in Wikivoyage were these, and a tap did nothing.
+bool g_geoPending = false;
+double g_geoLat = 0, g_geoLon = 0;
+char g_geoName[24] = {};
+
 void follow(int link) {
     const char* target = g_targets + g_links[link].target;
+    if (!strncmp(target, "geo:", 4)) {
+        double la = 0, lo = 0;
+        if (sscanf(target + 4, "%lf,%lf", &la, &lo) == 2 && la >= -90 && la <= 90 && lo >= -180 && lo <= 180) {
+            const Link& L = g_links[link];
+            size_t n = 0;
+            for (uint32_t i = L.start; i < L.end && n < sizeof g_geoName - 1; ++i) g_geoName[n++] = g_text[i];
+            g_geoName[n] = 0;
+            g_geoLat = la; g_geoLon = lo; g_geoPending = true;
+            Serial.printf("[lib] place '%s' %.5f,%.5f -> map\n", g_geoName, la, lo);
+        } else g_note = "not a place";
+        return;
+    }
+    if (!strncmp(target, "tel:", 4) || !strncmp(target, "mailto:", 7) || !strncmp(target, "http", 4)) {
+        g_note = "not in this book";   // a phone, a mail or a web page: nothing to open here
+        return;
+    }
     if (target[0] == '#') {
         if (!jumpToHeading(target + 1)) g_note = "not in this article";
         return;
@@ -3273,6 +3296,14 @@ void follow(int link) {
 }
 
 }  // namespace
+
+bool takePlace(double& lat, double& lon, char* name, size_t n) {
+    if (!g_geoPending) return false;
+    g_geoPending = false;
+    lat = g_geoLat; lon = g_geoLon;
+    snprintf(name, n, "%s", g_geoName);
+    return true;
+}
 
 bool openTitle(const char* title) {
     count();

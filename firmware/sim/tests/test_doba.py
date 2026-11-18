@@ -880,3 +880,54 @@ def test_comms_from_home_never_lands_on_the_ready_phrases(doba):
     doba.tap(143, 223)                                   # where "OK" sits on the sheet
     time.sleep(1)
     assert not [l for l in doba.log(since) if "[comms] send" in l]
+
+
+def write_book(out, name, articles):
+    """A Doba book by hand: [(title, text)], text in the reader's line format."""
+    import struct
+    import zlib
+    sys.path.insert(0, LIB)
+    from dobafold import display, key
+    os.makedirs(out, exist_ok=True)
+    data, recs = b"", []
+    for title, text in articles:
+        z = zlib.compress(text.encode("utf-8"), 9)
+        recs.append((key(title), display(title), 0, 0, len(data), len(z), 0))
+        data += z
+    recs.sort()
+    open(os.path.join(out, "a0000.dta"), "wb").write(data)
+    with open(os.path.join(out, "index.dti"), "wb") as f:
+        f.write(struct.pack("<8sIII12s", b"DOBAIX1\0", len(recs), 128, 1, b"\0" * 12))
+        for r in recs:
+            f.write(struct.pack("<56s56sHHIII", *r))
+    open(os.path.join(out, "info.txt"), "w", encoding="utf-8").write("name=%s\n" % name)
+
+
+def test_a_place_in_an_article_opens_on_the_map(doba, tmp_path):
+    """Wikivoyage's listings link to geo:lat,lon (over half its links, which a
+    tap did nothing with). A tap puts the place on the map as the target, the
+    map opened over it; a phone number does nothing."""
+    body = ("TLviv\nPSleep at \x01Rynok Square hostel\x02geo:49.8419,24.0315\x03 in the old town. "
+            "Call \x01the desk\x02tel:+380322000000\x03.\nP" + "Old town walks. " * 30)
+    write_book(os.path.join(doba.sd, "doba", "lib", "travel"), "Travel", [("Lviv", body)])
+    boot(doba)
+    doba.gps(52.0421, 6.6170)
+    time.sleep(1)
+    since = doba.log_seq()
+    doba.console("libopen Lviv", 800)
+    doba.wait_log(r"\[lib\] open 'Lviv' pages=\d+ links=2", since=since)
+    time.sleep(0.8)
+    hit = None
+    for y in range(120, 420, 10):
+        for x in range(30, 520, 30):
+            s2 = doba.log_seq()
+            doba.tap(x, y)
+            time.sleep(0.2)
+            got = [l for l in doba.log(s2) if "[lib] place" in l or "[map] over" in l]
+            if got:
+                hit = (x, y)
+                break
+        if hit:
+            break
+    assert hit, "no tap reached the place link"
+    doba.wait_log(r"\[map\] over the target Rynok Square ho", since=since, timeout=5)

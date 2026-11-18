@@ -34,7 +34,9 @@ void rescan();
 void renderSearch(kbd::Keyboard& k, uint8_t* fb);
 bool tapSearch(kbd::Keyboard& k, int x, int y);   // true: an article was opened
 void renderArticle(uint8_t* fb);
-bool tapArticle(int x, int y);       // a link opens its article; else pages. true: CLOSE tapped
+bool tapArticle(int x, int y);
+// A place link (geo:) tapped: where, and the link's words. Taken once.
+bool takePlace(double& lat, double& lon, char* name, size_t n);       // a link opens its article; else pages. true: CLOSE tapped
 bool articleBack();                  // back along followed links; false at the first
 void leaveArticle();
 bool libraryBack();

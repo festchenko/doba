@@ -650,7 +650,18 @@ Go tap(Page p, int x, int y, const DeviceState& s) {
         case COMMS:   return tapComms(x, y);
         case COMPOSE: return tapCompose(x, y);
         case LIBRARY: return doba_lib::tapSearch(g_search, x, y) ? TO_ARTICLE : STAY;
-        case ARTICLE: return doba_lib::tapArticle(x, y) ? back(ARTICLE) : STAY;   // CLOSE: as BACK
+        case ARTICLE: {
+            if (doba_lib::tapArticle(x, y)) return back(ARTICLE);   // CLOSE: as BACK
+            double la, lo;
+            char nm[24];
+            if (doba_lib::takePlace(la, lo, nm, sizeof nm)) {   // a geo: link: the place on the map
+                char pt[doba_points::NAME_LEN];
+                snprintf(pt, sizeof pt, "%s", nm[0] ? nm : "PLACE");
+                const int idx = doba_points::add(pt, la, lo);
+                if (idx >= 0) { doba_points::setTarget(idx); g_mapToTarget = true; return TO_MAP; }
+            }
+            return STAY;
+        }
         case SETUP:   return tapSetup(x, y);
         case SETUP_NAME: return tapSetupName(x, y);
         case POINTS:  return tapPoints(x, y, s);
@@ -692,6 +703,7 @@ Go back(Page p) {
     return TO_HOME;
 }
 
+bool g_mapToTarget = false;
 void dropHomeCache() { pg::dropHomeCache(); }
 uint32_t homeKey(const DeviceState& s) { return pg::homeKeyOf(s); }
 

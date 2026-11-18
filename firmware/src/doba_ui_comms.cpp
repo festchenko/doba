@@ -469,6 +469,7 @@ Go tapComms(int x, int y) {
                     if (idx >= 0) {
                         doba_points::setTarget(idx);
                         Serial.printf("[comms] %s on the map\n", nm);
+                        g_mapToTarget = true;
                         return TO_MAP;
                     }
                 }

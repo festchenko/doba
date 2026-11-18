@@ -58,6 +58,9 @@ Go back(Page p);
 
 // The home page keeps its last frame (contour lines and all): let it go.
 void dropHomeCache();
+// Set by a page that put a target on the map (a place from an article, a node
+// from a chat): the map opens over the target, not over the position.
+extern bool g_mapToTarget;
 // What the home page shows, hashed: it is redrawn when this changes.
 uint32_t homeKey(const DeviceState& s);
 
