@@ -168,9 +168,25 @@ def main():
     # translation, the same key as the index.
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from dobafold import key as fold_key
+    # The index keeps a title cut at 56 bytes ("Knots for Mountaineering Camping
+    # Climbing Utility Res…"); translated as it stands, the twin's title ended in
+    # "Res ..." and a menu row naming the whole title opened nothing (QA 18 Nov).
+    # The article's own first line holds the whole title: that is translated.
+    def whole(r):
+        t = r[1].rstrip(b"\0").decode("utf-8", "replace")
+        if not t.endswith("…"):
+            return t
+        try:
+            first = zlib.decompress(dta[r[2]][r[4]:r[4] + r[5]]).decode("utf-8", "replace").split("\n", 1)[0]
+        except zlib.error:
+            return t
+        if first[:1] == "T" and fold_key(first[1:].strip()) == r[0].rstrip(b"\0"):
+            return first[1:].strip()
+        return t
+    full = {(r[2], r[4], r[0]): whole(r) for r in recs}
     by_key = {}
     for r in recs:
-        by_key.setdefault(r[0].rstrip(b"\0"), r[1].rstrip(b"\0").decode("utf-8", "replace"))
+        by_key.setdefault(r[0].rstrip(b"\0"), full[(r[2], r[4], r[0])])
 
     def title_uk(t):
         if t not in title_memo:
@@ -233,7 +249,7 @@ def main():
     own, pairs = [], {}
     for k, title, ch, flags, off, ln, extra in recs:
         p, l = newpos[(ch, off, ln)]
-        uk = tr(title.rstrip(b"\0").decode("utf-8", "replace"))
+        uk = tr(full[(ch, off, k)])
         if key(uk):
             own.append((key(uk), display(uk), 0, flags, p, l))
         if flags == 0 or (ch, off, ln) not in pairs:

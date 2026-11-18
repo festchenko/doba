@@ -106,3 +106,27 @@ def test_every_link_in_a_twin_leads_to_a_page_of_the_twin(tmp_path):
     links, dead = dead_links(out)
     assert links > 0
     assert dead <= dead_links(src)[1], "%d of %d links lead nowhere" % (dead, links)
+
+
+def test_a_long_title_is_translated_whole(tmp_path):
+    """The index keeps a title cut at 56 bytes with '…'; the twin's title was the
+    translation of that stub ('Ноти … Res ...'), and a menu row naming the whole
+    title opened nothing (QA 18 Nov). The twin is keyed by the translation of
+    the whole title, from the article's own first line."""
+    import zlib
+    sys.path.insert(0, LIB)
+    from dobafold import key, display
+    title = "Knots for Mountaineering Camping Climbing Utility Rescue Etc"
+    src = tmp_path / "knots"
+    src.mkdir()
+    z = zlib.compress(("T" + title + "\nPTie it well.").encode(), 9)
+    (src / "a0000.dta").write_bytes(z)
+    rec = struct.pack("<56s56sHHIII", key(title), display(title), 0, 0, 0, len(z), 0)
+    (src / "index.dti").write_bytes(struct.pack("<8sIII12s", b"DOBAIDX1", 1, 128, 1, b"\0" * 12) + rec)
+    (src / "info.txt").write_text("name=Knots\n", encoding="utf-8")
+    assert display(title).decode().endswith("…")
+    out = str(tmp_path / "knots_uk")
+    subprocess.run([sys.executable, os.path.join(LIB, "translate_book.py"), str(src), out, "--fake"],
+                   check=True, capture_output=True)
+    idx = open(os.path.join(out, "index.dti"), "rb").read()
+    assert idx[32:88].rstrip(b"\0") == key("Укр " + title).rstrip(b"\0")
