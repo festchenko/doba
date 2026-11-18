@@ -116,7 +116,7 @@ def test_a_long_title_is_translated_whole(tmp_path):
     import zlib
     sys.path.insert(0, LIB)
     from dobafold import key, display
-    title = "Knots for Mountaineering Camping Climbing Utility Rescue Etc"
+    title = "Ropes for Mountaineering Camping Climbing Utility Rescue Etc"
     src = tmp_path / "knots"
     src.mkdir()
     z = zlib.compress(("T" + title + "\nPTie it well.").encode(), 9)
