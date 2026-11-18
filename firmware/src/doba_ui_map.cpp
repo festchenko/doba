@@ -480,7 +480,12 @@ void renderPoints(const DeviceState& s, uint8_t* fb) {
         if (doba_dem::depth(lat, lon, dep))   // on water: depth under you (EMODnet)
             snprintf(info, sizeof info, TR("%d satellites \xC2\xB7 %d m deep"), s.satellites, (int)lroundf(dep));
         else
-            snprintf(info, sizeof info, TR("%d satellites \xC2\xB7 %d m high"), s.satellites, (int)lroundf(groundAlt(s)));
+        {
+            // no fix now: the GPS height is not there, the card's DEM at the last position is
+            float h = groundAlt(s), m;
+            if (!s.gpsFix && !s.baroValid && !s.mapElevationValid && doba_dem::height(lat, lon, m)) h = m;
+            snprintf(info, sizeof info, TR("%d satellites \xC2\xB7 %d m high"), s.satellites, (int)lroundf(h));
+        }
         ui::text(ui::font(ui::F_SMALL), 24, TOP + 252, ll, fb, EPD_DRAW_ALIGN_LEFT, 0x30);
         ui::text(ui::font(ui::F_SMALL), 24, TOP + 280, info, fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     }

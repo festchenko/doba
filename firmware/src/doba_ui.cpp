@@ -65,7 +65,7 @@ void tileSubtitle(const Tile& t, const DeviceState& s, char* sub, size_t n) {
         case TO_SOS: sosSubtitle(sub, n); break;
         case TO_SUN: sunSubtitle(s, sub, n); break;
         case TO_POWER:
-            if (s.batteryPercent) snprintf(sub, n, TR("%u%%%s · sleep / off"), s.batteryPercent, s.charging ? " charging" : "");
+            if (s.batteryPercent) snprintf(sub, n, TR("%u%%%s · sleep / off"), s.batteryPercent, s.charging ? TR(" charging") : "");
             else snprintf(sub, n, TR("sleep / off"));
             break;
         case TO_SETUP: {
