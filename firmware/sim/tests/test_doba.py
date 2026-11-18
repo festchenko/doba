@@ -934,3 +934,22 @@ def test_wiki_markup_left_in_a_line_is_cut(doba):
     text = "\n".join(l for l in doba.log(since) if l.startswith("[libtext]"))
     assert "thumb" not in text and "{{" not in text and "]]" not in text, text
     assert "кріпленням." in text and "Турнікет накладають вище рани." in text, text
+
+
+def test_a_donation_line_and_an_empty_example_are_not_shown(doba):
+    """QA 18 Nov: every TCCC card ended in the site's donation line, a video
+    page said only 'Завантажити відео', and the dictionary showed its empty
+    example placeholder."""
+    body = ("TТурнікет\nPНакладіть турнікет вище рани.\nPЗавантажити відео\n"
+            "P◆ Немає прикладів слововжитку (див. рекомендації).\n"
+            "PПідтримайте розвиток проєкту TCCC в Україні\nP" + "Текст. " * 40)
+    write_book(os.path.join(doba.sd, "doba", "lib", "tccc"), "TCCC", [("Турнікет", body)])
+    boot(doba)
+    since = doba.log_seq()
+    doba.console("libopen Турнікет", 800)
+    doba.wait_log(r"\[lib\] open", since=since)
+    doba.console("libtext", 800)
+    text = "\n".join(l for l in doba.log(since) if l.startswith("[libtext]"))
+    assert "Накладіть турнікет вище рани." in text, text
+    assert "Підтримайте" not in text and "Завантажити" not in text and "Немає прикладів" not in text, text
+

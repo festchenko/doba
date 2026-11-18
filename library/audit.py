@@ -81,8 +81,13 @@ def plain(t):
 
 
 MOJI = re.compile("[\u00c0-\u00ff][\u0080-\u00bf]|\u00d0[\u0090-\u00bf]|\u00d1[\u0080-\u009f]")
+# lines the reader drops (doba_library.cpp junkLine): not counted as junk
+READER_DROPS = {"прослухати вимову", "Від ??", "Корінь: --.", "listen", "Завантажити відео",
+                "Підтримайте розвиток проєкту TCCC в Україні",
+                "◆ Немає прикладів слововжитку (див. рекомендації)."}
 CRUMBS = ("прослухати вимову", "УФ: []", "Від ??", "Корінь: --.", "[edit]", "[ред.]", "[правити]",
-          "{{", "}}", "&nbsp;", "&amp;", "<div", "</")
+          "{{", "}}", "&nbsp;", "&amp;", "<div", "</", "|thumb", "]]",
+          "Support the development")
 
 
 def picture_names(d):
@@ -114,7 +119,7 @@ def audit(lib, name, sample=1500, link_pages=300):
 
     def close_group():
         nonlocal clash_groups, clash_recs
-        pages = {(r[2], r[4]) for r in group if not r[3] & 1}
+        pages = {(r[2], r[4]) for r in group if not r[3] & 3}   # hidden parts follow their visible page
         if len(pages) > 1:
             clash_groups += 1
             clash_recs += len(pages)
@@ -217,6 +222,8 @@ def audit(lib, name, sample=1500, link_pages=300):
             bad = "mojibake: " + MOJI.search(t).group(0)
         if not bad and "\ufffd" in t:
             bad = "U+FFFD"
+        t = "\n".join(l for l in t.split("\n") if l[1:] not in READER_DROPS and not l[1:].endswith(": []"))
+        t = re.sub(r"\|[^\[\]\n]*\]\]|\{\{[^\n]*?\}\}", "", t)   # the reader cuts these too (stripCrumbs)
         if not bad:
             for c in CRUMBS:
                 if c in t:
@@ -248,7 +255,7 @@ def audit(lib, name, sample=1500, link_pages=300):
             continue
         for m in LINK.finditer(t):
             tgt = m.group(2)
-            if not tgt or tgt.startswith("#"):
+            if not tgt or tgt.startswith(("#", "geo:", "tel:", "mailto:", "http")):   # the reader handles these
                 continue
             links += 1
             if b.find(tgt) is None:

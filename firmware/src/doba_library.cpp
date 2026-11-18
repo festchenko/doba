@@ -804,6 +804,10 @@ void layout() {
 bool junkLine(const char* b, size_t n) {
     auto is = [&](const char* w) { return n == strlen(w) && !memcmp(b, w, n); };
     if (is("прослухати вимову") || is("Від ??") || is("Корінь: --.") || is("listen")) return true;
+    // QA 18 Nov: a dictionary's empty example, the TCCC site's donation line
+    // under every card, and a video that is not on the card.
+    if (is("◆ Немає прикладів слововжитку (див. рекомендації).") ||
+        is("Підтримайте розвиток проєкту TCCC в Україні") || is("Завантажити відео")) return true;
     return n >= 4 && !memcmp(b + n - 4, ": []", 4);   // an empty transcription
 }
 // Wiki markup that slipped through the converter, inside one line: a caption's
