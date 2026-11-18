@@ -114,9 +114,18 @@ def main():
     ap.add_argument("--model", default="")
     ap.add_argument("--name", default="")
     ap.add_argument("--fake", action="store_true", help='no Argos: "translate" by marking (tests)')
+    ap.add_argument("--fake-strict", action="store_true",
+                    help="no Argos: a different word for every different string, as a real translator may (tests)")
     ap.add_argument("--limit", type=int, default=0, help="translate the first N articles only (tests)")
     a = ap.parse_args()
-    if a.fake:
+    if a.fake_strict:
+        import hashlib
+
+        class Strict:
+            def translate(self, s):
+                return "Укр " + hashlib.md5(s.encode()).hexdigest()[:8]
+        t = Strict()
+    elif a.fake:
         class Mark:
             def translate(self, s):
                 return "Укр " + s
@@ -149,10 +158,24 @@ def main():
     # A link points at an article's title; in the twin, at its Ukrainian title
     # (the one the twin's index is built from below).
     title_memo = {}
+    # A link names its target the way the source page did ("Safe Water School/
+    # Lesson 1"), not always as the target's own title ("Safe water school -
+    # Lesson 1"). Translated as it stands, that came out differently from the
+    # title the twin's index is built from, and half the links in some twins led
+    # nowhere (QA, 18 Nov: water_uk 63 %, disaster_uk 49 %). So the target is
+    # looked up in the source's index first, the way the device does, and the
+    # translation of THAT record's title is used: the same string, the same
+    # translation, the same key as the index.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from dobafold import key as fold_key
+    by_key = {}
+    for r in recs:
+        by_key.setdefault(r[0].rstrip(b"\0"), r[1].rstrip(b"\0").decode("utf-8", "replace"))
 
     def title_uk(t):
         if t not in title_memo:
-            title_memo[t] = tr(t)
+            own = by_key.get(fold_key(t).rstrip(b"\0")) if t else None
+            title_memo[t] = tr(own or t)
         return title_memo[t]
     newpos = {}
     out_f = open(os.path.join(a.out, "a0000.dta"), "wb")

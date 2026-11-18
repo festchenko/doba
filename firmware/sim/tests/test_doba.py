@@ -862,3 +862,21 @@ def test_keys_typed_faster_than_the_panel_paints_are_all_kept(doba):
     except Exception:
         print("\n".join(l for l in doba.log(0) if "touch" in l or "comms" in l or "mesh" in l)[-3000:])
         raise
+
+
+def test_comms_from_home_never_lands_on_the_ready_phrases(doba):
+    """Left on the ready-phrase sheet, Comms reopened on it from home, where
+    one stray tap sends a phrase (QA, 18 Nov). It reopens on the chat."""
+    boot(doba)
+    doba.console("mesh on", 800)
+    for xy in [(395, 360), (150, 260), (177, 908)]:      # Comms, Everyone, Quick
+        doba.tap(*xy)
+        time.sleep(0.8)
+    doba.console("screen home", 800)
+    time.sleep(0.6)
+    doba.tap(395, 360)                                   # Comms again
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(143, 223)                                   # where "OK" sits on the sheet
+    time.sleep(1)
+    assert not [l for l in doba.log(since) if "[comms] send" in l]

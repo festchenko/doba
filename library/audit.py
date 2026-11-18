@@ -13,6 +13,9 @@ Per book:
   links     links in a sample of pages that lead nowhere
   menu      menu.txt / picks.txt rows the device cannot open
   info      info.txt without a description or unit
+  pictures  picture lines in sampled pages whose picture is in no pack and no img/ file
+  junk      sampled pages with mojibake (UTF-8 read as Latin-1), U+FFFD, leftover
+            dictionary/markup crumbs, empty headings, or a title that is mojibake
 """
 import os
 import random
@@ -75,6 +78,29 @@ class Book:
 def plain(t):
     t = LINK.sub(lambda m: m.group(1), t)
     return re.sub(r"(^|\n)[A-Z]", " ", t)
+
+
+MOJI = re.compile("[\u00c0-\u00ff][\u0080-\u00bf]|\u00d0[\u0090-\u00bf]|\u00d1[\u0080-\u009f]")
+CRUMBS = ("прослухати вимову", "УФ: []", "Від ??", "Корінь: --.", "[edit]", "[ред.]", "[правити]",
+          "{{", "}}", "&nbsp;", "&amp;", "<div", "</")
+
+
+def picture_names(d):
+    """Every picture the book can show: packed (img/index.dgx) or loose (img/)."""
+    names = set()
+    p = os.path.join(d, "img", "index.dgx")
+    if os.path.exists(p):
+        raw = open(p, "rb").read()
+        n = struct.unpack("<I", raw[4:8])[0]
+        for i in range(n):
+            names.add(raw[8 + i * 20:18 + i * 20].rstrip(b"\0").decode("ascii", "replace"))
+    root = os.path.join(d, "img")
+    if os.path.isdir(root):
+        for dp, _, fs in os.walk(root):
+            for f in fs:
+                if f.endswith(".dgi") and not f.startswith("._"):
+                    names.add(f[:-4])
+    return names
 
 
 def audit(lib, name, sample=1500, link_pages=300):
@@ -160,6 +186,57 @@ def audit(lib, name, sample=1500, link_pages=300):
         if pct >= 2:
             for e in stub_ex:
                 out.append(f"      e.g. {e}")
+
+    # pictures, junk, encoding: in the same sampled pages
+    pics = picture_names(d)
+    img_lines = img_missing = 0
+    img_ex, junk_ex = [], []
+    junk = moji_titles = 0
+    for i in pick:
+        r = b.rec(i)
+        if MOJI.search(r[1]):
+            moji_titles += 1
+            if len(junk_ex) < 6:
+                junk_ex.append(f"title mojibake: {r[1][:60]}")
+        try:
+            t = b.text(r)
+        except Exception:
+            continue
+        bad = None
+        for ln in t.split("\n"):
+            if ln[:1] == "I":
+                img_lines += 1
+                nm = ln[1:].split(" ", 1)[0]
+                if nm not in pics:
+                    img_missing += 1
+                    if len(img_ex) < 4:
+                        img_ex.append(f"{r[1][:50]} -> {nm}")
+            elif ln[:1] in "HS" and not ln[1:].strip():
+                bad = bad or "empty heading"
+        if not bad and MOJI.search(t):
+            bad = "mojibake: " + MOJI.search(t).group(0)
+        if not bad and "\ufffd" in t:
+            bad = "U+FFFD"
+        if not bad:
+            for c in CRUMBS:
+                if c in t:
+                    bad = "crumb " + c
+                    break
+        if bad:
+            junk += 1
+            if len(junk_ex) < 6:
+                junk_ex.append(f"{r[1][:50]}: {bad}")
+    if img_lines:
+        out.append(f"   pictures: {img_lines} picture lines sampled, {img_missing} have no picture"
+                   + (f" ({100.0 * img_missing / img_lines:.1f}%)" if img_missing else ""))
+        for e in img_ex if img_missing else []:
+            out.append(f"      e.g. {e}")
+    elif pics:
+        out.append(f"   pictures: {len(pics)} in the book, none in the sampled pages")
+    if pick and (junk or moji_titles):
+        out.append(f"   junk: {junk} of {len(pick)} sampled pages, {moji_titles} mojibake titles")
+        for e in junk_ex:
+            out.append(f"      e.g. {e}")
 
     links = dead = 0
     dead_ex = []

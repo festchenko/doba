@@ -201,7 +201,12 @@ Go tapHome(int x, int y) {
         return STAY;
     }
     for (const Tile& t : kTiles)
-        if (hit(t.r, x, y)) return t.go;
+        if (hit(t.r, x, y)) {
+            // Comms from home lands on a chat or a list, never on the ready-phrase
+            // sheet left open when the page was last left (QA, 18 Nov).
+            if (t.go == TO_COMMS && g_cv == CV_QUICK) g_cv = CV_CHAT;
+            return t.go;
+        }
     return STAY;
 }
 

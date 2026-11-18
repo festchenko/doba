@@ -469,8 +469,8 @@ Down	Вниз
 Next	Далі
 # --- deleting a book
 Delete "%s"?	Видалити «%s»?
-frees %.1f GB on the card	звільнить %.1f ГБ на картці
-frees %lu MB on the card	звільнить %lu МБ на картці
+frees %.1f GB on the card	звільнить %.1f ГБ на карті
+frees %lu MB on the card	звільнить %lu МБ на карті
 It can only come back from a computer.	Повернути можна лише з комп’ютера.
 DELETE	ВИДАЛИТИ
 # --- battery
@@ -539,3 +539,40 @@ contact: %s	контакт: %s
 loading...	завантаження...
 no translation of this article	цієї статті немає в перекладі
 on: allowed when something needs it	увімкнено: коли щось знадобиться
+MODULE	МОДУЛЬ
+NOT DETECTED	НЕ ЗНАЙДЕНО
+NMEA BYTES	БАЙТІВ NMEA
+CHECKSUM	КОНТР. СУМИ
+WITH FIX	З ПОЗИЦІЄЮ
+SATS IN VIEW	СУПУТНИКІВ ВИДНО
+SATS IN USE	СУПУТНИКІВ У РОБОТІ
+BEST SIGNAL	НАЙКРАЩИЙ СИГНАЛ
+HDOP	HDOP
+FIX	ПОЗИЦІЯ
+LAT / LON	ШИР. / ДОВГ.
+ALT / SPEED	ВИСОТА / ШВИДКІСТЬ
+UTC TIME	ЧАС UTC
+NO FIX	НЕМАЄ
+yes · age %lu ms	так · %lu мс тому
+AREAS	ПЛОЩІ
+Building	Будівля
+Fields, grass, open land	Поля, луки, відкрита місцевість
+Forest, wood	Ліс
+Military area	Військова зона
+Quarry	Кар'єр
+Rock, scree	Скелі, осип
+Sand, cemetery	Пісок, кладовище
+Tap for the first page	Торкніться — перша сторінка
+Town, industry	Місто, промзона
+Wetland, marsh	Болото
+black grain	чорне зерно
+contours, grid, marks, places, areas	горизонталі, сітка, позначки, місця, площі
+dark diagonal lines	темні діагоналі
+dotted diagonal lines, zoomed out	пунктирні діагоналі, при віддаленні
+fine dots, no outline	дрібні точки без контуру
+lakes, rivers, sea: fine dots, a black shore	озера, річки, море: дрібні точки, чорний берег
+plain paper	чистий папір
+short dashes	короткі риски
+sparse grain	рідке зерно
+staggered dots	точки в шаховому порядку
+zoomed in close, black outline	при великому наближенні, чорний контур

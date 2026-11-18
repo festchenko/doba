@@ -524,12 +524,12 @@ void ui_render_gps_debug(const GpsDebugView& g, uint8_t* fb) {
     int n = 0;
 #define DBG_LINE(lbl, ...)                                            \
     do {                                                              \
-        lines[n].label = lbl;                                         \
+        lines[n].label = TR(lbl);                                     \
         snprintf(lines[n].value, sizeof(lines[n].value), __VA_ARGS__); \
         n++;                                                          \
     } while (0)
 
-    DBG_LINE("MODULE", "%s", g.moduleDetected ? g.module : "NOT DETECTED");
+    DBG_LINE("MODULE", "%s", g.moduleDetected ? g.module : TR("NOT DETECTED"));
     DBG_LINE("NMEA BYTES", "%lu", (unsigned long)g.chars);
     DBG_LINE("CHECKSUM", "%lu / %lu", (unsigned long)g.passedCksum,
              (unsigned long)g.failedCksum);
@@ -541,13 +541,13 @@ void ui_render_gps_debug(const GpsDebugView& g, uint8_t* fb) {
     if (g.hdop > 0) DBG_LINE("HDOP", "%.1f", g.hdop);
     else DBG_LINE("HDOP", "--");
     if (g.locValid) {
-        DBG_LINE("FIX", "yes · age %lu ms", (unsigned long)g.locAgeMs);
+        DBG_LINE("FIX", TR("yes · age %lu ms"), (unsigned long)g.locAgeMs);
         DBG_LINE("LAT / LON", "%.5f  %.5f", g.lat, g.lon);
         DBG_LINE("ALT / SPEED", "%.0f %s · %.1f %s",
                  units::elev(g.altM, g.useMiles), units::elevLabel(g.useMiles),
                  units::speed(g.speedKmh, g.useMiles), units::speedLabel(g.useMiles));
     } else {
-        DBG_LINE("FIX", "NO FIX");
+        DBG_LINE("FIX", "%s", TR("NO FIX"));
         DBG_LINE("LAT / LON", "--");
         DBG_LINE("ALT / SPEED", "--");
     }
