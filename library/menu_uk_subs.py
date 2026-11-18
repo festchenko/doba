@@ -4,12 +4,13 @@ University"). The words before the last " · " (the publisher stays as it is)
 are translated. QA 18 Nov."""
 import os, re, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from translate_book import setup
+from translate_book import setup, glossary
 lib, model = sys.argv[1], sys.argv[2]
+only = set(sys.argv[3:])   # books to do (default: every twin)
 t = setup(model)
 for b in sorted(os.listdir(lib)):
     p = os.path.join(lib, b, "menu.txt")
-    if not b.endswith("_uk") or not os.path.exists(os.path.join(lib, b, "twin.map")) or not os.path.exists(p):
+    if (only and b not in only) or not b.endswith("_uk") or not os.path.exists(os.path.join(lib, b, "twin.map")) or not os.path.exists(p):
         continue
     lines = open(p, encoding="utf-8").read().split("\n")
     n = 0
@@ -23,7 +24,7 @@ for b in sorted(os.listdir(lib)):
         if not sep:
             words, who = sub, ""
         if re.search(r"[A-Za-z]{3}", words):
-            words = t.translate(words)
+            words = glossary(words, t.translate(words))
         lines[i] = title + "|" + words + (" · " + who if who else "")
         n += 1
     open(p, "w", encoding="utf-8").write("\n".join(lines))
