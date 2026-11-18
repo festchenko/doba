@@ -435,7 +435,7 @@ void search(const char* key, BookMask mask) {
     // medical books): a title that is exactly what was typed first, then the
     // books one reaches for in trouble, then the rest; each book's own best
     // first, a book at a time round, so no one book fills the list.
-    static const char* const kFirst[] = {"med_en", "medicine", "tccc_uk", "dsns_uk", "gov", "disaster", "water",
+    static const char* const kFirst[] = {"aid_uk", "aid_en", "med_en", "medicine", "tccc_uk", "dsns_uk", "gov", "disaster", "water",
                                          "food", "knots", "medicine_uk", "disaster_uk", "water_uk", "food_uk",
                                          "knots_uk", "wiki_uk", "wiki_en", "voyage_uk", "voyage_en"};
     auto bookRank = [](int bi) {
