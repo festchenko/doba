@@ -305,9 +305,6 @@ last quarter	остання чверть
 waning crescent	старий місяць
 # --- more
 DEVICE	ПРИСТРІЙ
-USB DRIVE	USB-накопичувач
-the card shows on a computer	карта видна на комп’ютері
-off: the card is Doba's	вимк.: карта в Доби
 BLUETOOTH	BLUETOOTH
 Bluetooth	Bluetooth
 Wifi	Wi-Fi
@@ -324,7 +321,6 @@ no card	немає карти
 CARD	Карта
 DOBA	ДОБА
 offline backcountry assistant \xC2\xB7 	офлайн-помічник у дорозі \xC2\xB7 
-USB drive: copy books and maps from a computer	USB: копіюйте книги й мапи з комп’ютера
 CALLSIGN  (how the mesh sees you)	ПОЗИВНИЙ  (як вас бачить mesh)
 Short name: first four letters	Коротке ім’я: перші чотири літери
 SAVE	Зберегти

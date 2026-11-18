@@ -5,7 +5,6 @@
 #include "sd_bus.h"
 #include "diag.h"
 #include "sd_card.h"
-#include "usb_storage.h"
 
 namespace {
 std::atomic<unsigned> requested{0};
@@ -66,10 +65,9 @@ void sd_diagnostics::tick() {
     }
     if ((int32_t)(now - nextMs) < 0) return;
     nextMs = now + 5000;
-    if (!sd_card::sdMounted() || usb_storage::hostActive()) {
+    if (!sd_card::sdMounted()) {
         ++skipped;
-        diag::log("sdtest: skipped (mounted=%d host=%d)",
-                  sd_card::sdMounted(), usb_storage::hostActive());
+        diag::log("sdtest: skipped (not mounted)");
         return;
     }
     uint32_t sleepCalls, rejected; uint64_t sleepUs;

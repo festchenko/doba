@@ -3,7 +3,6 @@
 #include "diag.h"
 #include "sd_bus.h"
 #include "sd_card.h"
-#include "usb_storage.h"
 #include "power_mgmt.h"
 #include <Arduino.h>
 #include <Preferences.h>
@@ -127,7 +126,7 @@ bool saveSD(const crash_record::Record& record) {
     char temporary[64];snprintf(temporary,sizeof(temporary),"/logs/crash-%08lx.tmp",(unsigned long)record.id);
     bool ok=false;
     sdLock();
-    if(sd_card::sdMounted() && !usb_storage::hostActive()){
+    if(sd_card::sdMounted()){
         if(SD.exists(path))ok=fileMatches(path,record); // interrupted NVS acknowledgement: idempotent
         else {
             SD.mkdir("/logs");
@@ -215,7 +214,7 @@ bool deliver(bool status,const char* why) {
     power_mgmt::busyAcquire();
     persistCurrent();
     Preferences prefs;int queued=0,delivered=0;
-    bool sd=sd_card::sdMounted() && !usb_storage::hostActive();
+    bool sd=sd_card::sdMounted();
     bool nvsAvailable=prefs.begin("crashdiag",false);
     if(nvsAvailable){
         for(int i=0;i<SLOTS;++i){
@@ -251,8 +250,8 @@ bool deliver(bool status,const char* why) {
     power_mgmt::busyRelease();
     bool remaining=queued>0 || (currentPending && !currentDurable);
     if(why && (delivered || remaining))
-        diag::log("crash report: %s: delivered=%d still_queued_NVS=%d current_RAM=%d SD=%d host=%d",
-            why,delivered,queued,currentPending && !currentDurable,sd_card::sdMounted(),usb_storage::hostActive());
+        diag::log("crash report: %s: delivered=%d still_queued_NVS=%d current_RAM=%d SD=%d",
+            why,delivered,queued,currentPending && !currentDurable,sd_card::sdMounted());
     if(status && current.valid() && !currentPending)Serial.print(current.text);
     if(status)diag::log("crash report: NVS_available=%d queued_NVS=%d current_RAM=%d SD=%d (crash-*.log appears in phone log list)",
         nvsAvailable,queued,currentPending,sd_card::sdMounted());

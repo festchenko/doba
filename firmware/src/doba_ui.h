@@ -21,7 +21,7 @@ enum Page : uint8_t {
     MAPOPTS,     // map options: orientation, grid, points
     SOS,         // a distress call over the mesh, repeated
     SUN,         // sunrise, sunset, twilight, moon
-    MORE,        // the rest of the settings: USB drive, GPS, card, about
+    MORE,        // the rest of the settings: GPS, card, about
     BATTERY,     // what drains it, and how long it will last
 };
 

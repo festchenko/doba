@@ -1,30 +1,14 @@
 #pragma once
 
-// Exposes the SD card to a host computer as a USB Mass Storage drive. The
-// ESP32-S3 native USB runs a composite CDC (serial, for flashing) + MSC device,
-// so plugging into a computer mounts the SD card as removable storage.
-//
-// CRITICAL: the firmware and the computer must never write the SD concurrently
-// (FAT corruption). While a host has the drive mounted, hostActive() is true and
-// the firmware suspends its own SD use (logging, map/ota commits).
+// The ESP32-S3's native USB: a serial port (console, logs, flashing). Nothing
+// else. Doba used to offer its card to a computer as a USB drive as well; that
+// was removed on 18 Nov 2026 — a Mac mounting the 1 TB card hung Doba and
+// dropped its serial port, and it never worked well enough to be the way books
+// get onto the card. Books and maps go on with a card reader (doba_card.py).
 
 namespace usb_storage {
 
-// Call after the SD card is mounted (SD.begin succeeded).
+// Starts the USB serial port. Called once from the UI task after boot.
 void begin();
-
-// Show/hide the SD to a host as a USB drive at runtime (persisted setting read
-// at begin). When off, the drive disappears from the computer and the firmware
-// keeps the SD to itself; turning it off also reclaims the card. Lets the rider
-// leave the device plugged in for power/serial without losing the SD.
-void setDriveEnabled(bool on);
-bool driveEnabled();
-
-// True while a host computer has the drive mounted — firmware SD access paused.
-bool hostActive();
-
-// Call periodically from ONE task (~1 Hz). Handles reclaiming the SD (remount)
-// when the host disconnects, without racing other SD users.
-void poll();
 
 }

@@ -56,27 +56,6 @@ def test_a_topo_view_from_the_cache_keeps_its_greys(doba, tmp_path):
     assert (fresh[band] == again[band]).mean() > 0.995
 
 
-def test_maps_copied_over_usb_show_without_a_restart(doba, tmp_path):
-    """After a computer wrote to the card, the topo layer still remembered that
-    there was no pack here; only books, points and heights were looked at again."""
-    boot(doba)
-    open_topo(doba)
-    assert "active=0" in "\n".join(doba.console("topo"))
-    since = doba.log_seq()
-    doba.usb_host(True)
-    doba.wait_log(r"sd: lent to the USB host", since=since, timeout=10)
-    packs_around(doba.sd)
-    since = doba.log_seq()
-    doba.usb_host(False)
-    doba.wait_log(r"sd: remount \(usb host released\) -> ok", since=since, timeout=10)
-    time.sleep(2)
-    doba.console("zoom out")
-    time.sleep(1)
-    doba.console("zoom in")
-    time.sleep(2)
-    assert "active=1" in "\n".join(doba.console("topo"))
-
-
 def test_ground_height_stays_after_a_while(doba):
     """The UI overwrote the card's ground height with the vector tiles' (none)
     every 2.5 s, until the next fix put it back: it flickered off and on."""

@@ -13,9 +13,6 @@ uint32_t mountGeneration();
 // The mounted card's FatFs drive number, for raw sector access (USB storage);
 // 0xFF before the first mount.
 uint8_t sdDrive();
-// The USB host has the card: unmount the firmware's volume (driver kept).
-// remount() undoes it.
-bool lendToHost();
 // SD.end() then SD.begin(), under the SD lock. `why` is logged.
 bool remount(const char* why);
 // ~1 Hz from loop(): while unmounted, retries on a slow cadence.

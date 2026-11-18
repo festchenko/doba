@@ -20,10 +20,9 @@ float compassOff = NAN;
 int tz = TIMEZONE_OFFSET_MINUTES;
 int bl = 0;  // backlight level 0-3; OFF until the rider turns it on — e-paper
              // needs no light in daylight, and a lit panel drains a fresh device
-bool usbDrv = true;
 bool btOn = false;    // DOBA: Bluetooth switch (nothing uses it yet)
 bool wifiOn = false;  // DOBA: Wi-Fi switch (nothing uses it yet)
-char ownerF[5][64] = {};    // DOBA: name, born, blood, medical, contact   // DOBA: "if found" card on the power-off screen  // true = expose SD as USB drive when plugged into a host
+char ownerF[5][64] = {};    // DOBA: name, born, blood, medical, contact   // DOBA: "if found" card on the power-off screen
 // Per kind, a ';'-separated list of paired addresses, most recent first (max
 // SENSOR_MAX_PAIRED). Stored under the same NVS key as the old single address,
 // which parses as a one-entry list — no migration.
@@ -97,7 +96,6 @@ void begin() {
     // Key bumped to usbdrv2 so the new OFF default takes effect even on devices
     // that had the old (default-ON) "usbdrv" value stored. OFF = the device
     // keeps the SD (logs, maps, books) when plugged in.
-    usbDrv = prefs.getBool("usbdrv2", false);
     btOn = prefs.getBool("bt", false);
     wifiOn = prefs.getBool("wifi", false);
     for (int i = 0; i < 5; ++i) {
@@ -135,7 +133,7 @@ void begin() {
     meshSlot = prefs.getUChar("meshslot", 0);
     prefs.getString("meshlong", meshLong, sizeof(meshLong));
     prefs.getString("meshshort", meshShort, sizeof(meshShort));
-    Serial.printf("[cfg] tz=%dmin usbdrive=%d mesh=%d\n", tz, usbDrv, meshOn);
+    Serial.printf("[cfg] tz=%dmin mesh=%d\n", tz, meshOn);
 }
 
 
@@ -162,12 +160,6 @@ int backlight() { return bl; }
 void setBacklight(int b) {
     bl = constrain(b, 0, 3);
     prefs.putInt("bl", bl);
-}
-
-bool usbDrive() { return usbDrv; }
-void setUsbDrive(bool on) {
-    usbDrv = on;
-    prefs.putBool("usbdrv2", usbDrv);
 }
 
 bool bluetooth() { return btOn; }

@@ -321,12 +321,10 @@ void setup() {
 #ifdef DEBUG_EARLY_USB
     // Diagnostic only. Normally TinyUSB is not started until usb_storage::begin()
     // calls USB.begin() (usb_storage.cpp), which happens LATE — from the UI task,
-    // after the SD mount — and is skipped entirely when the card reports zero
-    // sectors. So anything that hangs or panics at or before the SD step produces
-    // no USB device at all and therefore no log, which is exactly the case one
-    // needs the log for. Starting the stack here makes the port enumerate before
-    // the SD is touched. Cost: MSC is registered after USB.begin(), so the card
-    // does NOT appear as a USB drive in this build. Debug builds only.
+    // after the SD mount. So anything that hangs or panics at or before the SD
+    // step produces no USB device at all and therefore no log, which is exactly
+    // the case one needs the log for. Starting the stack here makes the port
+    // enumerate before the SD is touched. Debug builds only.
     USB.begin();
 #endif
     delay(200);
@@ -447,8 +445,7 @@ void setup() {
     ui_dashboard::bootStep("SD card");
     bool sdOk = sd_card::begin();
     // Crash evidence first: queued crash reports and the pending Memfault dump
-    // go to the card NOW, synchronously, before the UI task exists — and so
-    // before usb_storage::begin() can hand the card to a host. A device that
+    // go to the card NOW, synchronously, before the UI task exists. A device that
     // crashes ~15 s after every boot would otherwise never deliver either.
     // Bounded work: at most four short reports and one <=64 KiB dump.
     if (sdOk) crash_report::onSdMounted("boot mount");
@@ -489,9 +486,8 @@ void setup() {
         ui_dashboard::bootStatus("RTC", false);
         diag::log("rtc: not found");
     }
-    // NOTE: usb_storage::begin() is called from the UI task AFTER the boot-time
-    // SD firmware-update check, so a firmware.bin dropped on the card always
-    // flashes before the computer can mount (and grab) the SD.
+    // NOTE: usb_storage::begin() (the USB serial port) is called from the UI
+    // task AFTER the boot-time SD firmware-update check.
     ui_dashboard::bootStep("GPS");
     bool gpsOk = gps_service::begin();
     ui_dashboard::bootDetailFor("GPS", "%s · %s", gps_service::moduleName(),
@@ -700,7 +696,6 @@ void loop() {
         diag::log("stack: ui free=%u bytes (of 12288)",
                   (unsigned)uxTaskGetStackHighWaterMark(g_uiTask));
     }
-    usb_storage::poll();   // reclaim the SD when the host disconnects
     sd_card::retryMountIfNeeded();   // pick a dropped card back up
     power_mgmt::tick();    // hold light sleep off while the USB console is open
     sd_diagnostics::tick();

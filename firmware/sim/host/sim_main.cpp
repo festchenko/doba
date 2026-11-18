@@ -184,7 +184,6 @@ void loop() {
             doba_batt::sample(mv, ma, st.batteryPercent, (uint16_t)(1500 * st.batteryPercent / 100), usb);
         }
     }
-    usb_storage::poll();
     sd_card::retryMountIfNeeded();
     power_mgmt::tick();
     sd_diagnostics::tick();

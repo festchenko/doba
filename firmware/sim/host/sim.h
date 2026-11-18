@@ -77,10 +77,6 @@ void setSdLatency(int ms);   // device-time cost of every card open/read/write
 struct CardUsage { uint64_t cardBytes, totalBytes, usedBytes, clusterBytes; };
 CardUsage sdUsage(bool recount = false);
 void setSdSizeMb(uint64_t mb, uint32_t clusterKb = 0);
-// A computer has the card mounted over USB (usb_storage::hostActive): the
-// firmware keeps off the card until it is released, then rescans it.
-void setUsbHost(bool on);
-bool usbHost();
 
 // The function containing `addr` (a return address), demangled; "?" if unknown.
 std::string symbolName(void* addr);

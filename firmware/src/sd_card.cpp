@@ -13,7 +13,6 @@
 #include "diag.h"
 #include "device_state.h"
 #include "sd_bus.h"
-#include "usb_storage.h"
 
 namespace sd_card {
 
@@ -197,23 +196,6 @@ bool begin() {
     return true;
 }
 
-// A computer took the card over USB: unmount Doba's own FatFs volume so that
-// nothing in the firmware can read stale tables or write while the host's
-// filesystem driver writes too (two writers on one FAT is how cards get
-// corrupted). The SD driver underneath stays up: USB storage reads and writes
-// raw sectors through it. Every SD.open() fails cleanly until remount(), and
-// the mount generation moves on so caches drop their open files.
-bool lendToHost() {
-    if (g_sdDrive == 0xFF) return false;
-    sdLock();
-    char drv[3] = {(char)('0' + g_sdDrive), ':', 0};
-    const FRESULT r = f_mount(nullptr, drv, 0);
-    ++g_mountGen;
-    sdUnlock();
-    diag::log("sd: lent to the USB host (FatFs volume %s unmounted: %d)", drv, (int)r);
-    return r == FR_OK;
-}
-
 bool remount(const char* why) {
     sdLock();
     SD.end();
@@ -224,9 +206,8 @@ bool remount(const char* why) {
 }
 
 void retryMountIfNeeded() {
-    // Nothing to do when it's mounted, and nothing we're allowed to do while a
-    // host computer owns the card over USB.
-    if (sdOk || usb_storage::hostActive()) return;
+    // Nothing to do when it's mounted.
+    if (sdOk) return;
 
     static uint32_t lastTry = 0;
     static uint16_t tries = 0;
@@ -240,8 +221,7 @@ void retryMountIfNeeded() {
 
     if (ok) {
         sdOk = true;
-        // Deliver crash evidence BEFORE flagging the late mount: the UI task
-        // reacts to that flag by exposing the card over USB.
+        // Deliver crash evidence BEFORE flagging the late mount.
         crash_report::onSdMounted("late mount");
         lateMount = true;
         diag::log("sd: card back after %u retr%s", (unsigned)tries + 1,
@@ -259,10 +239,9 @@ bool consumeLateMount() {
     return true;
 }
 
-// The card is "unavailable" to the firmware while a host computer owns it.
-bool sdMounted() { return sdOk && !usb_storage::hostActive(); }
+bool sdMounted() { return sdOk; }
 
-// A card lent to a USB host is still a card: only a failed mount counts here.
+// Only a failed mount counts here.
 uint8_t sdCardState() {
     if (sdOk) return SD_CARD_OK;
     return cardAnswered ? SD_CARD_UNREADABLE : SD_CARD_NONE;

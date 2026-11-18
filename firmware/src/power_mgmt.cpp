@@ -14,7 +14,6 @@
 
 #include "diag.h"
 #include "sd_card.h"
-#include "usb_storage.h"
 #include "board_power.h"
 
 
@@ -215,7 +214,7 @@ void tick() {
         lastVbusKnown = vbusKnown;
     }
     s_vbus = vbus;
-    bool usb = grace || serial || vbus || usb_storage::hostActive() ||
+    bool usb = grace || serial || vbus ||
                phone || hunting || sensors;
     s_grace = grace; s_serial = serial; s_phone = phone; s_hunt = hunting;
     s_sens = sensors;
@@ -227,11 +226,11 @@ void tick() {
         sleepStats(ok, rejected, us);
         char state[64]; stateStr(state, sizeof(state));
         uint32_t maxMs, longCalls; sleepStatsMax(maxMs, longCalls);
-        diag::log("pm window: %lums calls=%lu rejected=%lu sleep_call_ms=%llu max_call_ms=%lu long_calls=%lu holders=%s sd=%d host=%d",
+        diag::log("pm window: %lums calls=%lu rejected=%lu sleep_call_ms=%llu max_call_ms=%lu long_calls=%lu holders=%s sd=%d",
                   (unsigned long)(now - lastReportMs), (unsigned long)(ok - lastOk),
                   (unsigned long)(rejected - lastRejected), (us - lastSleepUs) / 1000,
                   (unsigned long)maxMs, (unsigned long)longCalls,
-                  state, sd_card::sdMounted(), usb_storage::hostActive());
+                  state, sd_card::sdMounted());
         lastReportMs = now; lastOk = ok; lastRejected = rejected; lastSleepUs = us;
     }
 

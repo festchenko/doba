@@ -23,8 +23,6 @@ void setBacklight(int b);
 
 
 
-bool usbDrive();          // true = expose SD as a USB drive when plugged in
-void setUsbDrive(bool on);
 // DOBA: both radios default OFF. Bluetooth is brought up only at boot, so a
 // change takes effect after a restart; WiFi is never started unless allowed.
 // DOBA: the owner card on the power-off screen ("" = none).

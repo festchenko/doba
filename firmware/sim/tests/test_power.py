@@ -100,11 +100,6 @@ def test_riding_without_recording_keeps_it_on_and_stopping_starts_the_countdown(
     assert_switched_off_after_idle(off, t)
 
 
-def test_a_computer_holding_the_card_keeps_it_on(device):
-    device.usb_host(True)
-    stays_on(device, 25)
-
-
 def test_on_the_cable_it_stays_on_and_off_it_the_countdown_runs(device):
     """On USB power the battery is not what runs it: no switch-off (18 Nov,
     it slept on the cable mid-test). Unplugged, idle means off again."""

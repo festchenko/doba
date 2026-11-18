@@ -41,26 +41,9 @@ void sleepStats(uint32_t& ok, uint32_t& rejected, uint64_t& us) { ok = rejected 
 void sleepStatsMax(uint32_t& maxMs, uint32_t& longCallsTotal) { maxMs = longCallsTotal = 0; }
 }  // namespace power_mgmt
 
-namespace {
-std::atomic<bool> g_usbHost{false};
-}
-void sim::setUsbHost(bool on) { g_usbHost = on; }
-bool sim::usbHost() { return g_usbHost; }
-
-// No USB stack: a test plays the computer (control `usb`), editing <dir>/sd
-// while the host "has" it.
+// No USB stack in the sim.
 namespace usb_storage {
 void begin() {}
-void setDriveEnabled(bool) {}
-bool driveEnabled() { return g_usbHost; }
-bool hostActive() { return g_usbHost; }
-// As src/usb_storage.cpp: the firmware lends its volume while the host has the
-// card and mounts it again once the host lets go.
-void poll() {
-    static bool lent = false;
-    if (g_usbHost && !lent) lent = sd_card::lendToHost();
-    else if (!g_usbHost && lent) { sd_card::remount("usb host released"); lent = false; }
-}
 }  // namespace usb_storage
 
 namespace sd_diagnostics {

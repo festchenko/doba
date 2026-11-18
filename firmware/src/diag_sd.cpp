@@ -6,7 +6,6 @@
 #include <esp_heap_caps.h>
 #include "sd_card.h"
 #include "sd_bus.h"
-#include "usb_storage.h"
 
 // Read-only serial retrieval: avoid USB mass-storage ownership and preserve
 // byte boundaries even when other tasks log concurrently. Each chunk is one
@@ -42,7 +41,7 @@ struct Job {
 std::atomic<bool> busy{false};
 
 bool cardFree() {
-    return sd_card::sdMounted() && !usb_storage::hostActive();
+    return sd_card::sdMounted();
 }
 
 // Write a whole line once the CDC buffer has room for it. false: the host

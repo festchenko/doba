@@ -209,7 +209,7 @@ void renderSun(const DeviceState& s, uint8_t* fb) {
 // --- MORE ----------------------------------------------------------------------
 
 const char* hoursText(float h);
-enum MoreRow { M_USB, M_BT, M_WIFI, M_BATT, M_OWNER, M_GPS, M_MODE, M_CARD, M_ABOUT, M_COUNT };
+enum MoreRow { M_BT, M_WIFI, M_BATT, M_OWNER, M_GPS, M_MODE, M_CARD, M_ABOUT, M_COUNT };
 int moreRowY(int r) { return TOP + 4 + SEC_H + r * SROW_H; }
 
 void renderMore(const DeviceState& s, uint8_t* fb) {
@@ -219,10 +219,6 @@ void renderMore(const DeviceState& s, uint8_t* fb) {
         const int y = moreRowY(r);
         char sub[64];
         switch (r) {
-            case M_USB:
-                caption(y, SROW_H, "USB DRIVE", settings::usbDrive() ? "the card shows on a computer" : "off: the card is Doba's", fb);
-                toggle(y, SROW_H, settings::usbDrive(), fb);
-                break;
             case M_BT:
                 // A switch kept for what comes next: nothing in the firmware
                 // uses Bluetooth yet, so on or off nothing transmits.
@@ -277,19 +273,11 @@ void renderMore(const DeviceState& s, uint8_t* fb) {
         }
         epd_fill_rect({24, y + SROW_H - 1, W - 48, 1}, ui::HAIR, fb);
     }
-    ui::text(ui::font(ui::F_TINY), W / 2, H - 24, TR("USB drive: copy books and maps from a computer"), fb,
-             EPD_DRAW_ALIGN_CENTER, INK);
 }
 
 Go tapMore(int x, int y) {
     const int r = (y - moreRowY(0)) / SROW_H;
     if (y < moreRowY(0) || r >= M_COUNT) return STAY;
-    if (r == M_USB && toggleHit(x)) {
-        const bool on = x >= CTRL_X + CTRL_W - 75;
-        settings::setUsbDrive(on);
-        if (on) doba_lib::flush();   // the card goes to the computer: nothing left unwritten
-        usb_storage::setDriveEnabled(on);
-    }
     if (r == M_BT && toggleHit(x)) settings::setBluetooth(x >= CTRL_X + CTRL_W - 75);
     if (r == M_WIFI && toggleHit(x)) settings::setWifi(x >= CTRL_X + CTRL_W - 75);
     if (r == M_GPS && x >= CTRL_X) return TO_GPSDEBUG;

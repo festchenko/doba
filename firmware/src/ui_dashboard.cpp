@@ -326,8 +326,8 @@ void shutdownDevice(uint8_t* fb, const char* reason) {
     // port-0 output/config bits, the battery current before and after, and
     // whether the GPS is still talking on RX afterwards.
     radioRailOffProbe();
-    diag::log("sleep: final SD flush; mounted=%d host=%d CS=%d/%d bl=%d",
-              sd_card::sdMounted(), usb_storage::hostActive(),
+    diag::log("sleep: final SD flush; mounted=%d CS=%d/%d bl=%d",
+              sd_card::sdMounted(),
               digitalRead(BOARD_SD_CS), digitalRead(BOARD_LORA_CS),
               digitalRead(BOARD_BL_EN));
     diag::flushToSD();
@@ -1325,7 +1325,6 @@ static void printConsoleHelp() {
     Serial.println("  pm [on|off]         report PM/driver locks, or request light-sleep A/B");
     Serial.println("  bleinterval [status|fast]  measured link or transient fast request");
     Serial.println("  autosleep [on|off]   idle auto-shutdown, this boot only (default on)");
-    Serial.println("  usbdrive [on|off]    expose the SD to a host; off takes the card back");
     Serial.println("  power                battery voltage + draw (mA) + full fuel-gauge state");
     Serial.println("  aux                  optional Qwiic sensors: baro / accel / compass");
     Serial.println("  sensors              paired/connected MACs + everything seen this session");
@@ -1681,11 +1680,7 @@ static void runConsoleLine(char* line) {
         // "Not mounted" has two causes that need opposite responses, and the
         // difference is invisible on the device's own screen. Say which it is.
         if (!sd_card::sdMounted()) {
-            if (usb_storage::hostActive())
-                Serial.println("[sd] a USB host owns the card — unplug it, eject it, "
-                               "or toggle the USB drive off/on ('usbdrive off' then 'on')");
-            else
-                Serial.println("[sd] not mounted by the firmware — cardType=NONE means "
+            Serial.println("[sd] not mounted by the firmware — cardType=NONE means "
                                "the driver cleaned up; use diag for command responses");
         }
         if (sd_card::sdMounted()) {
@@ -1694,21 +1689,6 @@ static void runConsoleLine(char* line) {
                               (1024ULL * 1024ULL);
             sdUnlock();
             Serial.printf("[sd] %llu MB free, log=%s\n", freeMB, diag::logPath());
-        }
-    } else if (!strcasecmp(cmd, "usbdrive")) {
-        // The serial-side escape hatch for a stuck "a USB host owns the card":
-        // turning the drive off hands the card straight back to the firmware.
-        // Same switch as device Settings, so it persists.
-        if (!arg) {
-            Serial.printf("[usbdrive] %s (host %s the card)\n",
-                          settings::usbDrive() ? "on" : "off",
-                          usb_storage::hostActive() ? "HAS" : "does not have");
-        } else {
-            bool on = !strcasecmp(arg, "on") || !strcasecmp(arg, "1");
-            settings::setUsbDrive(on);
-            if (on) doba_lib::flush();   // the card goes to the computer: nothing left unwritten
-            usb_storage::setDriveEnabled(on);
-            Serial.printf("[usbdrive] turned %s\n", on ? "on" : "off");
         }
     } else if (!strcasecmp(cmd, "bootloader") || !strcasecmp(cmd, "boot")) {
         rebootToBootloader();
@@ -1937,27 +1917,19 @@ void task(void*) {
 
 
 TRC("enter");     applySdUpdate();          // flash a firmware.bin from the SD card, if present
-TRC("sdupdate");     usb_storage::begin();     // THEN expose the SD to a host computer over USB
-TRC("usb");     bool lastHostActive = false;
+TRC("sdupdate");     usb_storage::begin();     // the USB serial port
+TRC("usb");
 
     for (;;) {
-        // When the computer releases the SD (eject/unplug), check whether it
-        // dropped a firmware.bin on the card and flash it automatically.
-TRC("loop");         bool host = usb_storage::hostActive();
-        if (lastHostActive && !host) {
-            applySdUpdate();
-            cardChanged();   // the computer may have added or removed maps, books...
-        }
-        lastHostActive = host;
+TRC("loop");
 
         // A card that only mounted after boot had given up: everything that
-        // looked for its files found none, and the USB drive was skipped. Look
+        // looked for its files found none. Look
         // again now, here in the UI task, next to the renderer that uses them.
         if (sd_card::consumeLateMount()) {
-            diag::log("sd: late mount — loading maps and books, exposing USB drive");
+            diag::log("sd: late mount — loading maps and books");
             cardChanged();
             applySdUpdate();      // a firmware.bin may have been on the card
-            usb_storage::begin(); // no-op if it already came up
         }
 
         // Ground height under the position comes from the card's DEM, set by
@@ -1994,9 +1966,6 @@ TRC("loop");         bool host = usb_storage::hostActive();
             // CPU, screen controller, GPS and radio up: 8 %/h, flat overnight
             // (18 Nov). Until the radio can listen while the rest sleeps, idle
             // means off, mesh or not.
-            // A computer that has the card (copying maps or books) is a user too:
-            // sleeping would unmount the card and drop off USB mid-copy.
-            !usb_storage::hostActive() &&
             // On the cable the battery is not what runs it: stay on (18 Nov).
             !usbPower) {
             uint8_t* fb = epdc_framebuffer();
