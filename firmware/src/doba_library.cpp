@@ -382,10 +382,36 @@ void search(const char* key, BookMask mask) {
         for (int i = 0; i < g_resultCount; ++i) cand[nb * RESULTS + i] = g_results[i];
         got[nb++] = (uint8_t)g_resultCount;
     }
+    // Order (QA 18 Nov: "tourniquet" listed Appropedia and iFixit above the
+    // medical books): a title that is exactly what was typed first, then the
+    // books one reaches for in trouble, then the rest; each book's own best
+    // first, a book at a time round, so no one book fills the list.
+    static const char* const kFirst[] = {"med_en", "medicine", "tccc_uk", "dsns_uk", "gov", "disaster", "water",
+                                         "food", "knots", "medicine_uk", "disaster_uk", "water_uk", "food_uk",
+                                         "knots_uk", "wiki_uk", "wiki_en", "voyage_uk", "voyage_en"};
+    auto bookRank = [](int bi) {
+        for (int i = 0; i < (int)(sizeof kFirst / sizeof kFirst[0]); ++i)
+            if (!strcmp(g_books[bi].dir, kFirst[i])) return i;
+        return 100 + bi;
+    };
+    struct Pick { int16_t exact, round, rank; int16_t at; };
+    static Pick picks[MAX_BOOKS * RESULTS];
+    int np = 0;
+    for (int b = 0; b < nb; ++b)
+        for (int r = 0; r < got[b]; ++r) {
+            const Result& c = cand[b * RESULTS + r];
+            char ck[KEY + 1];
+            fold(c.title, ck, sizeof ck);
+            picks[np++] = {(int16_t)(strcmp(ck, key) == 0 ? 0 : 1), (int16_t)r, (int16_t)bookRank(c.book),
+                           (int16_t)(b * RESULTS + r)};
+        }
+    std::stable_sort(picks, picks + np, [](const Pick& a, const Pick& b) {
+        if (a.exact != b.exact) return a.exact < b.exact;
+        if (a.round != b.round) return a.round < b.round;
+        return a.rank < b.rank;
+    });
     g_resultCount = 0;
-    for (int r = 0; r < RESULTS && g_resultCount < RESULTS; ++r)
-        for (int b = 0; b < nb && g_resultCount < RESULTS; ++b)
-            if (r < got[b]) g_results[g_resultCount++] = cand[b * RESULTS + r];
+    for (int i = 0; i < np && g_resultCount < RESULTS; ++i) g_results[g_resultCount++] = cand[picks[i].at];
 }
 
 bool inflateTo(const uint8_t* src, size_t len, char* dst, size_t cap, size_t* outLen) {
@@ -3364,6 +3390,19 @@ void dumpText() {
         Serial.printf("[libtext] %.*s\n", (int)(e - i), g_text + i);
         i = e + 1;
     }
+}
+
+void dumpSearch(const char* text) {
+    if (g_bookCount < 0) { scan(); loadSections(); }
+    char key[KEY + 1];
+    fold(text, key, sizeof key);
+    const uint32_t t0 = millis();
+    search(key, ~(BookMask)0);
+    Serial.printf("[libsearch] '%s': %d in %lu ms\n", key, g_resultCount, (unsigned long)(millis() - t0));
+    for (int i = 0; i < g_resultCount; ++i)
+        Serial.printf("[libsearch] %s | %s\n", g_results[i].title, g_books[g_results[i].book].dir);
+    g_lastQuery[0] = 1;   // the search page searches again for itself
+    g_lastQuery[1] = 0;
 }
 
 bool takePlace(double& lat, double& lon, char* name, size_t n) {

@@ -1706,6 +1706,11 @@ static void runConsoleLine(char* line) {
         i18n::setLang(!strcasecmp(arg, "uk") ? i18n::UK : i18n::EN);
     } else if (!strcasecmp(cmd, "libtext")) {   // DOBA: the open article's text as laid out (QA)
         doba_lib::dumpText();
+    } else if (!strcasecmp(cmd, "libsearch") && arg) {   // DOBA: libsearch <text>, the rest of the line
+        char t[160];
+        const char* rest = strtok(nullptr, "");
+        snprintf(t, sizeof t, "%s%s%s", arg, rest ? " " : "", rest ? rest : "");
+        doba_lib::dumpSearch(t);
     } else if (!strcasecmp(cmd, "libopen") && arg) {   // DOBA: libopen <title>, the rest of the line
         char t[160];
         const char* rest = strtok(nullptr, "");
@@ -1817,7 +1822,13 @@ static void runConsoleLine(char* line) {
         for (char* t = arg; t && n < 5; t = strtok(nullptr, " \t")) v[n++] = atoi(t);
         if (n >= 2 && g_touchQ) {
             if (v[2] < 0) { v[2] = v[0]; v[3] = v[1]; }
-            const uint32_t now = millis();
+            // Taps sent while a frame paints are read together; each gets its own
+            // release time, as fingers would, or the tap filter takes the second
+            // for a double read of the first (remote QA typed "touniue", 18 Nov).
+            static uint32_t lastUp = 0;
+            uint32_t now = millis();
+            if (now - lastUp < 150) now = lastUp + 150;
+            lastUp = now;
             const TouchEv ev = {(int16_t)v[0], (int16_t)v[1], (int16_t)v[2], (int16_t)v[3], now - (uint32_t)v[4], now};
             xQueueSend(g_touchQ, &ev, 0);
             if (uiWake) xSemaphoreGive(uiWake);

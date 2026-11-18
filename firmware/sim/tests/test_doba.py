@@ -972,3 +972,22 @@ def test_a_machine_translation_says_so_under_the_title(doba):
         doba.console("libtext", 800)
         text = "\n".join(l for l in doba.log(since) if l.startswith("[libtext]"))
         assert ("Машинний переклад" in text) == note, text
+
+
+def test_a_search_lists_the_medical_book_before_repair_guides(doba):
+    """QA 18 Nov: 'tourniquet' listed Appropedia and iFixit above Medicine. A
+    title that is exactly the word comes first, the books one reaches for in
+    trouble before the rest."""
+    lib = os.path.join(doba.sd, "doba", "lib")
+    write_book(os.path.join(lib, "appropedia"), "AT", [("Tourniquet Application", "TTourniquet Application\nPx"),
+                                                      ("Tourniquet", "TTourniquet\nPx")])
+    write_book(os.path.join(lib, "ifixit"), "iFixit", [("Tourniquet System", "TTourniquet System\nPx")])
+    write_book(os.path.join(lib, "med_en"), "Medicine", [("Tourniquet", "TTourniquet\nPx")])
+    boot(doba)
+    since = doba.log_seq()
+    doba.console("libsearch tourniquet", 800)
+    doba.wait_log(r"\[libsearch\] 'tourniquet'", since=since)
+    time.sleep(0.5)
+    rows = [l.split("] ", 1)[1] for l in doba.log(since) if l.startswith("[libsearch]") and "|" in l]
+    assert rows[:2] == ["Tourniquet | med_en", "Tourniquet | appropedia"], rows
+    assert set(rows[2:]) == {"Tourniquet Application | appropedia", "Tourniquet System | ifixit"}, rows

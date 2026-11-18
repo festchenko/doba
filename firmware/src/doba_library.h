@@ -37,6 +37,7 @@ void renderArticle(uint8_t* fb);
 bool tapArticle(int x, int y);
 // A place link (geo:) tapped: where, and the link's words. Taken once.
 bool takePlace(double& lat, double& lon, char* name, size_t n);
+void dumpSearch(const char* text);   // console libsearch: what a search of every book lists
 void dumpText();   // console libtext: the open article, line by line       // a link opens its article; else pages. true: CLOSE tapped
 bool articleBack();                  // back along followed links; false at the first
 void leaveArticle();
