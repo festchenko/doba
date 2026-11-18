@@ -1,6 +1,8 @@
 // DOBA: main screen, comms and library pages — see doba_ui.h. The pages live in
 // doba_ui_*.cpp; what they share is in doba_ui_shared.h.
 #include "doba_ui_shared.h"
+#include <esp_heap_caps.h>
+#include "ui_shared.h"
 
 namespace doba_ui {
 namespace pg {
@@ -33,7 +35,44 @@ const Tile kTiles[8] = {
     {tileRect(0, 3), "Settings", TO_SETUP},  {tileRect(1, 3), "Power", TO_POWER},
 };
 
+// The contour lines take nearly all of this page's 360 ms (18 Nov), and the
+// page is live (1 Hz), so a tap waited behind them most of every second. The
+// lines keep clear of whatever is drawn, so they depend on the rest of the
+// page: drawn once for a page, and copied in while the page under them is the
+// same (the hash of the page without them).
+uint8_t* g_homeDone = nullptr;   // the last page with its lines
+uint32_t g_homeHash = 0;
+
+uint32_t pageHash(const uint8_t* fb) {
+    // the whole buffer (the panel is rotated: no rows to skip). The status bar
+    // in it is the last frame's, so the lines are drawn again once a minute.
+    const uint32_t* w = (const uint32_t*)fb;
+    uint32_t h = 2166136261u;
+    for (size_t i = 0, n = uid::fbSize / 4; i < n; ++i) h = (h ^ w[i]) * 16777619u;
+    return h ? h : 1;
+}
+
+void dropHomeCache() {
+    if (g_homeDone) heap_caps_free(g_homeDone);
+    g_homeDone = nullptr;
+    g_homeHash = 0;
+}
+
+void renderHomePage(const DeviceState& s, uint8_t* fb);
+
 void renderHome(const DeviceState& s, uint8_t* fb) {
+    renderHomePage(s, fb);
+    const uint32_t h = pageHash(fb);
+    if (g_homeDone && h == g_homeHash) { memcpy(fb, g_homeDone, uid::fbSize); return; }
+    // the contour lines inside the light tiles only: one map, seen through them
+    for (const Tile& t : kTiles)
+        if (t.go != TO_SOS) topo_bg::draw({t.r.x + 3, t.r.y + 3, t.r.width - 6, t.r.height - 6}, fb, 0);
+        else if (!sosActive()) topo_bg::drawInverted({t.r.x + 6, t.r.y + 6, t.r.width - 12, t.r.height - 12}, fb, 0);
+    if (!g_homeDone) g_homeDone = (uint8_t*)heap_caps_malloc(uid::fbSize, MALLOC_CAP_SPIRAM);   // a cache: it gives way
+    if (g_homeDone) { memcpy(g_homeDone, fb, uid::fbSize); g_homeHash = h; }
+}
+
+void renderHomePage(const DeviceState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     char sub[64];
     for (int i = 0; i < 8; ++i) {
@@ -97,10 +136,6 @@ void renderHome(const DeviceState& s, uint8_t* fb) {
                      EPD_DRAW_ALIGN_CENTER, PAPER);
         }
     }
-    // the contour lines inside the light tiles only: one map, seen through them
-    for (const Tile& t : kTiles)
-        if (t.go != TO_SOS) topo_bg::draw({t.r.x + 3, t.r.y + 3, t.r.width - 6, t.r.height - 6}, fb, 0);
-        else if (!sosActive()) topo_bg::drawInverted({t.r.x + 6, t.r.y + 6, t.r.width - 12, t.r.height - 12}, fb, 0);
     renderStealthBar(fb);
 }
 
@@ -624,5 +659,7 @@ Go back(Page p) {
     }
     return TO_HOME;
 }
+
+void dropHomeCache() { pg::dropHomeCache(); }
 
 }  // namespace doba_ui

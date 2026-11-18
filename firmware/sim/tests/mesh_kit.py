@@ -215,6 +215,9 @@ def mesh(request):
     """A device with its radio fitted and on (LongFast, the default channel),
     a paired phone on the link, and the phone's view of the mesh."""
     dev = start_device()
+    # These run for device hours; the 3-minute idle switch-off (which the
+    # mesh no longer holds back, 18 Nov) is test_power's business, not theirs.
+    dev.console("autosleep off", 400)
     m = None
     try:
         m = Mesh(dev)

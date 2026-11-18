@@ -105,6 +105,17 @@ def test_a_computer_holding_the_card_keeps_it_on(device):
     stays_on(device, 25)
 
 
+def test_on_the_cable_it_stays_on_and_off_it_the_countdown_runs(device):
+    """On USB power the battery is not what runs it: no switch-off (18 Nov,
+    it slept on the cable mid-test). Unplugged, idle means off again."""
+    device.battery(80, charging=True)
+    stays_on(device, 10)
+    device.battery(80, charging=False)
+    t = uptime_s(device)
+    off = run_to(device, t + IDLE_S + 120, fine_from=t + IDLE_S - 30)
+    assert_switched_off_after_idle(off, t)   # from the unplugging, not the last tap
+
+
 # ---- the power dialog --------------------------------------------------------------------------
 
 def test_cancel_on_the_power_dialog_keeps_it_on(device):

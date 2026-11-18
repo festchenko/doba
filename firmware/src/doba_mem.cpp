@@ -4,6 +4,7 @@
 #include <esp_heap_caps.h>
 
 #include "doba_library.h"
+#include "doba_ui.h"
 #include "topo_layer.h"
 
 namespace doba_mem {
@@ -20,6 +21,7 @@ void report(const char* why) {
 void dropCaches() {
     topo::trim();
     doba_lib::dropCaches();
+    doba_ui::dropHomeCache();
 }
 
 void* big(size_t n) {

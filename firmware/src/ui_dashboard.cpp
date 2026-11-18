@@ -486,6 +486,19 @@ bool liveScreen(Screen sc) {
     return sc == SCREEN_MAP || sc == SCREEN_SOS || sc == SCREEN_GPSDEBUG ||
            sc == SCREEN_SUN || sc == SCREEN_HOME;
 }
+bool onUsbPower() {
+    static uint32_t at = 0;
+    static bool usb = false;
+    if (!at || millis() - at > 5000) {   // an I2C read: not every pass
+        bool v = false;
+        if (board_usb_power_present(v)) {
+            if (v != usb) lastActivityMs = millis();   // plugged or unplugged: someone has it in hand
+            usb = v;
+        }
+        at = millis() | 1;
+    }
+    return usb;
+}
 bool tickDue(Screen sc, uint32_t lastDraw) {
     const uint32_t since = millis() - lastDraw;
     if (sc == SCREEN_MAP) {
@@ -1916,6 +1929,7 @@ TRC("loop");         bool host = usb_storage::hostActive();
         }
 
         // Auto-sleep after a quiet period to save battery. Wake with POWER.
+        const bool usbPower = onUsbPower();   // first: unplugging restarts the countdown
         if (autoSleepEnabled && millis() - lastActivityMs > AUTO_SLEEP_MS &&
             // DOBA: the mesh no longer holds the device awake. Listening kept
             // CPU, screen controller, GPS and radio up: 8 %/h, flat overnight
@@ -1923,7 +1937,9 @@ TRC("loop");         bool host = usb_storage::hostActive();
             // means off, mesh or not.
             // A computer that has the card (copying maps or books) is a user too:
             // sleeping would unmount the card and drop off USB mid-copy.
-            !usb_storage::hostActive()) {
+            !usb_storage::hostActive() &&
+            // On the cable the battery is not what runs it: stay on (18 Nov).
+            !usbPower) {
             uint8_t* fb = epdc_framebuffer();
             shutdownDevice(fb, "auto-sleep (idle timeout)");   // does not return
         }

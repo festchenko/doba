@@ -56,4 +56,7 @@ Go tap(Page p, int x, int y, const DeviceState& s);
 void setPressMs(uint32_t ms);
 Go back(Page p);
 
+// The home page keeps its last frame (contour lines and all): let it go.
+void dropHomeCache();
+
 }  // namespace doba_ui
