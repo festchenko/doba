@@ -1664,12 +1664,13 @@ void listRow(int y, const char* title, uint8_t* fb) {
 bool bigBook(int bi) { return g_books[bi].count > 20000; }
 bool g_bookAZ = false;          // the A-Z grid is up (from the book's page)
 constexpr int MAX_MENU = 480;
-struct MenuItem { char title[160]; char sub[100]; bool header; int32_t rec; uint8_t cut; };   // cut: line 2 starts (0: one line)
+bool jumpToHeading(const char* name, bool remember);
+struct MenuItem { char title[160]; char sub[100]; char at[48]; bool header; int32_t rec; uint8_t cut; };   // at: "#Heading" to open on   // cut: line 2 starts (0: one line)
 MenuItem* g_menu = nullptr;
 int g_menuCount = 0, g_menuBook = -1;
 bool g_menuPicks = false;        // the menu came from picks/topics (a big book's)
 
-void addMenu(const char* title, const char* sub, bool header, int32_t rec = -1) {
+void addMenu(const char* title, const char* sub, bool header, int32_t rec = -1, const char* at = "") {
     if (!title[0]) return;
     if (g_menuCount >= MAX_MENU) {
         static int warned = -1;
@@ -1685,6 +1686,7 @@ void addMenu(const char* title, const char* sub, bool header, int32_t rec = -1) 
     MenuItem& m = g_menu[g_menuCount++];
     snprintf(m.title, sizeof m.title, "%s", title);
     snprintf(m.sub, sizeof m.sub, "%s", sub ? sub : "");
+    snprintf(m.at, sizeof m.at, "%s", at ? at : "");
     m.header = header;
     m.rec = rec;
     m.cut = 0;
@@ -1733,9 +1735,13 @@ void findMenu(int bi) {
     snprintf(path, sizeof path, "%s/%s/menu.txt", kRoot, g_books[bi].dir);
     eachLine(path, [](char* l) {
         if (l[0] == '#') { char* t = l + 1; while (*t == ' ') ++t; addMenu(t, "", true); return; }
+        // "Title|subtitle|#Heading": a first-aid row opens on what to do, not on
+        // the history of the subject (QA 18 Nov: Bleeding's on page 15 of 21).
         char* bar = strchr(l, '|');
         if (bar) *bar = 0;
-        addMenu(l, bar ? bar + 1 : "", false);
+        char* at = bar ? strstr(bar + 1, "|#") : nullptr;
+        if (at) { *at = 0; at += 2; }
+        addMenu(l, bar ? bar + 1 : "", false, -1, at ? at : "");
     });
     if (g_menuCount) return;
     g_menuPicks = true;
@@ -3082,6 +3088,13 @@ bool tapSearch(kbd::Keyboard& k, int x, int y) {
                     return false;
                 }
                 if (g_menu[i].rec >= 0) return openRecord(bi, (uint32_t)g_menu[i].rec);
+                if (g_menu[i].at[0]) {
+                    char at[sizeof g_menu[i].at];
+                    snprintf(at, sizeof at, "%s", g_menu[i].at);
+                    const bool ok = openEntry(bi, g_menu[i].title);
+                    if (ok && !jumpToHeading(at, false)) Serial.printf("[lib] no heading '%s'\n", at);
+                    return ok;
+                }
                 return openEntry(bi, g_menu[i].title);
             }
             for (int i = 0; i < letterCount(bi); ++i)
@@ -3308,7 +3321,7 @@ bool findIn(int bi, const char* title, Result& out) {
 }
 
 // "#Heading": a jump inside the article to the heading of that name.
-bool jumpToHeading(const char* name) {
+bool jumpToHeading(const char* name, bool remember) {
     char want[KEY], have[KEY];
     fold(name, want, sizeof want);
     for (int k = 0; k < g_lineCount; ++k) {
@@ -3321,6 +3334,11 @@ bool jumpToHeading(const char* name) {
         text[n] = 0;
         fold(text, have, sizeof have);
         if (!strcmp(want, have)) {
+            if (!remember) {
+                g_page = pageOfLine(k);
+                Serial.printf("[lib] open at '%s', page %d\n", name, g_page + 1);
+                return true;
+            }
             if (g_historyCount == HISTORY) {
                 memmove(g_history, g_history + 1, sizeof(Visit) * (HISTORY - 1));
                 --g_historyCount;
@@ -3360,7 +3378,7 @@ void follow(int link) {
         return;
     }
     if (target[0] == '#') {
-        if (!jumpToHeading(target + 1)) g_note = "not in this article";
+        if (!jumpToHeading(target + 1, true)) g_note = "not in this article";
         return;
     }
     Result r;

@@ -1011,4 +1011,29 @@ def test_without_a_fix_the_last_position_stands_in_and_says_so(doba):
     doba.console("screen sos", 800)
     time.sleep(1.5)
     drawn = " ".join(l for l in doba.log(since) if "[i18n] drawn" in l)   # the message wraps on two lines
-    assert "SOS SOS SOS" in drawn and "32U LC" in drawn and "(last fix)" in drawn, drawn
+    assert "SOS SOS SOS" in drawn and "32U LC" in drawn and "(last fix" in drawn and "ago)" in drawn, drawn
+
+
+def test_a_first_aid_row_opens_on_what_to_do(doba):
+    """QA 18 Nov: Bleeding's first aid was on page 15 of 21. A menu row may name
+    a heading ('Title|subtitle|#Management'): the article opens there."""
+    body = ("TBleeding\nPBleeding is blood escaping from vessels.\n" +
+            "".join("H%s\nP%s\n" % (h, ("History of the subject. " * 120)) for h in ("Types", "Causes", "History")) +
+            "HManagement\nPPress hard on the wound.\n")
+    out = os.path.join(doba.sd, "doba", "lib", "med")
+    write_book(out, "Med", [("Bleeding", body)])
+    with open(os.path.join(out, "menu.txt"), "w") as f:
+        f.write("# First aid\nBleeding|pressure, tourniquet|#Management\n")
+    boot(doba)
+    doba.console("screen library", 800)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(100, TOP + 204 + 75)                            # the cover
+    doba.wait_log(r"\[lib\] book med", since=since)
+    time.sleep(0.8)
+    since = doba.log_seq()
+    doba.tap(200, TOP + 176 + 50 + 40)                      # under FIRST AID: Bleeding
+    try:
+        doba.wait_log(r"\[lib\] open at 'Management', page ([2-9]|[1-9][0-9])\b", since=since)
+    except Exception:
+        raise AssertionError([l for l in doba.log(since) if "[lib]" in l])

@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include "settings.h"
 #include "tz_auto.h"
+#include "doba_i18n.h"
 #include <ctime>
 #include <string.h>
 
@@ -27,6 +28,7 @@ char ownerF[5][64] = {};    // DOBA: name, born, blood, medical, contact   // DO
 // SENSOR_MAX_PAIRED). Stored under the same NVS key as the old single address,
 // which parses as a one-entry list — no migration.
 double lastLat = 0, lastLon = 0;
+uint32_t lastFix = 0;
 bool rtcSynced = false;  // has GPS ever written UTC to the coin-cell RTC?
 // Mesh messaging, OFF until the rider turns it on. Joining a public mesh means
 // announcing yourself on it and spending battery listening, and neither should
@@ -103,6 +105,7 @@ void begin() {
         prefs.getString(k, ownerF[i], sizeof ownerF[i]);
     }
     lastLat = prefs.getDouble("lastlat", 0);
+    lastFix = prefs.getUInt("lastfix", 0);
     lastLon = prefs.getDouble("lastlon", 0);
     rtcSynced = prefs.getBool("rtcok", false);
     meshOn = prefs.getBool("meshon", false);
@@ -179,6 +182,22 @@ bool lastPosition(double& lat, double& lon) {
     if (lastLat == 0 && lastLon == 0) return false;
     lat = lastLat;
     lon = lastLon;
+    return true;
+}
+
+uint32_t lastFixUtc() { return lastFix; }
+void setLastFixUtc(uint32_t utc) {
+    lastFix = utc;
+    prefs.putUInt("lastfix", utc);
+}
+
+bool fixAgeText(uint32_t fixUtc, char* out, size_t n, bool translate) {
+    const time_t now = time(nullptr);
+    if (!fixUtc || now < 1600000000 || (uint32_t)now < fixUtc) return false;
+    const uint32_t a = (uint32_t)now - fixUtc;
+    const char* f = a < 3600 ? "%u min" : a < 2 * 86400 ? "%u h" : "%u d";
+    const unsigned v = a < 3600 ? (a / 60 ? a / 60 : 1) : a < 2 * 86400 ? a / 3600 : a / 86400;
+    snprintf(out, n, translate ? TR(f) : f, v);
     return true;
 }
 

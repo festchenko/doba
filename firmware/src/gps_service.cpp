@@ -870,6 +870,7 @@ void task(void*) {
             savedFirstFix = true;
             lastPosSave = millis();
             settings::setLastPosition(gps.location.lat(), gps.location.lng());
+            if (time(nullptr) > 1600000000) settings::setLastFixUtc((uint32_t)time(nullptr));
         }
 
         // Keep the ESP32 system clock in sync with GPS time. It survives deep

@@ -574,3 +574,10 @@ staggered dots	точки в шаховому порядку
 zoomed in close, black outline	при великому наближенні, чорний контур
 Send my last position (no fix now)	Надіслати останню позицію (зараз без GPS)
 Last fix: %s (%.5f, %.5f)	Остання позиція: %s (%.5f, %.5f)
+Last position \xC2\xB7 %s ago	Остання позиція \xC2\xB7 %s тому
+%u min	%u хв
+%u h	%u год
+%u d	%u дн
+no GPS: tap again	без GPS: ще раз
+marked	позначено
+added	додано

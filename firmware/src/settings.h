@@ -44,6 +44,12 @@ bool ownerSet();
 // no position has ever been saved.
 bool lastPosition(double& lat, double& lon);
 void setLastPosition(double lat, double lon);
+// UTC seconds of the last real GPS fix (0: not known). Set by gps_service only:
+// the position saved on shutdown is not a new fix.
+uint32_t lastFixUtc();
+void setLastFixUtc(uint32_t utc);
+// "12 min", "3 h", "2 d": how old a fix at fixUtc is now; false if not known.
+bool fixAgeText(uint32_t fixUtc, char* out, size_t n, bool translate = true);
 
 // Whether GPS has ever written UTC to the coin-cell RTC on this device. Until
 // it has, the RTC may hold factory/local time (seen 8 h off UTC), so we must

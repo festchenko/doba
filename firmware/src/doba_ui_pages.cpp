@@ -30,8 +30,15 @@ void sosMessage(const DeviceState& s, char* out, size_t n) {
         gmtime_r(&t, &g);
         snprintf(when, sizeof when, " %02d%02dZ", g.tm_hour, g.tm_min);
     }
-    snprintf(out, n, "SOS SOS SOS %s %s%s%s", mesh_service::longName(), where, when,
-             s.gpsFix ? "" : (s.everHadFix ? " (last fix)" : ""));
+    // No fix now: say how old the position is, so whoever comes knows how far
+    // to trust it (QA 18 Nov). English, as every SOS: whoever hears it reads it.
+    char last[40] = "";
+    if (!s.gpsFix && s.everHadFix) {
+        char age[16];
+        if (settings::fixAgeText(settings::lastFixUtc(), age, sizeof age, false)) snprintf(last, sizeof last, " (last fix %s ago)", age);
+        else snprintf(last, sizeof last, " (last fix)");
+    }
+    snprintf(out, n, "SOS SOS SOS %s %s%s%s", mesh_service::longName(), where, when, last);
 }
 
 void sosSend(const DeviceState& s) {

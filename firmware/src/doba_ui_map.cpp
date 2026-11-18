@@ -441,8 +441,11 @@ void renderPoints(const DeviceState& s, uint8_t* fb) {
     epd_fill_rect({0, TOP, W, H - TOP}, PAPER, fb);
     double lat, lon;
     const bool have = here(s, lat, lon);
+    char lastLine[64], age[16];
+    if (settings::fixAgeText(settings::lastFixUtc(), age, sizeof age)) snprintf(lastLine, sizeof lastLine, TR("Last position \xC2\xB7 %s ago"), age);
+    else snprintf(lastLine, sizeof lastLine, "%s", TR("Last position \xC2\xB7 no fix now"));
     ui::text(ui::font(ui::F_SMALL), 24, TOP + 34,
-             s.gpsFix ? TR("Your position \xC2\xB7 MGRS") : have ? TR("Last position \xC2\xB7 no fix now") : TR("Your position"),
+             s.gpsFix ? TR("Your position \xC2\xB7 MGRS") : have ? lastLine : TR("Your position"),
              fb, EPD_DRAW_ALIGN_LEFT, ui::GREY);
     if (g_pointsNote) {
         ui::text(ui::font(ui::F_SMALL), W - 24, TOP + 34, g_pointsNote, fb, EPD_DRAW_ALIGN_RIGHT, INK);
@@ -551,6 +554,15 @@ Go tapPoints(int x, int y, const DeviceState& s) {
     double lat, lon;
     if (hit(kMark, x, y)) {
         if (!here(s, lat, lon)) { g_pointsNote = "no fix yet"; return STAY; }
+        // No fix now: "here" is only the last position, maybe hours old and far
+        // away. The first tap says so; a second within 6 s marks it anyway.
+        static uint32_t armedMs = 0;
+        if (!s.gpsFix && (armedMs == 0 || millis() - armedMs > 6000)) {
+            armedMs = millis();
+            g_pointsNote = "no GPS: tap again";
+            return STAY;
+        }
+        armedMs = 0;
         const int i = doba_points::add(nullptr, lat, lon);
         g_pointsNote = i < 0 ? "list full" : "marked";
         if (i >= 0) g_pointsScroll = (i / PROW_N) * PROW_N;
