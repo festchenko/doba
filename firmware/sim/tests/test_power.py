@@ -2,7 +2,7 @@
 countdown, the power dialog, and the battery as the rider and the app see it.
 
 A bike computer left on a desk must switch itself off (ui_dashboard.cpp,
-AUTO_SLEEP_MS: 10 minutes without input), and must never do it under a
+AUTO_SLEEP_MS: 3 minutes without input), and must never do it under a
 rider. Deep sleep exits the sim; `power_on()` is BOOT pressed afterwards.
 The clock runs fast (power_util.run_to) and slows down near the moment the
 test is about, so each switch-off is timed to about a second of device time."""
@@ -37,9 +37,9 @@ def stays_on(dev, minutes):
 
 # ---- the idle countdown ------------------------------------------------------------------
 
-def test_an_idle_device_switches_itself_off_after_ten_minutes(device):
+def test_an_idle_device_switches_itself_off_after_three_minutes(device):
     """Left on a desk, the device must switch off on its own — and not
-    before ten minutes. It says why in the card's log before it goes, so the
+    before three minutes. It says why in the card's log before it goes, so the
     next boot's log tells an auto-off from a crash or a power cut, and BOOT
     brings it back (a wake from deep sleep, not a crash)."""
     off = run_to(device, IDLE_S + 120, fine_from=IDLE_S - 30)
@@ -58,9 +58,9 @@ def test_an_idle_device_switches_itself_off_after_ten_minutes(device):
 
 @pytest.mark.parametrize("touch", ["tap", "side key", "home key"])
 def test_any_input_restarts_the_idle_countdown(device, touch):
-    """A tap or a key is the rider using the device: the ten minutes start
+    """A tap or a key is the rider using the device: the three minutes start
     again from there. (A BOOT press starts a ride, which holds it on anyway.)"""
-    assert run_to(device, 480) is None
+    assert run_to(device, IDLE_S - 60) is None   # most of the countdown gone
     if touch == "tap":
         device.tap(270, 480)
     elif touch == "side key":
@@ -87,7 +87,7 @@ def test_autosleep_off_on_the_console_keeps_it_on_until_switched_back(device):
 
 def test_riding_without_recording_keeps_it_on_and_stopping_starts_the_countdown(device):
     """Riding along with the dashboard up but no ride recording: speed is
-    activity, so it stays on; once the bike stops, ten minutes later it
+    activity, so it stays on; once the bike stops, three minutes later it
     switches off."""
     device.gps_track(line_track(LAT, LON, 3), speed_kmh=20, loop=True)
     device.wait_status(lambda s: s["ride"]["gps_fix"] and s["ride"]["speed_kmh"] > 10, timeout=15)

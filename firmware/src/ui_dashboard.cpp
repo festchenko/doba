@@ -457,7 +457,7 @@ void touchTask(void*) {
 // Inactivity auto-sleep: any input refreshes this; the task deep-sleeps after
 // a quiet period (unless riding / navigating / phone connected).
 uint32_t lastActivityMs = 0;
-constexpr uint32_t AUTO_SLEEP_MS = 10 * 60 * 1000;   // 10 minutes idle
+constexpr uint32_t AUTO_SLEEP_MS = 3 * 60 * 1000;    // 3 minutes idle (user, 18 Nov)
 // Console override for bench/battery testing. UI task owns both this flag and
 // the command parser. RAM only: every reset restores automatic shutdown.
 bool autoSleepEnabled = true;
@@ -1917,10 +1917,10 @@ TRC("loop");         bool host = usb_storage::hostActive();
 
         // Auto-sleep after a quiet period to save battery. Wake with POWER.
         if (autoSleepEnabled && millis() - lastActivityMs > AUTO_SLEEP_MS &&
-            // DOBA: a radio that is listening is a pager: switching off would
-            // miss the message or the SOS it is on for. (OTP held this for a
-            // connected phone; Doba holds it while the mesh is on.)
-            !mesh_service::enabled() &&
+            // DOBA: the mesh no longer holds the device awake. Listening kept
+            // CPU, screen controller, GPS and radio up: 8 %/h, flat overnight
+            // (18 Nov). Until the radio can listen while the rest sleeps, idle
+            // means off, mesh or not.
             // A computer that has the card (copying maps or books) is a user too:
             // sleeping would unmount the card and drop off USB mid-copy.
             !usb_storage::hostActive()) {

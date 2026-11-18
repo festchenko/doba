@@ -10,7 +10,7 @@ from conftest import TIME_SCALE
 from otpsim.device import ControlError
 
 FAST = ["--gps-baud", "115200"]
-IDLE_S = 600            # ui_dashboard.cpp AUTO_SLEEP_MS
+IDLE_S = 180            # ui_dashboard.cpp AUTO_SLEEP_MS (3 min since 18 Nov)
 FAST_SPEED = 60         # device seconds per real second while nothing is due
 FINE_SPEED = 10         # ... and near the moment that matters
 
