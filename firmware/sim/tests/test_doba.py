@@ -835,7 +835,7 @@ def test_keys_typed_faster_than_the_panel_paints_are_all_kept(doba):
     second (18 Nov: "the keyboard misses letters")."""
     boot(doba)
     doba.console("mesh on", 800)
-    for xy in [(395, 360), (150, 260), (360, 908)]:     # Comms, Everyone, Write
+    for xy in [(395, 560), (150, 260), (360, 908)]:     # Comms, Everyone, Write
         doba.tap(*xy)
         time.sleep(0.8)
     since = doba.log_seq()
@@ -856,12 +856,12 @@ def test_comms_from_home_never_lands_on_the_ready_phrases(doba):
     one stray tap sends a phrase (QA, 18 Nov). It reopens on the chat."""
     boot(doba)
     doba.console("mesh on", 800)
-    for xy in [(395, 360), (150, 260), (177, 908)]:      # Comms, Everyone, Quick
+    for xy in [(395, 560), (150, 260), (177, 908)]:      # Comms, Everyone, Quick
         doba.tap(*xy)
         time.sleep(0.8)
     doba.console("screen home", 800)
     time.sleep(0.6)
-    doba.tap(395, 360)                                   # Comms again
+    doba.tap(395, 560)                                   # Comms again
     time.sleep(0.8)
     since = doba.log_seq()
     doba.tap(143, 223)                                   # where "OK" sits on the sheet
@@ -1051,7 +1051,7 @@ def test_first_aid_is_one_tap_from_home_and_says_it_is_a_draft(doba):
     assert os.path.exists(os.path.join(doba.sd, "doba", "lib", "aid_uk", "index.dti"))
     doba.screenshot(os.path.join(doba.dir, "aid_home.png"))
     since = doba.log_seq()
-    doba.tap(270, 818)                                       # the first-aid bar
+    doba.tap(270, 100)                                       # the first-aid bar
     doba.wait_log(r"\[lib\] book aid_en", since=since)
     time.sleep(0.8)
     since = doba.log_seq()
@@ -1066,7 +1066,7 @@ def test_first_aid_is_one_tap_from_home_and_says_it_is_a_draft(doba):
     doba.console("screen home", 800)
     time.sleep(0.8)
     since = doba.log_seq()
-    doba.tap(270, 818)
+    doba.tap(270, 100)
     doba.wait_log(r"\[lib\] book aid_uk", since=since)
     time.sleep(0.8)
     doba.screenshot(os.path.join(doba.dir, "aid_menu_uk.png"))
@@ -1117,3 +1117,22 @@ def test_the_72_hour_mode_dims_and_checks_in_with_ok_and_position(doba):
         doba.wait_log(r"\[checkin\] sent: OK \S.* 32U LC \d+ \d+ \d{4}Z", since=since, timeout=20)
     except Exception:
         raise AssertionError([l for l in doba.log(0) if "checkin" in l or "mesh" in l or "stealth" in l][-25:])
+
+
+def test_a_careful_translation_keeps_its_own_note(doba):
+    """An article of a twin translated with care (library/inject_translation.py) says so
+    itself; the machine-translation note is not added on top."""
+    import struct
+    lib = os.path.join(doba.sd, "doba", "lib")
+    write_book(os.path.join(lib, "med_uk"), "Мед", [
+        ("Джгут", "TДжгут\nCПереклад: ШІ Claude, не перевірено медиком.\nP" + "Текст. " * 40),
+        ("Шина", "TШина\nP" + "Текст. " * 40)])
+    open(os.path.join(lib, "med_uk", "twin.map"), "wb").write(b"DOBATW1\0" + struct.pack("<I", 0))
+    boot(doba)
+    for title, machine in (("Джгут", False), ("Шина", True)):
+        since = doba.log_seq()
+        doba.console("libopen " + title, 800)
+        doba.wait_log(r"\[lib\] open", since=since)
+        doba.console("libtext", 800)
+        text = "\n".join(l for l in doba.log(since) if l.startswith("[libtext]"))
+        assert ("Машинний переклад" in text) == machine, text

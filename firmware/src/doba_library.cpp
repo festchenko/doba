@@ -1050,7 +1050,16 @@ bool openArticle(const Result& r) {
     // A twin is a machine translation, and in medicine it gets things wrong
     // ("do not tie the knot over the wound" came out as nonsense, QA 18 Nov):
     // every page of it says so under the title.
-    if (b.isTwin || b.isDraft) {
+    // A twin's article translated with care (an AI model, not the machine
+    // translator: library/inject_tr.py) carries its own note under the title;
+    // the machine-translation note is then not added.
+    bool ownNote = false;
+    if (b.isTwin) {
+        const char* nl1 = (const char*)memchr(g_text, '\n', g_textLen);
+        static const char kOwn[] = "\nCПереклад: ";
+        ownNote = nl1 && (size_t)(g_text + g_textLen - nl1) > sizeof kOwn && !memcmp(nl1, kOwn, sizeof kOwn - 1);
+    }
+    if ((b.isTwin && !ownNote) || b.isDraft) {
         // A draft (Doba's own first-aid cards before a medic has read them)
         // says so the same way.
         const char* kNote = b.isDraft ? (b.isUk ? "\nCЧернетка: цей текст ще не перевірив медик." : "\nCDraft: a medic has not yet checked this text.")

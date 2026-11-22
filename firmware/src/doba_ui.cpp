@@ -19,23 +19,30 @@ constexpr int MARGIN = 24, TILE_GAP = 14;
 constexpr int TILE_W = (W - 2 * MARGIN - TILE_GAP) / 2;
 constexpr int STEALTH_H = 72;
 constexpr int TILE_TOP = TOP + 6;
-constexpr int AID_H = 64;   // the first-aid bar, over the stealth bar
-constexpr int TILE_H = (H - 24 - STEALTH_H - TILE_GAP - AID_H - TILE_GAP - TILE_TOP - 3 * TILE_GAP) / 4;
+// Top to bottom (user, 19 Nov): first aid; the map and the library full width;
+// position, comms, SOS and sun smaller, two by two; settings and power low;
+// the stealth bar.
+constexpr int AID_H = 64, LOW_H = 64;
+constexpr int SPACE = H - 24 - STEALTH_H - TILE_GAP - TILE_TOP;   // from the top to the stealth bar
+constexpr int ROWS_H = SPACE - AID_H - LOW_H - 5 * TILE_GAP;      // the two wide and the two small rows
+constexpr int WIDE_H = ROWS_H * 55 / 100 / 2, SMALL_H = (ROWS_H - 2 * WIDE_H) / 2;
+constexpr int FULL_W = W - 2 * MARGIN;
+constexpr int Y_AID = TILE_TOP, Y_MAP = Y_AID + AID_H + TILE_GAP, Y_LIB = Y_MAP + WIDE_H + TILE_GAP;
+constexpr int Y_S1 = Y_LIB + WIDE_H + TILE_GAP, Y_S2 = Y_S1 + SMALL_H + TILE_GAP, Y_LOW = Y_S2 + SMALL_H + TILE_GAP;
 const EpdRect kStealthBar = {MARGIN, H - 24 - STEALTH_H, W - 2 * MARGIN, STEALTH_H};
-const EpdRect kAidBar = {MARGIN, H - 24 - STEALTH_H - TILE_GAP - AID_H, W - 2 * MARGIN, AID_H};
+const EpdRect kAidBar = {MARGIN, Y_AID, FULL_W, AID_H};
 uint32_t g_stealthOffAsk = 0;   // a short tap on a lit stealth bar: say to hold
 uint32_t g_pressMs = 0;         // how long the finger was down for this tap
 
-EpdRect tileRect(int col, int row) {
-    return {MARGIN + col * (TILE_W + TILE_GAP), TILE_TOP + row * (TILE_H + TILE_GAP), TILE_W, TILE_H};
-}
+EpdRect half(int col, int y, int h) { return {MARGIN + col * (TILE_W + TILE_GAP), y, TILE_W, h}; }
 
 // DOBA is for survival, not a navigator: no routes, no recorded tracks.
 const Tile kTiles[8] = {
-    {tileRect(0, 0), "Map", TO_MAP},         {tileRect(1, 0), "Position", TO_POINTS},
-    {tileRect(0, 1), "Library", TO_LIBRARY}, {tileRect(1, 1), "Comms", TO_COMMS},
-    {tileRect(0, 2), "SOS", TO_SOS},         {tileRect(1, 2), "Sun", TO_SUN},
-    {tileRect(0, 3), "Settings", TO_SETUP},  {tileRect(1, 3), "Power", TO_POWER},
+    {{MARGIN, Y_MAP, FULL_W, WIDE_H}, "Map", TO_MAP},
+    {{MARGIN, Y_LIB, FULL_W, WIDE_H}, "Library", TO_LIBRARY},
+    {half(0, Y_S1, SMALL_H), "Position", TO_POINTS}, {half(1, Y_S1, SMALL_H), "Comms", TO_COMMS},
+    {half(0, Y_S2, SMALL_H), "SOS", TO_SOS},         {half(1, Y_S2, SMALL_H), "Sun", TO_SUN},
+    {half(0, Y_LOW, LOW_H), "Settings", TO_SETUP},   {half(1, Y_LOW, LOW_H), "Power", TO_POWER},
 };
 
 // The contour lines take nearly all of this page's 360 ms (18 Nov), and the
@@ -131,6 +138,13 @@ void renderHome(const DeviceState& s, uint8_t* fb) {
     for (const Tile& t : kTiles)
         if (t.go != TO_SOS) topo_bg::draw({t.r.x + 3, t.r.y + 3, t.r.width - 6, t.r.height - 6}, fb, 0);
         else if (!sosActive()) topo_bg::drawInverted({t.r.x + 6, t.r.y + 6, t.r.width - 12, t.r.height - 12}, fb, 0);
+    // and the bars: first aid on top, stealth below (black when on)
+    topo_bg::draw({kAidBar.x + 4, kAidBar.y + 4, kAidBar.width - 8, kAidBar.height - 8}, fb, 0);
+    {
+        const EpdRect r = kStealthBar;
+        if (stealth::active()) topo_bg::drawInverted({r.x + 6, r.y + 6, r.width - 12, r.height - 12}, fb, 0);
+        else topo_bg::draw({r.x + 3, r.y + 3, r.width - 6, r.height - 6}, fb, 0);
+    }
     if (!g_homeDone) g_homeDone = (uint8_t*)heap_caps_malloc(uid::fbSize, MALLOC_CAP_SPIRAM);   // a cache: it gives way
     if (g_homeDone) { memcpy(g_homeDone, fb, uid::fbSize); g_homeHash = h; }
 }
@@ -150,13 +164,17 @@ void renderHomePage(const DeviceState& s, uint8_t* fb) {
         }
         const uint8_t fg = dark ? PAPER : INK;
         const char* title = sos && sosActive() ? TR("SOS on") : TR(t.title);
-        ui::text(ui::font(ui::F_TITLE), t.r.x + 18, t.r.y + 46, title, fb, EPD_DRAW_ALIGN_LEFT, fg);
+        const bool low = t.r.height <= LOW_H;   // settings, power: a name and one short line
+        const EpdFont* tf = ui::font(low ? ui::F_KEY : ui::F_TITLE);
+        if (low && ui::textWidth(tf, title) > t.r.width - 18) tf = ui::font(ui::F_SMALL);   // a long name, another language
+        ui::text(tf, t.r.x + (low ? 10 : 18), t.r.y + (low ? 28 : 46), title, fb,
+                 EPD_DRAW_ALIGN_LEFT, fg);
         tileSubtitle(t, s, sub, sizeof sub);
         // Subtitle may be long (MGRS): shrink to fit the tile.
         const bool mono = t.go == TO_POINTS && sub[0] >= '0' && sub[0] <= '9';   // a grid reference
         const EpdFont* sf = mono ? ui::font(ui::F_MONO) : ui::font(ui::F_SMALL);
-        if (ui::textWidth(sf, sub) > t.r.width - 36) sf = ui::font(ui::F_TINY);
-        ui::text(sf, t.r.x + 18, t.r.y + t.r.height - 20, sub, fb, EPD_DRAW_ALIGN_LEFT, dark ? PAPER : 0x30);
+        if (low || ui::textWidth(sf, sub) > t.r.width - 36) sf = ui::font(ui::F_TINY);
+        ui::text(sf, t.r.x + (low ? 10 : 18), t.r.y + t.r.height - (low ? 12 : 20), sub, fb, EPD_DRAW_ALIGN_LEFT, dark ? PAPER : 0x30);
         // Unread badge on COMMS.
         if (t.go == TO_COMMS && mesh_service::enabled() && mesh_service::unreadCount() > 0) {
             epd_fill_circle(t.r.x + t.r.width - 30, t.r.y + 34, 16, INK, fb);

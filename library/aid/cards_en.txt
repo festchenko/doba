@@ -6,17 +6,17 @@ Short steps for the first minutes, until help comes. They do not replace trainin
 # Always first
 - Make sure you are safe: traffic, fire, gas, water, electricity, shooting. Do not become the second casualty.
 - Call 112 (or have someone call) as early as you can. 112 works across Europe; in Ukraine also 103 for an ambulance, 101 for rescue.
-- Stop heavy bleeding first, then check breathing.
+- Stop heavy bleeding first, then check breathing. Not breathing normally: CPR.
 - Say what you do. Write down times (tourniquet, when symptoms started).
 Draft: these cards have not yet been checked by a medic.
 
 = Severe bleeding | press, pack, tourniquet
 # Do now
-- Call 112. Protect your hands (gloves, a plastic bag) if you can.
+- Have someone call 112; alone, stop the bleeding first, then call. Protect your hands (gloves, a plastic bag) if you can.
 - Press hard, straight on the wound, with a cloth or your hands. Keep pressing; do not lift to look.
-- Blood soaks through: put more cloth on top and press harder. Do not remove the first layer.
-- Deep wound in the neck, armpit or groin, or bleeding that will not stop: pack the wound. Push cloth or gauze deep into it until it is full, then press hard for at least 3 minutes.
-- Arm or leg, blood spurting or pooling, or pressure does not stop it: tourniquet (next card).
+- Arm or leg, blood spurting or pooling, or pressure does not stop it: tourniquet at once (next card).
+- Deep wound in the neck, armpit or groin, or bleeding that will not stop: pack the wound. Push cloth or gauze deep into it until it is full, then press hard: at least 3 minutes with blood-stopping gauze, 10 with plain cloth.
+- Blood soaks through: press harder, right on the bleeding spot. Add cloth on top; do not remove the first layer.
 - Lay the person down, keep them warm, and keep checking breathing.
 # Do not
 - Do not pull out an object stuck in the wound: pad around it and press around it.
@@ -24,20 +24,20 @@ Draft: these cards have not yet been checked by a medic.
 
 = Tourniquet | arm or leg only
 - Only on an arm or a leg.
-- Put it 5 to 7 cm above the wound, not on a joint. If you cannot see the wound: high on the limb, as close to the body as you can.
+- Put it 5 to 7 cm above the wound, not on a joint. Over clothes is fine, not over a full pocket. Cannot see the wound, or in danger: high on the limb, as close to the body as you can.
 - Pull the strap tight, then twist the rod until the bleeding stops. Lock the rod.
 - Write the time on the tourniquet or on the forehead: "T 14:20".
 - Do not loosen it and do not take it off. Only medical staff remove it.
 - Still bleeding: put a second tourniquet just above the first.
 - It hurts a lot. That is normal and means it works.
 # No tourniquet
-- Improvise: a strip of cloth at least 4 cm wide, and a stick to twist it. Never wire, string or a thin cord.
-- Until then: press hard on the wound.
+- Improvise: a strip of cloth at least 4 cm wide, and a stick to twist it. Never wire, string or a thin cord. Improvised ones often fail.
+- Until then, and if it fails: press hard on the wound or pack it.
 
 = CPR | 30 pushes, 2 breaths
 - Safe? Shout and shake the shoulders.
 - No answer and not breathing normally (gasping is not normal breathing): call 112, put the phone on speaker, send someone for an AED (defibrillator).
-- Kneel beside them. Heel of one hand in the centre of the chest, the other hand on top.
+- On their back, on something firm. Kneel beside them. Heel of one hand in the centre of the chest, the other hand on top.
 - Push down 5 to 6 cm, 100 to 120 times a minute (the beat of "Stayin' Alive"). Let the chest rise fully between pushes.
 - After 30 pushes: tilt the head back, lift the chin, pinch the nose, give 2 breaths of 1 second each, watching the chest rise.
 - Cannot or will not give breaths: just push, without stopping.
@@ -45,34 +45,35 @@ Draft: these cards have not yet been checked by a medic.
 - Do not stop until help takes over, the person wakes and breathes normally, or you are exhausted. Change with someone every 2 minutes.
 # Child or drowning
 - Give 5 breaths first, then 30 pushes and 2 breaths.
-- Child: one hand (or two fingers for a baby), a third of the chest's depth.
+- Child: one or two hands, a third of the chest's depth (about 5 cm).
+- Baby under 1 year: two thumbs with your hands round the chest, or the heel of one hand; about 4 cm. Head level, not tilted back; breathe into mouth and nose together.
 
 = Unconscious, breathing | on the side
 - Not responding but breathing normally: put them on their side (recovery position).
 - Near arm out at a right angle, far hand under the cheek, far knee bent; roll them towards you by the knee.
 - Tilt the head back so the mouth points down and can drain.
-- Call 112. Check breathing every minute. Breathing stops: CPR.
+- Call 112. Check breathing every minute. Breathing stops or is not normal: on the back, CPR.
 - Keep them warm.
-- Suspected neck or back injury (a fall, a crash): move them only to keep the airway open.
+- Suspected neck or back injury (a fall, a crash): move them as little as you can, but an open airway comes first.
 
 = Choking | back blows, belly thrusts
 - Can cough or speak: let them cough. Stay with them.
 - Cannot breathe, speak or cough: lean them forward, give up to 5 hard blows between the shoulder blades with the heel of your hand.
 - Still choking: stand behind, fist just above the navel, other hand on it, pull hard in and up, up to 5 times.
-- Repeat 5 blows and 5 thrusts until it comes out.
+- Repeat 5 blows and 5 thrusts until it comes out. No blind finger sweeps: take out only what you can see.
 - They go limp: lower them down, call 112, start CPR.
-- Baby under 1 year: face down on your forearm, 5 back blows; then on the back, 5 chest pushes with two fingers. No belly thrusts.
+- Baby under 1 year: face down on your forearm, 5 back blows; then on the back, 5 chest pushes in the centre of the chest (heel of one hand or two fingers). No belly thrusts.
 - Pregnant or very large person: chest thrusts instead of belly thrusts.
 - After belly thrusts, a doctor should check them.
 
 = Burn | cool 20 minutes
-- Stop the burning: put out flames, move away from the heat.
+- Stop the burning: put out flames, move away from the heat. Electricity: switch off the power before you touch them.
 - Cool the burn under cool running water for 20 minutes. Not ice, not iced water. Still helps up to 3 hours later.
 - Take off rings, watches and clothing near the burn, unless stuck to the skin.
 - Cover loosely with cling film or a clean cloth that does not shed fluff.
 - Keep the person warm (cool the burn, not the person).
 # Call 112
-- Burn bigger than their hand, on the face, hands, feet, groin or a joint, in the mouth or throat, from chemicals or electricity, or on a child.
+- Burn bigger than their hand, on the face, hands, feet, groin or a joint, in the mouth or throat, from chemicals or electricity, or on a child. Breathed in smoke or hot air (hoarse, soot round the nose or mouth).
 # Do not
 - No butter, oil, cream, toothpaste. Do not burst blisters.
 - Chemical: brush off powder first, then rinse for at least 20 minutes.
@@ -80,7 +81,7 @@ Draft: these cards have not yet been checked by a medic.
 = Broken bone | do not straighten
 - Keep the limb still, as you found it. Do not try to straighten it.
 - Open wound over the bone: cover it with a clean cloth, press around the bone, not on it.
-- Splint only if you must move: pad it, and tie it to something stiff (a board, sticks, rolled newspaper) so the joint above and below cannot move.
+- Splint only if you must move them: pad it, and tie it to something stiff (a board, sticks, rolled newspaper) so the joint above and below cannot move.
 - Check fingers or toes after tying: cold, pale, blue or numb, then loosen.
 - Arm: a sling; a leg can be tied to the other leg.
 - Neck or back injury possible: do not move them unless there is danger.
@@ -93,9 +94,9 @@ Draft: these cards have not yet been checked by a medic.
 # Do
 - Out of wind, rain and snow. Into a shelter, a car, a building.
 - Wet clothes off, dry clothes on. Insulate from the ground. Cover the head.
-- Warm slowly: blankets, a sleeping bag, your body against theirs. Warm sweet drinks only if fully awake.
+- Warm slowly: blankets, a sleeping bag, your body against theirs, wrapped warm bottles on the chest and armpits. Warm sweet drinks only if fully awake.
 - Handle gently and keep them lying down.
-- Call 112. Not breathing normally: CPR.
+- Call 112. Check breathing for up to a minute; not breathing normally: CPR.
 # Do not
 - No alcohol. Do not rub the arms and legs. No hot bath for a severe case.
 
@@ -105,7 +106,7 @@ Draft: these cards have not yet been checked by a medic.
 # Do
 - Call 112: this kills.
 - Into the shade, clothes off down to underwear.
-- Cool fast: pour cool water over them and fan; cold packs or ice in the neck, armpits and groin. Into cool water if you can.
+- Cool fast. Best: into cold water up to the neck, holding the head up. Otherwise soak them with cool water and fan; ice or cold packs on the neck, armpits and groin. Keep on until they think clearly.
 - Sips of water only if fully awake.
 - Unconscious and breathing: on the side. Not breathing: CPR.
 # Heat exhaustion
@@ -114,7 +115,7 @@ Draft: these cards have not yet been checked by a medic.
 = Safe water | boil, bleach, settle
 - Cloudy: let it settle, pour off the clear water, filter it through a clean cloth first.
 - Boil: a full rolling boil for 1 minute (3 minutes above 2000 m). Let it cool, keep it covered.
-- No fire: unscented household bleach (4 to 6 % chlorine). 2 drops per litre; 4 drops if cloudy or very cold. Stir, wait 30 minutes. It should smell slightly of chlorine; if not, add the same again and wait 15 minutes more.
+- No fire: plain household bleach, no scent or detergent, 4 to 6 % chlorine: 2 drops per litre; 4 drops if cloudy or very cold (1 % bleach: 10 drops). Stir, wait 30 minutes. It should smell slightly of chlorine; if not, add the same again and wait 15 minutes more.
 - Purification tablets: as the packet says.
 - Sun: clear plastic bottle up to 2 litres, clear water, 6 hours in full sun (2 days if cloudy).
 - Fuel, chemicals or poison in the water: boiling does not help. Find other water.
@@ -127,19 +128,19 @@ Draft: these cards have not yet been checked by a medic.
 - Headache, dizziness, sickness, tiredness, confusion. Several people or pets ill at once. Better outside.
 # Do
 - Everyone out into fresh air now. Do not go back in.
-- Call 112. Unconscious: on the side. Not breathing: CPR.
+- Call 112, even if they feel better: they need oxygen. Unconscious: on the side. Not breathing: CPR.
 # Prevent
-- Never run a generator, a grill, a gas heater or a camping stove inside, in a garage or in a tent. Generators at least 6 m from windows and doors.
+- Never run a generator, a charcoal grill, a gas heater or a camping stove inside, in a garage or in a tent. Generators at least 6 m from windows and doors. Fit a CO alarm.
 
 = Radiation or chemicals | in, stay in, listen
 # Radiation
 - Get inside a solid building, now. Go to the middle or the basement, away from windows.
 - Close windows and doors, switch off the ventilation.
-- Were outside: take off the outer clothes, put them in a bag. Wash hands, face and hair with soap and water (no conditioner).
+- Were outside: take off the outer clothes, put them in a bag. Shower, or wash hands, face and hair with soap or shampoo (no conditioner).
 - Stay inside until the authorities say otherwise (at least 24 hours). Listen to the radio.
-- Iodine tablets only when the authorities say so.
+- Potassium iodide tablets only when the authorities say so; they protect only the thyroid. Never drink iodine tincture.
 # Chemical cloud
-- Go away from the smell, across the wind.
+- Outside: go away from the smell, across the wind. Inside: stay in unless told to leave; listen to the radio.
 - Chlorine is heavier than air: go up, to high floors. Ammonia is lighter: go down.
 - Cover nose and mouth with a wet cloth. Close windows and doors, seal gaps with wet cloth or tape.
 - Splashed: take off the clothes, rinse the skin and eyes with plenty of water for 20 minutes.
